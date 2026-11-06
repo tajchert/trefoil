@@ -22,6 +22,7 @@ class T3Client(
     private val mutable = MutableStateFlow(ClientState())
     override val state: StateFlow<ClientState> = mutable.asStateFlow()
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).build()
+    private val fileDownloads = mutableSetOf<Call>()
     private var socket: WebSocket? = null
     @Volatile private var generation = 0L
     private var heartbeat: Job? = null
@@ -172,12 +173,18 @@ class T3Client(
         }
     }
     private fun send(frame: JsonObject) { check(socket?.send(frame.toString()) == true) { "Connection is unavailable" } }
-    private suspend fun rpc(tag: String, payload: JsonObject, epoch: Long = generation): JsonElement {
+    private suspend fun rpc(tag: String, payload: JsonObject, epoch: Long = generation, guard: () -> Boolean = { true }): JsonElement {
         check(pending.size < 64) { "Too many outstanding requests" }
         val id = serial.incrementAndGet().toString()
         val result = CompletableDeferred<JsonElement>(); pending[id] = result
-        try { synchronized(lifecycleLock) { check(epoch == generation) { "Session changed; command was not sent" }; send(EffectRpc.request(id, tag, payload)) }; return withTimeout(requestTimeoutMillis) { result.await() } }
-        finally { if (pending.remove(id) != null) runCatching { send(EffectRpc.signal("Interrupt", id)) } }
+        val context = currentCoroutineContext()
+        var sent = false
+        try { synchronized(lifecycleLock) {
+            context.ensureActive()
+            check(epoch == generation && guard()) { "Session changed; command was not sent" }
+            send(EffectRpc.request(id, tag, payload)); sent = true
+        }; return withTimeout(requestTimeoutMillis) { result.await() } }
+        finally { if (pending.remove(id) != null && sent) runCatching { send(EffectRpc.signal("Interrupt", id)) } }
     }
     private fun subscribe(tag: String, payload: JsonObject, handler: (JsonObject) -> Unit): String {
         val id = serial.incrementAndGet().toString(); streams[id] = handler
@@ -207,6 +214,7 @@ class T3Client(
     }
     private fun fail(epoch: Long, message: String) = synchronized(lifecycleLock) {
         if (epoch != generation) return@synchronized
+        fileDownloads.forEach { it.cancel() }; fileDownloads.clear()
         generation++
         refreshSignals?.close(); refreshJob?.cancel()
         shellReady = false; threadReady = false; authorized = false; previewAuthorized = false
@@ -218,6 +226,7 @@ class T3Client(
     override suspend fun disconnect() = disconnectNow()
     private fun disconnectNow() = synchronized(lifecycleLock) {
         cacheState()
+        fileDownloads.forEach { it.cancel() }; fileDownloads.clear()
         generation++; threadGeneration++; refreshSignals?.close(); refreshJob?.cancel(); heartbeat?.cancel(); heartbeat = null
         socket?.close(1000, null); socket = null
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Disconnected; pending command outcome may be uncertain")) }
@@ -226,7 +235,7 @@ class T3Client(
         update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, canRead = false, busy = false) }
     }
     override suspend fun selectThread(threadId: String) = synchronized(lifecycleLock) {
-        if (state.value.selectedThreadId != threadId) resetScreens(interrupt = true)
+        if (state.value.selectedThreadId != threadId) { fileDownloads.forEach { it.cancel() }; fileDownloads.clear(); resetScreens(interrupt = true) }
         if (state.value.connection != ConnectionStatus.Connected) {
             val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
             check(cached != null) { "Connect to load this thread" }
@@ -471,6 +480,47 @@ class T3Client(
                 buildMap { put("wsTicket", ticket); if (currentTarget is ScreenTarget.Device) put("hostId", currentTarget.hostId) },
                 interactive = if (currentTarget is ScreenTarget.Browser) previewAuthorized else authorized, selectionGeneration = selection)
         }
+    }
+    override suspend fun downloadFile(reference: RemoteFileReference, output: java.io.OutputStream, environmentId: String, threadId: String, onProgress: (FileDownloadProgress) -> Unit): DownloadedFile {
+        data class FileRead(val epoch: Long, val selection: Long, val environment: SavedEnvironment, val threadId: String)
+        currentCoroutineContext().ensureActive()
+        val captured = synchronized(lifecycleLock) {
+            check(state.value.environment?.id == environmentId && state.value.selectedThreadId == threadId) { "Download context changed" }
+            check(state.value.canRead && state.value.connection == ConnectionStatus.Connected) { "Connect and refresh before downloading a file" }
+            FileRead(generation, threadGeneration, state.value.environment ?: error("Connect an environment"), state.value.selectedThreadId ?: error("Select a thread"))
+        }
+        fun current() = synchronized(lifecycleLock) {
+            generation == captured.epoch && threadGeneration == captured.selection && state.value.environment?.id == captured.environment.id &&
+                state.value.selectedThreadId == captured.threadId && state.value.connection == ConnectionStatus.Connected
+        }
+        try {
+            check((reference.path == null) != (reference.attachmentId == null)) { "Invalid file reference" }
+            val resource = buildJsonObject {
+                val attachmentId = reference.attachmentId
+                if (attachmentId != null) {
+                    check(attachmentId.isNotBlank() && attachmentId.length <= 256) { "Invalid file reference" }
+                    put("_tag", "attachment"); put("attachmentId", attachmentId)
+                    put("fileName", safeDownloadFileName(reference.fileName)); put("disposition", "attachment")
+                    reference.mimeType?.takeIf { it.isNotBlank() && it.length <= 100 }?.let { put("mimeType", it) }
+                } else {
+                    val path = reference.path ?: error("Invalid file reference")
+                    check(path.isNotBlank() && path.length <= 1024 && path.none { it.isISOControl() }) { "Invalid file reference" }
+                    put("_tag", "media-file"); put("threadId", captured.threadId); put("path", path); put("disposition", "attachment")
+                }
+            }
+            val asset = rpc("assets.createUrl", buildJsonObject { put("resource", resource) }, captured.epoch, ::current).jsonObject
+            currentCoroutineContext().ensureActive()
+            check(current()) { "Connection or selected thread changed; download cancelled" }
+            check((asset["expiresAt"] as? JsonPrimitive)?.doubleOrNull?.let { it.isFinite() && it > System.currentTimeMillis() } == true) { "Download access expired; try again" }
+            var registered: Call? = null
+            return SignedFileDownloader(http).download(captured.environment, asset.string("relativeUrl"), reference, output, onProgress, ::current) { call ->
+                synchronized(lifecycleLock) {
+                    if (call == null) { registered?.let { fileDownloads.remove(it) }; registered = null }
+                    else { check(current()) { "Connection or selected thread changed; download cancelled" }; registered = call; fileDownloads += call }
+                }
+            }
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { throw IllegalStateException(if (current()) "File download failed. The file may be unavailable or access may have been denied." else "Connection or selected thread changed; download cancelled") }
     }
     private fun requireWrite() { check(state.value.canWrite) { "Wait for a fresh connection before writing" } }
     private fun command(type: String, extra: JsonObject): JsonObject = buildJsonObject {

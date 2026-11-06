@@ -166,6 +166,7 @@ internal fun conversationMessages(projection: JsonObject): List<ConversationMess
                 item["startedAt"]?.let { put("createdAt", it) }
                 item["updatedAt"]?.let { put("updatedAt", it) }
                 item["runId"]?.let { put("runId", it) }
+                item["attachments"]?.let { put("attachments", it) }
             }
         }
     } else messages
@@ -178,6 +179,12 @@ internal fun conversationMessages(projection: JsonObject): List<ConversationMess
             runId = message.optionalText("runId") ?: item?.optionalText("runId"), ordinal = item?.ordinal(),
             nodeId = item?.optionalText("nodeId"), providerTurnId = item?.optionalText("providerTurnId"),
             runAttemptId = item?.let(resolveAttempt),
+            attachments = ((message["attachments"] as? JsonArray) ?: (item?.get("attachments") as? JsonArray)).orEmpty().mapNotNull { element ->
+                val attachment = element as? JsonObject ?: return@mapNotNull null
+                val id = attachment.optionalText("id") ?: return@mapNotNull null
+                val name = attachment.optionalText("name") ?: return@mapNotNull null
+                RemoteFileReference(attachmentId = id, fileName = name, mimeType = attachment.optionalText("mimeType"), sizeBytes = (attachment["sizeBytes"] as? JsonPrimitive)?.longOrNull)
+            },
         )
     }
 }

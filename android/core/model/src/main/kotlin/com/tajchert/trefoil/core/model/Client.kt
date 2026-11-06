@@ -31,6 +31,7 @@ data class ConversationMessage(
     val createdAt: String? = null, val updatedAt: String? = null,
     val runId: String? = null, val ordinal: Int? = null,
     val runAttemptId: String? = null, val nodeId: String? = null, val providerTurnId: String? = null,
+    val attachments: List<RemoteFileReference> = emptyList(),
 )
 data class ToolActivity(
     val id: String, val title: String, val detail: String = "",
@@ -102,6 +103,8 @@ interface TrefoilClient {
     fun isScreenAccessCurrent(access: ScreenAccess): Boolean = false
     /** Read a body withheld from the synchronized projection, without dispatching a mutation. */
     suspend fun loadActivity(itemId: String) { error("Activity details are unavailable") }
+    /** Streams a signed asset into caller-owned storage; failures may leave partial bytes. */
+    suspend fun downloadFile(reference: RemoteFileReference, output: java.io.OutputStream, environmentId: String, threadId: String, onProgress: (FileDownloadProgress) -> Unit = {}): DownloadedFile { error("File downloads are unavailable") }
     suspend fun sendMessage(text: String)
     suspend fun interruptRun()
     suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>> = emptyMap())

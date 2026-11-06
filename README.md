@@ -15,7 +15,9 @@
 - Browser and attached-device pixel streams with touch/input controls and immersive phone fullscreen.
 - Phone and wide layouts, light/dark themes, retained drafts and explicit reconnect.
 
-**Early release:** attachments, full Markdown support, diffs, shell terminals, notifications, T3 Connect relay and iOS are still planned. Some provider requests require another T3 client. See [current limits and validation](docs/IMPLEMENTATION_STATUS.md).
+Agent file links and attachments can be downloaded to **Downloads/Trefoil**, opened or shared. APK cards also open Android's installer. Download again after rebuilding a file at the same path.
+
+**Early release:** uploading attachments, full Markdown support, diffs, shell terminals, notifications, T3 Connect relay and iOS are still planned. Some provider requests require another T3 client. See [current limits and validation](docs/IMPLEMENTATION_STATUS.md).
 
 ## Connect
 

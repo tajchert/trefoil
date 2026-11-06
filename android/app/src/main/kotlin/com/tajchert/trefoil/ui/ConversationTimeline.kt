@@ -1,6 +1,7 @@
 /* Presentation patterns adapted from T3 Code (MIT). See licenses/T3-Code-MIT.txt. */
 package com.tajchert.trefoil.ui
 
+import com.tajchert.trefoil.core.model.remoteFiles
 import com.tajchert.trefoil.core.model.ConversationRun
 import com.tajchert.trefoil.core.model.ConversationMessage
 import com.tajchert.trefoil.core.model.ToolActivity
@@ -96,7 +97,7 @@ internal fun foldConversationTimeline(
              else work.isNotEmpty() && work.all { it.status in successStatuses })
     }.keys
     fun hidden(entry: ConversationEntry): Boolean = entry.runId in foldable && when (entry) {
-        is ConversationEntry.Message -> entry.message.role == "assistant" && entry.key != finalByRun[entry.runId]?.key
+        is ConversationEntry.Message -> entry.message.role == "assistant" && entry.message.remoteFiles().isEmpty() && entry.key != finalByRun[entry.runId]?.key
         is ConversationEntry.Activities -> entry.activities.none { it.standalone }
         is ConversationEntry.Work -> false
     }

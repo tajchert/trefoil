@@ -19,6 +19,8 @@ import kotlin.coroutines.coroutineContext
 class TrefoilViewModel(application: Application) : AndroidViewModel(application) {
     private val client = T3Client(viewModelScope)
     val screenSessions = com.tajchert.trefoil.ui.screens.ScreenSessionCoordinator(viewModelScope, client)
+    val fileDownloads = com.tajchert.trefoil.downloads.FileDownloadCoordinator(viewModelScope, client,
+        com.tajchert.trefoil.downloads.MediaStoreDownloadStore(application))
     private val connector = SshTunnelConnector()
     private val vault = EnvironmentVault(application)
     private val vaultMutex = Mutex()

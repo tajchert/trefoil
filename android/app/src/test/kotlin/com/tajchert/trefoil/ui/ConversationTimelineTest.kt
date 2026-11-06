@@ -5,6 +5,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationTimelineTest {
+    @Test fun filesInCommentaryStayVisibleAfterSuccessfulRunFolds() {
+        val entries = conversationTimeline(listOf(
+            ConversationMessage("artifact", "assistant", "Path: `/fixture/output.apk`", runId = "r", ordinal = 1),
+            ConversationMessage("answer", "assistant", "Ready to test", runId = "r", ordinal = 3)),
+            listOf(ToolActivity("test", "Test", status = "completed", runId = "r", ordinal = 2)))
+        val folded = foldConversationTimeline(entries, runs = listOf(ConversationRun("r", "completed")))
+        assertTrue(folded.any { it is ConversationEntry.Message && it.message.id == "artifact" })
+    }
     @Test fun prominentPlansAndNoticesNeverJoinOrdinaryWorkOrDisappearIntoSuccessfulFold() {
         val activities = listOf(
             ToolActivity("command", "Run command", kind = "command_execution", status = "completed", runId = "r", ordinal = 0),

@@ -34,7 +34,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
 @Composable
-internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt: () -> Unit, respond: (String, String, Map<String, List<String>>) -> Unit, onLoadActivity: (String) -> Unit = {}) {
+internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt: () -> Unit, respond: (String, String, Map<String, List<String>>) -> Unit, onLoadActivity: (String) -> Unit = {}, fileDownloadUi: FileDownloadUi = FileDownloadUi()) {
     if (state.selectedThreadId == null) {
         Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -80,6 +80,7 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
     val workStartedAt = thread?.let(::threadWorkStartedAt)?.let(::validThreadInstant)
     val clock = rememberThreadWorkClock(state.activeRunId != null && workStartedAt != null)
     val workLabel = "Working" + if (workStartedAt != null) " ${formatWorkDuration(clock - workStartedAt)}" else ""
+    CompositionLocalProvider(LocalFileDownloadUi provides fileDownloadUi) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             if (providerStack.isNotEmpty()) {
@@ -150,6 +151,7 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
             }
         }
     }
+    }
 }
 
 @Composable
@@ -164,6 +166,7 @@ private fun MessageRow(message: ConversationMessage, stacked: Boolean, showMetad
         } else {
             MarkdownContent(message.text, Modifier.fillMaxWidth())
         }
+        MessageFileCards(message, Modifier.fillMaxWidth(if (user) .85f else 1f))
         if (message.streaming) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
             Text("Writing…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -202,7 +205,7 @@ private fun CompletedWork(work: ConversationEntry.Work, canLoadActivity: Boolean
 }
 
 @Composable
-private fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Boolean = false, canLoadActivity: Boolean = false, onLoadActivity: (String) -> Unit = {}) {
+private fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Boolean = false, canLoadActivity: Boolean = false, onLoadActivity: (String) -> Unit = {}, fileDownloadUi: FileDownloadUi = FileDownloadUi()) {
     var expanded by rememberSaveable(activities.first().id) { mutableStateOf(initiallyExpanded) }
     val running = activities.any { it.isRunning }
     val attention = activities.any { it.needsAttention }
