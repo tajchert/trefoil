@@ -1,0 +1,11 @@
+Trefoil
+Copyright 2026 Michal Tajchert and contributors
+
+Trefoil includes Android build infrastructure and adapted design/security patterns from:
+Flocket, Copyright 2026 Michal Tajchert and Flocket contributors (Apache-2.0).
+Flocket baseline: afbd8315809c6f9c7e209692ea0b18493eadb13c.
+
+The T3 protocol implementation is based on contracts and runtime behavior in
+T3 Code, Copyright (c) 2026 T3 Tools Inc., licensed under MIT.
+T3 baseline: 46449b5379a0089f4ef3ce85bce10a1d28beb4cb.
+See licenses/T3-Code-MIT.txt.

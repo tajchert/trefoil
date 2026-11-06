@@ -1,6 +1,6 @@
 # Trefoil native T3 Code client
 
-Status: proposed for user review; implementation has not started.
+Status: native approach approved by the user on 2026-11-06; initial Android implementation delivered; see `docs/IMPLEMENTATION_STATUS.md` for verified scope and gaps.
 
 ## Intent
 
@@ -10,11 +10,11 @@ T3 projects, persistent conversation threads, runs, tool activity and pending re
 
 ## Approaches
 
-1. **Selected Flocket reuse (recommended, pending confirmation):** adapt its Gradle setup, Material/Compose theme and useful storage patterns, while writing T3-specific models, transport and conversation features. This retains native foundations without carrying herdr assumptions into the new app.
+1. **Selected Flocket reuse (selected):** adapt its Gradle setup, Material/Compose theme and useful storage patterns, while writing T3-specific models, transport and conversation features. This retains native foundations without carrying herdr assumptions into the new app.
 2. **Full Flocket fork:** initially retains more working screens and infrastructure, but most protocol, SSH, terminal and data modules must subsequently be removed or replaced.
 3. **Extend T3's React Native app:** shares the existing TypeScript runtime, but does not satisfy the requested native Kotlin Android direction. Use its implementation as a behavioral reference instead.
 
-The recommendation is the builder's proposal, not a recorded user decision.
+The user selected the recommended native approach.
 
 ## First useful Android release
 
@@ -55,7 +55,7 @@ Implement against the actual local `../t3code` contracts and runtime (inspected 
 - Idle send uses `start_immediately`; sending during an active run defaults to `queue_after_active`. Steer is a separate explicit action with the target run ID.
 - Initial stop control means **Interrupt run**. A broader stop of the thread and delegated tasks requires a separately labelled action.
 - Discover provider/model choices from the server; use an approval-requiring runtime mode for new threads unless explicitly selected otherwise. Let the launch API select the workspace using its supported defaults.
-- Prove full projections first, then add older-history loading. Include `getOlderSettledThreads` before presenting the project list as exhaustive.
+- Prove full projections first, then add older-history loading. Request the complete shell snapshot initially; add `getOlderSettledThreads` if adopting bounded shell lists later.
 - On expired/revoked tokens, disable writes, preserve drafts and request pairing again when renewal is unavailable. Discard the bootstrap credential after successful exchange; never save it as a reusable access token.
 
 A parallel builder review found no further technical decisions that require user input.
