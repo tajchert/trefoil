@@ -33,6 +33,71 @@ class StreamWebViewLifecycleTest {
         "https://fixture.example/api/device-hub", "wss://fixture.example/api/device-hub",
         mapOf("hostId" to "host", "wsTicket" to ticket), interactive = true)
 
+    @Test fun repeatedDeviceOpenBackgroundAndFreshAccessReleasesEveryViewer() {
+        val owner = object : LifecycleOwner {
+            val registry = LifecycleRegistry(this)
+            override val lifecycle: Lifecycle get() = registry
+        }
+        owner.registry.currentState = Lifecycle.State.RESUMED
+        val granted = mutableStateOf(access("cycle-0"))
+        val connected = mutableStateOf(true)
+        val controller = StreamController()
+        var root: View? = null
+        compose.setContent {
+            root = LocalView.current.rootView
+            CompositionLocalProvider(LocalLifecycleOwner provides owner) {
+                StreamWebView(target, granted.value, environment, connected.value, controller, {})
+            }
+        }
+        val viewers = mutableListOf<WebView>()
+        repeat(12) { cycle ->
+            compose.runOnIdle { viewers += findWebView(root!!)!!; owner.registry.currentState = Lifecycle.State.CREATED }
+            compose.runOnIdle {
+                assertTrue(shadowOf(viewers.last()).wasDestroyCalled())
+                assertNull(findWebView(root!!))
+                assertFalse(controller.send(StreamCommand.Home))
+                owner.registry.currentState = Lifecycle.State.RESUMED
+                granted.value = access("cycle-${cycle + 1}")
+            }
+        }
+        compose.runOnIdle { viewers += findWebView(root!!)!!; connected.value = false }
+        compose.runOnIdle {
+            assertNull(findWebView(root!!))
+            assertTrue(viewers.all { shadowOf(it).wasDestroyCalled() })
+            assertFalse(controller.send(StreamCommand.Home))
+        }
+    }
+
+    @Test fun decoderRestartBeforeFirstFrameStopsAttemptWithoutAStartupRetryStorm() {
+        var root: View? = null
+        val statuses = mutableListOf<StreamViewerStatus>()
+        val controller = StreamController()
+        compose.setContent {
+            root = LocalView.current.rootView
+            StreamWebView(target, access(), environment, true, controller, statuses::add)
+        }
+        lateinit var post: java.lang.reflect.Method
+        lateinit var bridge: Any
+        compose.runOnIdle {
+            val view = findWebView(root!!)!!
+            val html = bootstrapHtml(view)
+            bridge = shadowOf(view).getJavascriptInterface(Regex("TrefoilStream_[a-f0-9]+").find(html)!!.value)
+            post = bridge.javaClass.getDeclaredMethod("postMessage", String::class.java).apply { isAccessible = true }
+            post.invoke(bridge, """{"type":"status","status":"connecting","detail":"Video decoder restarted."}""")
+        }
+        compose.runOnIdle {
+            assertEquals(StreamPhase.Error, statuses.last().phase)
+            assertTrue(statuses.last().detail!!.startsWith("Video decoding failed."))
+            repeat(100) { post.invoke(bridge, """{"type":"status","status":"connecting","detail":"Video decoder restarted."}""") }
+            post.invoke(bridge, """{"type":"status","status":"streaming"}""")
+        }
+        compose.runOnIdle {
+            assertEquals(1, statuses.count { it.phase == StreamPhase.Error })
+            assertEquals(StreamPhase.Error, statuses.last().phase)
+            assertFalse(controller.send(StreamCommand.Home))
+        }
+    }
+
     @Test fun pauseDestroysStreamAndOldTicketCannotResumeOrReplayInput() {
         val owner = object : LifecycleOwner {
             val registry = LifecycleRegistry(this)

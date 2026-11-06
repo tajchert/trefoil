@@ -87,7 +87,7 @@ class StreamController {
 }
 
 internal sealed interface StreamMessage {
-    data class Status(val phase: StreamPhase) : StreamMessage
+    data class Status(val phase: StreamPhase, val decoderRestarted: Boolean = false) : StreamMessage
     data class Input(val connected: Boolean) : StreamMessage
     data class Control(val canOperate: Boolean, val controller: String) : StreamMessage
     data class Viewport(val width: Int, val height: Int) : StreamMessage
@@ -102,7 +102,9 @@ internal fun parseStreamMessage(value: String): StreamMessage? {
         fun bool(key: String) = (obj[key] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
         when (string("type")) {
             "status" -> when (string("status")) {
-                "connecting" -> StreamMessage.Status(StreamPhase.Connecting)
+                // Recognize only the pinned viewer's decoder-failure signal. Arbitrary details
+                // remain discarded at this boundary and never enter native UI or logs.
+                "connecting" -> StreamMessage.Status(StreamPhase.Connecting, string("detail") == "Video decoder restarted.")
                 "streaming" -> StreamMessage.Status(StreamPhase.Streaming)
                 "error" -> StreamMessage.Status(StreamPhase.Error)
                 else -> null

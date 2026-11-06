@@ -76,3 +76,8 @@ Release `0.6.1` (`versionCode = 9`) corrects lineage filtering, shelf grouping/s
 Release `0.6.2` (`versionCode = 10`) fixes SSH forwarding workers spinning after disconnect.
 Run `TunnelShutdownRegressionTest` and use the debug-only SSH shutdown fixture for repeated native
 connect/close checks against the isolated service. The activity is absent from release builds.
+
+Release `0.6.3` (`versionCode = 11`) stops decoder restart storms during device-stream startup.
+Run the synthetic H.264 device fixture and Python wire tests; debug streaming accepts `mode=device`.
+The checked-in H.264 asset is generated test-pattern video; its regeneration command is in the
+fixture script. It is never bundled into the release APK.

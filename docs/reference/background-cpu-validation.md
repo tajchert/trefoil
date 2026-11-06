@@ -44,6 +44,34 @@ decoder/socket and no timers. Ten explicit upstream video-session resets created
 decoder replacements. Stop followed by 10,000 late frames produced no paints and left no decoder
 or timer active. No viewer asset changes were needed for this issue.
 
-Full release validation: 188 tests, debug/release lint and APK builds pass. Original signing
+## Follow-up: emulator streaming startup
+
+The user confirmed the original connection used SSH. Opening emulator streaming could precede
+the background/disconnect that exposed the SSH worker leak. A separate native decoder recovery
+problem was also reproduced using `scripts/device-stream-fixture.py` and its generated baseline
+H.264 test pattern; no real device pixels or T3 threads were accessed.
+
+The Android 17 emulator's `c2.goldfish.h264.decoder` failed buffer submission with CodecException
+14 and a memfd SELinux denial. Before first paint the pinned JS kept recreating the decoder:
+139 frames and 137 reset requests until the 15-second bootstrap timeout. The same stream and
+actual viewer decoded 194 frames with one configuration and no errors in host Chrome, so the
+synthetic bitstream was independently validated.
+
+0.6.3 recognizes only the exact pinned-viewer decoder-restart signal and halts the device attempt
+even before its first Streaming state. Arbitrary remote error details remain discarded. The
+native check stopped after four in-flight frames/resets, closed video/control sockets and remained
+idle. One explicit retry made one additional bounded attempt. No viewer bundle changes were made.
+
+A delayed-first-frame run had active video/control sockets when Home was pressed. Backgrounding
+and turning the emulator screen off closed both sockets, sent no additional frames, and sampled
+0.0% app CPU twice five seconds apart. Twelve repeated pause/fresh-access cycles destroy every
+WebView in Compose regression coverage; late error/streaming messages cannot revive a halted view.
+
+190 Gradle tests and nine Python wire-fixture tests pass, along with trusted bundle fixtures,
+debug/release lint and builds. Signed upgrade/launch uses the original certificate. The emulator's
+decoder failure prevented a successful native H.264 playback endurance run; host decoding and
+native failure/background cleanup were tested separately. Physical-phone thermals remain unverified.
+
+Earlier 0.6.2 release validation: 188 tests, debug/release lint and APK builds pass. Original signing
 certificate verified; signed upgrade/launch on the isolated Android 17 tablet succeeds. No real user
 threads or production T3 services were changed.

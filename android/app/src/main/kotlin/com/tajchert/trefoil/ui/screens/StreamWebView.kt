@@ -205,7 +205,10 @@ private class NativeStreamViewer(
     private fun receive(value: String) {
         when (val message = parseStreamMessage(value)) {
             is StreamMessage.Status -> {
-                if (!browser && message.phase == StreamPhase.Connecting && state.phase == StreamPhase.Streaming) { halt(StreamPhase.Error); return }
+                if (!browser && message.phase == StreamPhase.Connecting &&
+                    (message.decoderRestarted || state.phase == StreamPhase.Streaming)) {
+                    halt(StreamPhase.Error, decoderFailure = message.decoderRestarted); return
+                }
                 if (message.phase in setOf(StreamPhase.Error, StreamPhase.Unauthorized, StreamPhase.Gone)) { halt(message.phase); return }
                 state = if (message.phase == StreamPhase.Connecting) state.copy(phase = message.phase, inputConnected = false, canOperate = false, controller = null)
                 else state.copy(phase = message.phase)
@@ -231,7 +234,7 @@ private class NativeStreamViewer(
         webView.evaluateJavascript(script, null)
         return true
     }
-    fun halt(phase: StreamPhase) {
+    fun halt(phase: StreamPhase, decoderFailure: Boolean = false) {
         if (!active) return
         active = false
         documentBytes = byteArrayOf()
@@ -243,7 +246,8 @@ private class NativeStreamViewer(
         webView.loadUrl("about:blank")
         state = state.copy(phase = phase, inputConnected = false, canOperate = false, controller = null,
             detail = if (phase == StreamPhase.Error) {
-                if (browser) "Screen viewer stopped. Reconnect to try again."
+                if (decoderFailure) "Video decoding failed. Reconnect to try again, or update Android System WebView."
+                else if (browser) "Screen viewer stopped. Reconnect to try again."
                 else "Device stream unavailable. Update Android System WebView and use an HTTP/WebSocket stream; WebRTC-only hosts are not supported."
             } else null)
         report(state)

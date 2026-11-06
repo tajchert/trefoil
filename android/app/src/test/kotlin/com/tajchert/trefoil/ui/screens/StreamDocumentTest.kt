@@ -33,6 +33,8 @@ class StreamDocumentTest {
         assertNull(parseStreamMessage("{\"type\":\"viewport\",\"width\":0,\"height\":1}"))
         assertEquals(StreamMessage.Input(true), parseStreamMessage("{\"type\":\"input\",\"connected\":true,\"newField\":1}"))
         assertEquals(StreamMessage.Status(StreamPhase.Error), parseStreamMessage("{\"type\":\"status\",\"status\":\"error\",\"detail\":\"secret remote content\"}"))
+        assertEquals(StreamMessage.Status(StreamPhase.Connecting, decoderRestarted = true), parseStreamMessage("""{"type":"status","status":"connecting","detail":"Video decoder restarted."}"""))
+        assertEquals(StreamMessage.Status(StreamPhase.Connecting), parseStreamMessage("""{"type":"status","status":"connecting","detail":"arbitrary remote content"}"""))
         assertNull(parseStreamMessage("{\"type\":\"control\",\"canOperate\":true,\"controller\":\"unknown\"}"))
     }
     @Test fun scriptPayloadCannotCloseHtmlScriptAndDeviceTextUsesUnicodeSharedPath() {

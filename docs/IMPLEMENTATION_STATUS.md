@@ -101,3 +101,15 @@ paused coordinators cannot start new catalog/access work.
 188 tests, debug/release lint and builds pass. A baseline isolated test reproduced one-core saturation;
 twelve native Android SSH cycles now leave zero forwarding loops, with near-idle sampled background
 CPU. Signing and upgrade/launch verified. See [cause and validation limits](reference/background-cpu-validation.md).
+
+## 0.6.3
+
+Stops repeated device decoder recovery before first paint. The native viewer already stopped
+device recovery after streaming; it now also recognizes the pinned decoder-restart signal during
+startup and closes the attempt immediately. Late callbacks cannot revive it; arbitrary JS error
+details stay out of UI/logs. Adds a synthetic H.264/SEMU device fixture and repeated lifecycle tests.
+
+190 Gradle tests, nine Python fixtures, bundle checks, both lint variants and APK builds pass.
+Native codec failure and background/screen-off cleanup were exercised: sockets close and app CPU
+returns idle. Signed upgrade/launch verified. Successful native H.264 playback endurance and
+physical-phone thermals remain unverified; see the CPU validation reference for exact evidence.
