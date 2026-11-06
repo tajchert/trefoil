@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import com.tajchert.trefoil.core.model.SavedEnvironment
+import com.tajchert.trefoil.core.model.SshHostKey
 import java.io.File
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -17,6 +18,8 @@ import kotlinx.serialization.json.Json
 /** Keystore AES-GCM pattern adapted from Flocket's KeystoreSecretCipher (Apache-2.0). */
 class EnvironmentVault(context: Context) {
     private val file = AtomicFile(File(context.noBackupFilesDir, "environments.v1"))
+    private val hostKeysFile = AtomicFile(File(context.noBackupFilesDir, "ssh-host-keys.v1"))
+    private val hostKeysSerializer = ListSerializer(SshHostKey.serializer())
     private val alias = "trefoil.environments.v1"
     private val json = Json { ignoreUnknownKeys = true }
     private val serializer = ListSerializer(SavedEnvironment.serializer())
@@ -29,18 +32,22 @@ class EnvironmentVault(context: Context) {
                 .setKeySize(256).build())
         }.generateKey()
     }
-    @Synchronized fun read(): List<SavedEnvironment> {
-        if (!file.baseFile.exists()) return emptyList()
-        val (nonce, encrypted) = SecretEnvelope.decode(file.readFully())
+    @Synchronized fun read(): List<SavedEnvironment> = readEncrypted(file)?.let { json.decodeFromString(serializer, it) } ?: emptyList()
+    @Synchronized fun readHostKeys(): List<SshHostKey> = readEncrypted(hostKeysFile)?.let { json.decodeFromString(hostKeysSerializer, it) } ?: emptyList()
+    @Synchronized fun writeHostKeys(keys: List<SshHostKey>) = writeEncrypted(hostKeysFile, json.encodeToString(hostKeysSerializer, keys))
+    private fun readEncrypted(source: AtomicFile): String? {
+        if (!source.baseFile.exists()) return null
+        val (nonce, encrypted) = SecretEnvelope.decode(source.readFully())
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, nonce))
-        return json.decodeFromString(serializer, cipher.doFinal(encrypted).decodeToString())
+        return cipher.doFinal(encrypted).decodeToString()
     }
-    @Synchronized fun write(environments: List<SavedEnvironment>) {
+    @Synchronized fun write(environments: List<SavedEnvironment>) = writeEncrypted(file, json.encodeToString(serializer, environments))
+    private fun writeEncrypted(destination: AtomicFile, plaintext: String) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        val bytes = SecretEnvelope.encode(cipher.iv, cipher.doFinal(json.encodeToString(serializer, environments).encodeToByteArray()))
-        val stream = file.startWrite()
-        try { stream.write(bytes); file.finishWrite(stream) } catch (e: Exception) { file.failWrite(stream); throw e }
+        val bytes = SecretEnvelope.encode(cipher.iv, cipher.doFinal(plaintext.encodeToByteArray()))
+        val stream = destination.startWrite()
+        try { stream.write(bytes); destination.finishWrite(stream) } catch (e: Exception) { destination.failWrite(stream); throw e }
     }
 }

@@ -277,5 +277,7 @@ class T3Client(private val scope: CoroutineScope) : TrefoilClient {
         connect(environment)
         current.selectedThreadId?.let { selectThread(it) }
     }
+    /** Remove in-memory credentials as well as the local connection; no remote revoke. */
+    fun forgetEnvironment() { disconnectNow(); mutable.value = ClientState() }
     override fun close() { disconnectNow(); http.connectionPool.evictAll() }
 }

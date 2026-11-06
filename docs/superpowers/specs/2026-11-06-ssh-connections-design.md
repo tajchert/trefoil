@@ -1,6 +1,6 @@
 # SSH connections for Trefoil
 
-Status: proposed; awaiting user confirmation of the tunnel approach.
+Status: persistent SSH tunnel approach approved and implemented; see `docs/IMPLEMENTATION_STATUS.md` for validation and limits.
 
 ## Intent
 
@@ -17,7 +17,7 @@ T3 loopback. Pair through this tunnel and retain it while the client is connecte
 2. **SSH only for pairing:** obtains a token but still requires a reachable HTTPS
 endpoint. Does not solve the user's current Mac mini setup; not recommended.
 
-The user has not yet chosen between these approaches.
+The user selected the persistent SSH tunnel approach.
 
 ## User flow
 

@@ -4,7 +4,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class SavedEnvironment(val id: String, val name: String, val baseUrl: String, val accessToken: String)
+data class SavedEnvironment(val id: String, val name: String, val baseUrl: String, val accessToken: String, val ssh: SshProfile? = null) {
+    override fun toString() = "SavedEnvironment(credentials=***)"
+}
 data class Project(val id: String, val title: String, val path: String = "")
 data class ThreadSummary(val id: String, val projectId: String, val title: String, val status: String = "idle")
 data class ConversationMessage(val id: String, val role: String, val text: String, val streaming: Boolean = false)

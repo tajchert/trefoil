@@ -132,6 +132,10 @@ class T3ClientTest {
      val requests = (1..8).mapNotNull { server.takeRequest(1, TimeUnit.SECONDS) }
      assertTrue(requests.any { it.path?.startsWith("/ws?wsTicket=ticket-secret&orchestrationProtocol=2") == true })
      assertTrue(requests.filter { it.path?.contains("websocket-ticket") == true }.all { it.getHeader("Authorization") == "Bearer bearer-secret" })
+     client.forgetEnvironment()
+     assertNull(client.state.value.environment)
+     assertFalse(client.state.value.canWrite)
+     assertTrue(client.state.value.messages.isEmpty())
    } finally { client.disconnect(); scope.cancel(); runCatching { server.shutdown() } }
  }
 }

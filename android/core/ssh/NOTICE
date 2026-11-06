@@ -1,0 +1,6 @@
+Trefoil SSH transport adapts SSHJ authentication, key fingerprinting, shell quoting
+and BouncyCastle provider patterns and a test-only encrypted OpenSSH key fixture
+from Flocket, Copyright 2026 Michal Tajchert and Flocket contributors.
+Licensed under Apache License 2.0; see the repository LICENSE and NOTICE.
+Runtime discovery and pairing behavior follow T3 Code (MIT); see
+licenses/T3-Code-MIT.txt at the repository root.

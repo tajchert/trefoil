@@ -1,7 +1,7 @@
 Trefoil
 Copyright 2026 Michal Tajchert and contributors
 
-Trefoil includes Android build infrastructure and adapted design/security patterns from:
+Trefoil includes Android build infrastructure and adapted design/security/SSH patterns from:
 Flocket, Copyright 2026 Michal Tajchert and Flocket contributors (Apache-2.0).
 Flocket baseline: afbd8315809c6f9c7e209692ea0b18493eadb13c.
 

@@ -34,9 +34,17 @@ fun TrefoilApp(
     onRespond: (String, String, Map<String, List<String>>) -> Unit,
     onCreateThread: (String, String, ModelOption) -> Unit,
     onReconnect: () -> Unit, onDisconnect: () -> Unit, onForget: (SavedEnvironment) -> Unit,
+    onSshConnect: (SshConnectionInput) -> Unit = {},
+    sshHostKey: SshHostKey? = null,
+    onTrustSsh: () -> Unit = {},
+    onCancelSsh: () -> Unit = {},
+    sshLogin: SshConnectionInput? = null,
+    onSshKeyPickerActive: (Boolean) -> Unit = {},
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
+        var adding by remember { mutableStateOf(false) }
+        var sshConnecting by remember { mutableStateOf(false) }
         var pairing by rememberSaveable { mutableStateOf(false) }
         var choosingEnvironment by rememberSaveable { mutableStateOf(false) }
         var creating by rememberSaveable { mutableStateOf(false) }
@@ -58,14 +66,14 @@ fun TrefoilApp(
                         else Icon(Icons.Default.Spa, null, Modifier.padding(start = 20.dp, end = 8.dp), tint = MaterialTheme.colorScheme.primary)
                     }, actions = {
                         if (savedEnvironments.isNotEmpty()) IconButton(onClick = { choosingEnvironment = true; showThread = false }) { Icon(Icons.Default.Dns, "Saved environments") }
-                        IconButton(onClick = { pairing = true }) { Icon(Icons.Default.AddLink, "Add environment") }
+                        IconButton(onClick = { adding = true }, enabled = !state.busy) { Icon(Icons.Default.AddLink, "Add environment") }
                         if (state.environment != null) IconButton(onClick = { onDisconnect(); choosingEnvironment = true; showThread = false }) { Icon(Icons.Default.LinkOff, "Disconnect environment") }
                     })
                 }) { padding ->
                     Column(Modifier.padding(padding).imePadding()) {
                         ConnectionBanner(state, onReconnect)
                         if (state.environment == null || choosingEnvironment) {
-                            EnvironmentScreen(savedEnvironments, state.busy, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true })
+                            EnvironmentScreen(savedEnvironments, state.busy, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true }, { sshConnecting = true })
                         } else Row(Modifier.weight(1f)) {
                             if (wide || !showThread) {
                                 Box(if (wide) Modifier.width(320.dp).fillMaxHeight() else Modifier.fillMaxSize()) {
@@ -83,6 +91,21 @@ fun TrefoilApp(
                 }
             }
         }
+        if (adding) AlertDialog(onDismissRequest = { adding = false }, title = { Text("Add environment") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = { adding = false; sshConnecting = true }, modifier = Modifier.fillMaxWidth()) { Text("Connect over SSH") }
+                OutlinedButton(onClick = { adding = false; pairing = true }, modifier = Modifier.fillMaxWidth()) { Text("Pair with link") }
+            }
+        }, confirmButton = {}, dismissButton = { TextButton(onClick = { adding = false }) { Text("Cancel") } })
+        if ((sshConnecting || sshLogin != null) && sshHostKey == null) key(sshLogin?.savedEnvironmentId) {
+            SshConnectionDialog(state.busy, sshLogin, { sshConnecting = false; onCancelSsh() }, onSshKeyPickerActive) {
+                sshConnecting = false
+                choosingEnvironment = false
+                showThread = false
+                onSshConnect(it)
+            }
+        }
+        if (sshHostKey != null) SshHostKeyDialog(sshHostKey, onTrustSsh, onCancelSsh)
         if (pairing) PairDialog(state.busy, { pairing = false }) { url, name -> onPair(url, name); pairing = false; choosingEnvironment = false }
         if (creating) NewThreadDialog(state, { creating = false }) { project, title, model ->
             onCreateThread(project, title, model); creating = false; showThread = true
@@ -92,13 +115,13 @@ fun TrefoilApp(
 
 @Composable
 private fun ConnectionBanner(state: ClientState, reconnect: () -> Unit) {
-    if (state.connection == ConnectionStatus.Connected && state.error == null) return
+    if (state.connection == ConnectionStatus.Connected && state.error == null && !state.busy) return
     Surface(color = if (state.error != null) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (state.connection == ConnectionStatus.Connecting || state.connection == ConnectionStatus.Reconnecting)
+            if (state.busy || state.connection == ConnectionStatus.Connecting || state.connection == ConnectionStatus.Reconnecting)
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                Text(state.connection.name, style = MaterialTheme.typography.labelLarge)
+                Text(if (state.busy) "Connecting…" else state.connection.name, style = MaterialTheme.typography.labelLarge)
                 Text(state.error ?: if (state.environment == null) "Connect a T3 environment to get started." else "Drafts stay here. Reconnect to continue.", style = MaterialTheme.typography.bodySmall)
             }
             if (state.environment != null && !state.busy) TextButton(onClick = reconnect) { Text("Reconnect") }
@@ -107,7 +130,7 @@ private fun ConnectionBanner(state: ClientState, reconnect: () -> Unit) {
 }
 
 @Composable
-private fun EnvironmentScreen(saved: List<SavedEnvironment>, busy: Boolean, connect: (SavedEnvironment) -> Unit, forget: (SavedEnvironment) -> Unit, add: () -> Unit) {
+private fun EnvironmentScreen(saved: List<SavedEnvironment>, busy: Boolean, connect: (SavedEnvironment) -> Unit, forget: (SavedEnvironment) -> Unit, add: () -> Unit, ssh: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
             Spacer(Modifier.height(32.dp))
@@ -117,14 +140,15 @@ private fun EnvironmentScreen(saved: List<SavedEnvironment>, busy: Boolean, conn
             Spacer(Modifier.height(12.dp))
             Text("Connect directly to T3 Code. Follow your conversations and keep remote work moving.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
-            Button(onClick = add, enabled = !busy) { Icon(Icons.Default.AddLink, null); Spacer(Modifier.width(8.dp)); Text("Pair an environment") }
+            Button(onClick = add, enabled = !busy) { Icon(Icons.Default.AddLink, null); Spacer(Modifier.width(8.dp)); Text("Pair with link") }
+            OutlinedButton(onClick = ssh, enabled = !busy) { Text("Connect over SSH") }
         }
         if (saved.isNotEmpty()) item { Text("SAVED ENVIRONMENTS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
         items(saved, key = { it.id }) { environment ->
             ElevatedCard(onClick = { connect(environment) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Dns, null, tint = MaterialTheme.colorScheme.primary)
-                    Column(Modifier.weight(1f).padding(horizontal = 16.dp)) { Text(environment.name, fontWeight = FontWeight.SemiBold); Text(environment.baseUrl, style = MaterialTheme.typography.bodySmall) }
+                    Column(Modifier.weight(1f).padding(horizontal = 16.dp)) { Text(environment.name, fontWeight = FontWeight.SemiBold); Text(environment.ssh?.let { "${it.username}@${it.host}:${it.port}" } ?: environment.baseUrl, style = MaterialTheme.typography.bodySmall) }
                     IconButton(onClick = { forget(environment) }, enabled = !busy) { Icon(Icons.Default.DeleteOutline, "Forget ${environment.name}") }
                 }
             }

@@ -18,3 +18,25 @@ Sources: `packages/contracts/src/{environment,environmentHttp,auth,orchestration
 The first client requests complete shell history (neither `omitIdleSubagents` nor `omitOlderSettled` is sent), so `getOlderSettledThreads` is not needed for this full-snapshot path. No bounded-history pagination UI exists yet. Domain event resnapshotting trades bandwidth for completeness; native incremental reducers can replace this later. Provider approval option restrictions are checked at dispatch; the shared UI currently exposes basic accept/decline. Unsupported requests explicitly direct users to another T3 client. Auto reconnect/backoff, access-token renewal, command receipt lookup, steer, thread.stop, attachments and terminal streams are follow-up work. Explicit reconnect is implemented.
 
 Fixtures are synthetic examples shaped from the pinned contracts and contain no user data. The isolated server wire probe lives in `scripts/validate-t3-wire.mjs` and never touches a developer's T3 state.
+
+## SSH transport (0.2.0 source)
+
+SSH is a transport wrapper around the same V2 HTTP/Effect RPC protocol. Native
+SSHJ verifies the host key before password/private-key authentication. First use
+requires a user-confirmed SHA-256 pin; a changed pin blocks authentication.
+
+Read the selected T3 home's `userdata/server-runtime.json`, verify live PID and
+runtime metadata, and forward an ephemeral **127.0.0.1** listener only to the
+remote **127.0.0.1** T3 port. Probe the descriptor and require V2, matching
+server/CLI version and the expected saved environment identity. The running
+server's matching CLI executes `auth pairing create --base-dir <home> --json`;
+its `credential` is exchanged through the tunnel using the existing OAuth flow.
+Never log raw command output or replay pairing creation after an unknown result.
+No installation, update, service change or remote process stop occurs.
+
+SSH profiles, host pins, access tokens and explicitly saved login secrets live
+in Android Keystore-encrypted local files. The local forwarded URL is transient:
+it is never persisted as an environment's durable endpoint. Reconnect opens a
+new SSH tunnel before reusing the saved T3 token. Background/disconnect closes
+the local tunnel; remote agents continue running. An unsaved login is requested
+again when a new SSH connection is needed.

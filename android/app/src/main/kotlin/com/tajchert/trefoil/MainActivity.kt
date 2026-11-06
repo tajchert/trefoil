@@ -21,6 +21,8 @@ class MainActivity : ComponentActivity() {
             val environments by model.environments.collectAsStateWithLifecycle()
             val notice by model.notice.collectAsStateWithLifecycle()
             val working by model.working.collectAsStateWithLifecycle()
+            val sshHostKey by model.sshHostKey.collectAsStateWithLifecycle()
+            val sshLogin by model.sshLogin.collectAsStateWithLifecycle()
             TrefoilApp(
                 state = state.copy(error = notice ?: state.error, busy = working || state.busy),
                 savedEnvironments = environments,
@@ -34,6 +36,12 @@ class MainActivity : ComponentActivity() {
                 onReconnect = model::reconnect,
                 onDisconnect = model::disconnect,
                 onForget = model::forget,
+                onSshConnect = model::connectSsh,
+                sshHostKey = sshHostKey,
+                onTrustSsh = model::trustSsh,
+                onCancelSsh = model::cancelSsh,
+                sshLogin = sshLogin,
+                onSshKeyPickerActive = { model.sshFilePickerActive = it },
             )
         }
     }

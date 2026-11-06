@@ -13,7 +13,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.1.0'
       - working-directory: android
-        run: ./gradlew :core:protocol:test :core:session:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+        run: ./gradlew :core:model:test :core:ssh:test :core:protocol:test :core:session:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: trefoil-debug

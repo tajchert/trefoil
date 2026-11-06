@@ -19,7 +19,7 @@ val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKe
 android {
     namespace = "com.tajchert.trefoil"
     compileSdk = 37
-    defaultConfig { applicationId = "com.tajchert.trefoil"; minSdk = 29; targetSdk = 37; versionCode = 1; versionName = "0.1.0" }
+    defaultConfig { applicationId = "com.tajchert.trefoil"; minSdk = 29; targetSdk = 37; versionCode = 2; versionName = "0.2.0" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
     if (hasReleaseSigning) {
@@ -35,7 +35,7 @@ android {
     }
 }
 dependencies {
-    implementation(project(":core:model")); implementation(project(":core:session"))
+    implementation(project(":core:model")); implementation(project(":core:session")); implementation(project(":core:ssh"))
     implementation(platform(libs.compose.bom))
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")

@@ -6,7 +6,8 @@
 
 ## 📱 What works
 
-- Direct T3 pairing and encrypted credentials for saved environments.
+- SSH connections with password or private-key login, verified host fingerprints and automatic pairing through an encrypted tunnel.
+- Direct HTTPS pairing and encrypted credentials for saved environments.
 - Projects, threads and native conversations with streaming updates.
 - Text messages, queueing during active runs and interrupting a run.
 - Supported live approvals and questions, plus new conversations with server-provided models.
@@ -15,6 +16,12 @@
 **Early release:** attachments, rich Markdown, diffs, shell terminals, notifications, T3 Connect relay and iOS are still planned. Some provider requests require another T3 client. See [current limits and validation](docs/IMPLEMENTATION_STATUS.md).
 
 ## Connect
+
+**SSH (current source / upcoming 0.2.0):** choose **Connect over SSH**, enter the host/IP, SSH username and password or private key, then verify the server fingerprint. Trefoil discovers the installed running T3 server, obtains its pairing credential and carries HTTP/WebSocket traffic inside SSH. No public HTTPS endpoint or Tailscale is needed. Saving login credentials is optional; without it, reconnect asks for them again. Advanced settings support a custom T3 data directory and matching executable.
+
+The server must already be installed and running; Trefoil does not install, update or restart it. Changed SSH host keys block authentication.
+
+**Direct HTTPS pairing (also available in the published 0.1.0):**
 
 1. Install the [signed release APK](https://github.com/tajchert/trefoil/releases/latest) on Android **10 or newer**.
 2. Create a direct pairing link in your T3 environment.
@@ -30,7 +37,7 @@ Requires Java **21** and Android SDK platform **37.0**. Set `ANDROID_HOME` or `s
 
 ```sh
 cd android
-./gradlew :core:protocol:test :core:session:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+./gradlew :core:model:test :core:ssh:test :core:protocol:test :core:session:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
 Debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
@@ -52,6 +59,7 @@ Loopback HTTP is allowed for local development only; Android Emulator reaches th
 |---|---|
 | `android/core/model` | Native client contract and immutable state |
 | `android/core/protocol` | Effect RPC wire handling |
+| `android/core/ssh` | Verified SSH login, discovery, commands and loopback forwarding |
 | `android/core/session` | Authorization, subscriptions and commands |
 | `android/app` | Compose UI, lifecycle and encrypted credentials |
 | `protocol` | Platform-independent contract and fixtures for future iOS |

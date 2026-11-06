@@ -61,3 +61,8 @@ gh release create v0.1.0 trefoil-0.1.0.apk trefoil-0.1.0.apk.sha256 --repo tajch
 
 Adapt the version and asset paths for future releases. Only upload the public APK
 and checksum; signing credentials stay outside Git.
+
+Current source targets `0.2.0` (`versionCode = 2`) with SSH onboarding. It has
+not been published by this feature change; the existing GitHub release remains
+0.1.0. Verify `:core:model:test` and `:core:ssh:test` as well when releasing SSH
+changes. Keep the same release keystore for in-place upgrades.
