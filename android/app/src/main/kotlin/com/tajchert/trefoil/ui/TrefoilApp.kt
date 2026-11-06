@@ -1,6 +1,8 @@
 package com.tajchert.trefoil.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,7 +31,7 @@ import com.tajchert.trefoil.core.model.*
 @Composable
 fun TrefoilApp(
     state: ClientState, savedEnvironments: List<SavedEnvironment>,
-    onPair: (String, String) -> Unit, onConnect: (SavedEnvironment) -> Unit,
+    onPair: (String, String, Boolean) -> Unit, onConnect: (SavedEnvironment) -> Unit,
     onSelectThread: (String) -> Unit, onSend: (String) -> Unit, onInterrupt: () -> Unit,
     onRespond: (String, String, Map<String, List<String>>) -> Unit,
     onCreateThread: (String, String, ModelOption) -> Unit,
@@ -40,6 +42,7 @@ fun TrefoilApp(
     onCancelSsh: () -> Unit = {},
     sshLogin: SshConnectionInput? = null,
     onSshKeyPickerActive: (Boolean) -> Unit = {},
+    connectionAttempt: ConnectionAttempt = ConnectionAttempt(),
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -49,6 +52,14 @@ fun TrefoilApp(
         var choosingEnvironment by rememberSaveable { mutableStateOf(false) }
         var creating by rememberSaveable { mutableStateOf(false) }
         var showThread by rememberSaveable { mutableStateOf(false) }
+        var submittedSsh by remember { mutableStateOf(false) }
+        var submittedPair by remember { mutableStateOf(false) }
+        LaunchedEffect(connectionAttempt) {
+            if (connectionAttempt.phase == ConnectionPhase.Succeeded) {
+                if (connectionAttempt.kind == ConnectionKind.Ssh && submittedSsh) { sshConnecting = false; submittedSsh = false; choosingEnvironment = false }
+                if (connectionAttempt.kind == ConnectionKind.Pairing && submittedPair) { pairing = false; submittedPair = false; choosingEnvironment = false }
+            }
+        }
         val select: (String) -> Unit = { onSelectThread(it); showThread = true }
         Surface(Modifier.fillMaxSize()) {
             BoxWithConstraints {
@@ -97,16 +108,16 @@ fun TrefoilApp(
                 OutlinedButton(onClick = { adding = false; pairing = true }, modifier = Modifier.fillMaxWidth()) { Text("Pair with link") }
             }
         }, confirmButton = {}, dismissButton = { TextButton(onClick = { adding = false }) { Text("Cancel") } })
-        if ((sshConnecting || sshLogin != null) && sshHostKey == null) key(sshLogin?.savedEnvironmentId) {
-            SshConnectionDialog(state.busy, sshLogin, { sshConnecting = false; onCancelSsh() }, onSshKeyPickerActive) {
-                sshConnecting = false
+        if (sshConnecting || sshLogin != null) key(sshLogin?.savedEnvironmentId) {
+            SshConnectionDialog(state.busy, sshLogin, { sshConnecting = false; submittedSsh = false; onCancelSsh() }, onSshKeyPickerActive, connectionAttempt.takeIf { it.kind == ConnectionKind.Ssh } ?: ConnectionAttempt()) {
+                submittedSsh = true
                 choosingEnvironment = false
                 showThread = false
                 onSshConnect(it)
             }
         }
         if (sshHostKey != null) SshHostKeyDialog(sshHostKey, onTrustSsh, onCancelSsh)
-        if (pairing) PairDialog(state.busy, { pairing = false }) { url, name -> onPair(url, name); pairing = false; choosingEnvironment = false }
+        if (pairing) PairDialog(state.busy, { pairing = false; submittedPair = false; onCancelSsh() }, connectionAttempt.takeIf { it.kind == ConnectionKind.Pairing } ?: ConnectionAttempt()) { url, name, insecure -> submittedPair = true; onPair(url, name, insecure) }
         if (creating) NewThreadDialog(state, { creating = false }) { project, title, model ->
             onCreateThread(project, title, model); creating = false; showThread = true
         }
@@ -302,17 +313,37 @@ private fun RequestCard(request: RuntimeRequest, enabled: Boolean, respond: (Str
 }
 
 @Composable
-private fun PairDialog(busy: Boolean, dismiss: () -> Unit, pair: (String, String) -> Unit) {
+internal fun PairDialog(busy: Boolean, dismiss: () -> Unit, attempt: ConnectionAttempt = ConnectionAttempt(), pair: (String, String, Boolean) -> Unit) {
     var url by remember { mutableStateOf("") }
-    var name by rememberSaveable { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var insecure by remember(url) { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val target = remember(url) { runCatching { parsePairingLink(url) }.getOrNull() }
+    val uri = target?.let { runCatching { java.net.URI(it.baseUrl) }.getOrNull() }
+    val privateHttp = uri?.scheme == "http" && isPrivateLanAddress(uri.host.orEmpty())
+    val shownError = error ?: attempt.message.takeIf { attempt.phase == ConnectionPhase.Failed }
+    val reveal = remember { BringIntoViewRequester() }
+    LaunchedEffect(shownError) { if (shownError != null) reveal.bringIntoView() }
     AlertDialog(onDismissRequest = dismiss, icon = { Icon(Icons.Default.AddLink, null) }, title = { Text("Pair an environment") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
-            Text("Paste the direct pairing link from your T3 server. Trefoil verifies the environment before connecting.")
-            OutlinedTextField(name, { name = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(url, { url = it }, label = { Text("Pairing link") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), maxLines = 3)
+            Text("Paste the pairing link from your T3 server. Trefoil verifies the environment before connecting.")
+            OutlinedTextField(name, { name = it; error = null }, enabled = !busy, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(url, { url = it; error = null }, enabled = !busy, label = { Text("Pairing link") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), maxLines = 3)
             Text("Pairing links contain credentials. Keep them private.", style = MaterialTheme.typography.bodySmall)
+            if (privateHttp) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(insecure, { insecure = it; error = null }, enabled = !busy); Text("Allow unencrypted HTTP on this private network", Modifier.weight(1f)) }
+                Text("HTTP exposes pairing credentials and conversations to others on the network. Use only a network you trust.", style = MaterialTheme.typography.bodySmall)
+            }
+            if (busy) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text(attempt.message.ifBlank { "Testing connection…" }) }
+            shownError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.bringIntoViewRequester(reveal)) }
         }
-    }, confirmButton = { Button(onClick = { pair(url.trim(), name.trim()) }, enabled = !busy && url.isNotBlank() && name.isNotBlank()) { Text("Pair securely") } },
+    }, confirmButton = { Button(onClick = {
+        error = when { name.isBlank() -> "Enter a display name."; target == null -> "Enter a valid pairing link."; privateHttp && !insecure -> "Choose whether to allow HTTP on this private network."; else -> null }
+        if (error == null) pair(url.trim(), name.trim(), privateHttp && insecure)
+    }, enabled = !busy) {
+        if (busy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
+        Text(if (busy) "Testing connection…" else "Pair")
+    } },
         dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
 }
 

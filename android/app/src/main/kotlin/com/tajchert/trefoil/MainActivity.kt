@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
             val working by model.working.collectAsStateWithLifecycle()
             val sshHostKey by model.sshHostKey.collectAsStateWithLifecycle()
             val sshLogin by model.sshLogin.collectAsStateWithLifecycle()
+            val connectionAttempt by model.connectionAttempt.collectAsStateWithLifecycle()
             TrefoilApp(
                 state = state.copy(error = notice ?: state.error, busy = working || state.busy),
                 savedEnvironments = environments,
@@ -41,6 +42,7 @@ class MainActivity : ComponentActivity() {
                 onTrustSsh = model::trustSsh,
                 onCancelSsh = model::cancelSsh,
                 sshLogin = sshLogin,
+                connectionAttempt = connectionAttempt,
                 onSshKeyPickerActive = { model.sshFilePickerActive = it },
             )
         }

@@ -1,5 +1,6 @@
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false"><trust-anchors><certificates src="system"/></trust-anchors></base-config>
+    <!-- Android cannot allow dynamic private IP CIDRs here. T3Client enforces the literal-IP allowlist and explicit consent before requests; redirects are disabled. -->
+    <base-config cleartextTrafficPermitted="true"><trust-anchors><certificates src="system"/></trust-anchors></base-config>
     <debug-overrides><trust-anchors><certificates src="user"/></trust-anchors></debug-overrides>
     <domain-config cleartextTrafficPermitted="true"><domain includeSubdomains="false">localhost</domain><domain includeSubdomains="false">127.0.0.1</domain><domain includeSubdomains="false">10.0.2.2</domain></domain-config>
 </network-security-config>

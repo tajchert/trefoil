@@ -9,3 +9,6 @@ The T3 protocol implementation is based on contracts and runtime behavior in
 T3 Code, Copyright (c) 2026 T3 Tools Inc., licensed under MIT.
 T3 baseline: 46449b5379a0089f4ef3ce85bce10a1d28beb4cb.
 See licenses/T3-Code-MIT.txt.
+
+The encrypted SSH key fixture in core SSH/model tests is adapted from Flocket
+test data and is not a production credential.

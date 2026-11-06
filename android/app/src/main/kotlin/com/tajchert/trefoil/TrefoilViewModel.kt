@@ -29,6 +29,8 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     val notice = _notice.asStateFlow()
     private val _working = MutableStateFlow(false)
     val working = _working.asStateFlow()
+    private val _connectionAttempt = MutableStateFlow(ConnectionAttempt())
+    val connectionAttempt = _connectionAttempt.asStateFlow()
     private val _sshHostKey = MutableStateFlow<SshHostKey?>(null)
     val sshHostKey = _sshHostKey.asStateFlow()
     private val _sshLogin = MutableStateFlow<SshConnectionInput?>(null)
@@ -63,28 +65,55 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun connectionAction(failure: String, block: suspend () -> Unit) {
-        connectionEpoch++
+    private fun connectionAction(failure: String, kind: ConnectionKind = ConnectionKind.Saved, block: suspend () -> Unit) {
+        val epoch = ++connectionEpoch
         connectionJob?.cancel()
-        _sshHostKey.value = null; _sshLogin.value = null; pendingInput = null
+        _sshHostKey.value = null
+        if (kind != ConnectionKind.Ssh) _sshLogin.value = null
+        pendingInput = null
+        _notice.value = null; _working.value = true
+        _connectionAttempt.value = ConnectionAttempt(epoch, kind, ConnectionPhase.Testing, "Testing connection…")
         connectionJob = viewModelScope.launch {
-            initialized.await()
-            connectionMutex.withLock {
-                if (!foreground) return@withLock
-                _working.value = true; _notice.value = null
-                try { block() }
-                catch (e: CancellationException) { throw e }
-                catch (e: SshHostKeyException) {
-                    if (e.changed) {
-                        pendingInput = null
-                        _notice.value = "SSH host key changed for ${e.presented.host}:${e.presented.port}. Connection blocked. Verify the server key independently before changing your saved trust."
-                    } else { _sshHostKey.value = e.presented }
+            try {
+                initialized.await()
+                connectionMutex.withLock {
+                    if (!foreground || epoch != connectionEpoch) return@withLock
+                    try {
+                        block()
+                        if (epoch == connectionEpoch) {
+                            _connectionAttempt.value = ConnectionAttempt(epoch, kind, ConnectionPhase.Succeeded, "Connected")
+                            _sshLogin.value = null
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: SshHostKeyException) {
+                        if (epoch == connectionEpoch) {
+                            if (e.changed) {
+                                pendingInput = null
+                                connectionFailed(epoch, kind, "SSH host key changed for ${e.presented.host}:${e.presented.port}. Connection blocked. Verify the server key independently before changing your saved trust.")
+                            } else {
+                                _sshHostKey.value = e.presented
+                                _connectionAttempt.value = ConnectionAttempt(epoch, kind, ConnectionPhase.AwaitingTrust, "Confirm the SSH host fingerprint to continue.")
+                            }
+                        }
+                    } catch (e: SshConnectionException) {
+                        if (epoch == connectionEpoch) { pendingInput = null; connectionFailed(epoch, kind, e.message ?: failure) }
+                    } catch (e: PairingException) {
+                        if (epoch == connectionEpoch) { pendingInput = null; connectionFailed(epoch, kind, e.message ?: failure) }
+                    } catch (_: Exception) {
+                        if (epoch == connectionEpoch) { pendingInput = null; connectionFailed(epoch, kind, failure) }
+                    }
                 }
-                catch (e: SshConnectionException) { pendingInput = null; _notice.value = e.message ?: failure }
-                catch (_: Exception) { pendingInput = null; _notice.value = failure }
-                finally { _working.value = false }
-            }
+            } finally { if (epoch == connectionEpoch) _working.value = false }
         }
+    }
+
+    private fun connectionFailed(epoch: Long, kind: ConnectionKind, message: String) {
+        _notice.value = message
+        _connectionAttempt.value = ConnectionAttempt(epoch, kind, ConnectionPhase.Failed, message)
+    }
+
+    private fun connectionStage(message: String) {
+        _connectionAttempt.update { it.copy(phase = ConnectionPhase.Testing, message = message) }
     }
 
     private suspend fun save(environments: List<SavedEnvironment>) {
@@ -100,11 +129,13 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         withContext(NonCancellable + Dispatchers.IO) { closing?.close() }
     }
 
-    fun pair(url: String, name: String) = connectionAction("Pairing failed. Check the link, server address and certificate, then try again.") {
+    fun pair(url: String, name: String, allowInsecureHttp: Boolean) = connectionAction("Pairing failed. Check the link, server address and certificate, then try again.", ConnectionKind.Pairing) {
         disconnectCurrent()
-        val environment = client.pair(url, name)
+        connectionStage("Testing pairing link and exchanging credentials…")
+        val environment = client.pair(url, name, allowInsecureHttp)
         vaultMutex.withLock { save(_environments.value.filterNot { it.id == environment.id } + environment) }
         selectedEnvironment = environment
+        connectionStage("Opening T3 session…")
         client.connect(environment)
     }
 
@@ -120,7 +151,8 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun connectSsh(input: SshConnectionInput) = connectionAction("SSH connection failed. Check the address, login and running T3 server.") {
+    fun connectSsh(input: SshConnectionInput) = connectionAction("SSH connection failed. Check the address, login and running T3 server.", ConnectionKind.Ssh) {
+        sshInputValidationError(input)?.let { throw SshConnectionException(it) }
         val previousId = state.value.environment?.id
         val previousThread = state.value.selectedThreadId
         disconnectCurrent()
@@ -129,6 +161,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         val expected = hostKeys.firstOrNull { it.host.equals(normalized.host, ignoreCase = true) && it.port == normalized.port }?.fingerprint
             ?: saved?.ssh?.takeIf { it.host.equals(normalized.host, ignoreCase = true) && it.port == normalized.port }?.fingerprint
         pendingInput = normalized
+        connectionStage("Testing SSH login and locating the T3 server…")
         val opened = connector.open(normalized, expected)
         pendingInput = null
         var adopted = false
@@ -136,11 +169,13 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
             coroutineContext.ensureActive()
             // A saved identity is verified by T3Client before its bearer token is sent.
             val environment = if (saved == null) {
+                connectionStage("Obtaining a T3 pairing credential…")
                 val credential = opened.issuePairingCredential()
                 val link = opened.baseUrl.trimEnd('/') + "/pair#token=" + java.net.URLEncoder.encode(credential, "UTF-8")
                 client.pair(link, normalized.name)
             } else saved.copy(baseUrl = opened.baseUrl)
             val configured = environment.copy(name = normalized.name, ssh = normalized.savedProfile(opened.hostKey))
+            connectionStage("Testing T3 session through the SSH tunnel…")
             client.connect(configured)
             if (previousId == configured.id) previousThread?.let { client.selectThread(it) }
             coroutineContext.ensureActive()
@@ -184,6 +219,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         connectionJob?.cancel()
         pendingInput = null; _sshHostKey.value = null; _sshLogin.value = null
         _working.value = false
+        _connectionAttempt.value = ConnectionAttempt()
     }
 
     fun selectThread(id: String) = action("Could not open the thread. Reconnect and try again.") { client.selectThread(id) }

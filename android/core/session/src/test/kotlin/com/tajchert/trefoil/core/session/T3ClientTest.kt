@@ -12,8 +12,76 @@ import org.junit.Test
 import java.util.concurrent.TimeUnit
 
 class T3ClientTest {
+ @Test fun cancellationDuringConfigurationClosesSession() = runBlocking {
+   val server = MockWebServer(); server.start()
+   val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+   val client = T3Client(scope)
+   val requested = CompletableDeferred<Unit>()
+   server.enqueue(json(descriptor))
+   server.enqueue(json("""{"authenticated":true,"permissions":["orchestration:operate"]}"""))
+   server.enqueue(json("""{"ticket":"fixture-ticket"}"""))
+   server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+     override fun onMessage(webSocket: WebSocket, text: String) { if (text.contains("server.getConfig")) requested.complete(Unit) }
+     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
+   }))
+   try {
+     val attempt = launch { client.connect(SavedEnvironment("env-1", "Test", server.url("/").toString(), "fixture-token")) }
+     withTimeout(5000) { requested.await() }
+     attempt.cancelAndJoin()
+     assertEquals(ConnectionStatus.Disconnected, client.state.value.connection)
+     assertFalse(client.state.value.canWrite)
+   } finally { client.close(); scope.cancel(); server.shutdown() }
+ }
+
+ @Test fun configurationTimeoutClosesSessionAndReportsFailure() = runBlocking {
+   val server = MockWebServer(); server.start()
+   val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+   val client = T3Client(scope, requestTimeoutMillis = 100)
+   server.enqueue(json(descriptor))
+   server.enqueue(json("""{"authenticated":true,"permissions":["orchestration:operate"]}"""))
+   server.enqueue(json("""{"ticket":"fixture-ticket"}"""))
+   server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
+   }))
+   try {
+     try { client.connect(SavedEnvironment("env-1", "Test", server.url("/").toString(), "fixture-token")); fail("A configuration timeout must fail") }
+     catch (error: PairingException) { assertTrue(error.message.orEmpty().contains("timed out")) }
+     assertEquals(ConnectionStatus.Error, client.state.value.connection)
+     assertFalse(client.state.value.canWrite)
+     assertTrue(client.state.value.error.orEmpty().contains("timed out"))
+   } finally { client.close(); scope.cancel(); runCatching { server.shutdown() } }
+ }
+
  private val descriptor = """{"environmentId":"env-1","label":"Test","orchestrationProtocolVersion":2,"capabilities":{}}"""
  private fun json(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
+ @Test fun privateLanHttpRequiresOptInAndNeverAllowsPublicHosts() = runBlocking {
+   val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default); val client = T3Client(scope)
+   try {
+     try { client.pair("http://192.168.1.20:3773/pair#token=fixture-token", "Phone"); fail("Consent required before any request") }
+     catch (error: PairingException) { assertTrue(error.message.orEmpty().contains("unencrypted HTTP")); assertFalse(error.message.orEmpty().contains("fixture-token")) }
+     val savedLan = SavedEnvironment("fixture", "Test", "http://192.168.1.20/", "fixture-token", allowInsecureHttp = true)
+     assertEquals("192.168.1.20", validatedEnvironmentUrl(savedLan.baseUrl, savedLan.allowInsecureHttp).host)
+     try { validatedEnvironmentUrl(savedLan.baseUrl, savedLan.copy(allowInsecureHttp = false).allowInsecureHttp); fail("Saved LAN flag is required") } catch (_: PairingException) { }
+     listOf("http://8.8.8.8/", "http://192.168.1.20.example.test/", "http://169.254.1.1/", "http://100.64.1.1/", "http://010.0.0.1/", "http://10.1/", "http://%31%30.0.0.1/").forEach {
+       try { validatedEnvironmentUrl(it, true); fail("Public or ambiguous HTTP must fail") } catch (_: PairingException) { }
+     }
+     assertTrue(validatedEnvironmentUrl("https://example.test/", false).isHttps)
+     try { client.connect(SavedEnvironment("fixture", "Test", "http://8.8.8.8/", "fixture-token", allowInsecureHttp = true)); fail("Saved flag cannot allow public HTTP") } catch (_: PairingException) { }
+   } finally { client.close(); scope.cancel() }
+ }
+ @Test fun loopbackNeedsNoConsentAndServerResponsesAreSanitized() = runBlocking {
+   val server = MockWebServer(); server.start()
+   val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default); val client = T3Client(scope)
+   try {
+     server.enqueue(json(descriptor)); server.enqueue(json("""{"access_token":"fixture-token","token_type":"Bearer"}"""))
+     val saved = client.pair(server.url("/pair#token=fixture-bootstrap").toString(), "Phone", true)
+     // Loopback requires no exception and does not persist an unnecessary LAN permission.
+     assertFalse(saved.allowInsecureHttp)
+     server.enqueue(json(descriptor)); server.enqueue(json("invalid fixture-sensitive-response"))
+     try { client.pair(server.url("/pair#token=fixture-bootstrap").toString(), "Phone"); fail("Invalid response") }
+     catch (error: PairingException) { assertFalse(error.message.orEmpty().contains("fixture-sensitive-response")) }
+   } finally { client.close(); scope.cancel(); server.shutdown() }
+ }
  @Test fun exchangesOnlyBootstrapAndRejectsRedirect() = runBlocking {
    val server = MockWebServer(); server.start()
    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default); val client = T3Client(scope)
@@ -25,7 +93,7 @@ class T3ClientTest {
      val exchange = server.takeRequest(); assertEquals("/oauth/token", exchange.path)
      assertTrue(exchange.body.readUtf8().contains("subject_token=bootstrap-secret"))
      server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", "https://elsewhere.invalid/"))
-     try { client.pair(server.url("/pair#token=secret").toString(), "Phone"); fail("Redirect must fail") } catch (_: IllegalStateException) { }
+     try { client.pair(server.url("/pair#token=secret").toString(), "Phone"); fail("Redirect must fail") } catch (_: PairingException) { }
      assertEquals(3, server.requestCount)
    } finally { client.disconnect(); scope.cancel(); runCatching { server.shutdown() } }
  }

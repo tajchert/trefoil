@@ -9,6 +9,7 @@ Native T3 Code mobile client. Android uses Kotlin/Compose and application ID
 - Never log tokens, pairing credentials or conversation content. Persist tokens encrypted.
 - SSH host keys must be verified before authentication; changed keys fail closed. Never store ephemeral tunnel ports as durable endpoints.
 - Never install, restart, update or stop a remote T3 server during onboarding.
+- Direct private-LAN HTTP requires explicit saved consent and literal RFC1918 IP validation. Public HTTP stays blocked; never bypass the shared URL policy.
 - Disable writes while disconnected/stale; one environment's failure must not corrupt another.
 - Tests must use fixtures or an isolated T3 instance; never modify real user threads.
 - Preserve Flocket Apache-2.0 and T3 MIT attribution on adapted code.

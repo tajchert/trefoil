@@ -21,13 +21,13 @@
 
 The server must already be installed and running; Trefoil does not install, update or restart it. Changed SSH host keys block authentication.
 
-**Direct HTTPS pairing:**
+**Direct pairing:**
 
 1. Install the [signed release APK](https://github.com/tajchert/trefoil/releases/latest) on Android **10 or newer**.
 2. Create a direct pairing link in your T3 environment.
 3. In Trefoil, choose **Pair an environment**, paste the link and give it a name.
 
-Use an HTTPS endpoint reachable from your phone with a trusted certificate. Trefoil supports T3 orchestration protocol **V2**, pinned to the [documented contract](protocol/SPEC.md).
+HTTPS endpoints must be reachable from your phone with a trusted certificate. Current source (0.2.1) also accepts HTTP on literal private IPv4 LAN addresses after you explicitly enable **Allow unencrypted HTTP on this private network**. That choice is saved per environment; public internet HTTP is blocked. Trefoil supports T3 orchestration protocol **V2**, pinned to the [documented contract](protocol/SPEC.md).
 
 Tokens are encrypted with Android Keystore and excluded from backups. Forgetting an environment removes its local credentials; revoke the session in T3 to revoke server access. Remote work continues when Trefoil closes. Uncertain writes are never automatically replayed—check the conversation before retrying.
 
@@ -51,7 +51,9 @@ cd android
 
 [Signing and release instructions](docs/RELEASING.md) · [Isolated T3 interoperability check](docs/reference/live-wire-validation.md)
 
-Loopback HTTP is allowed for local development only; Android Emulator reaches the host through `10.0.2.2`. Direct remote endpoints require HTTPS; SSH connections carry their loopback HTTP traffic inside the encrypted tunnel.
+Loopback HTTP is allowed for local development only; Android Emulator reaches the host through `10.0.2.2`. Direct public endpoints require HTTPS. Private IPv4 LAN HTTP requires explicit consent; SSH carries loopback HTTP inside its encrypted tunnel.
+
+Connection forms in 0.2.1 retain input while testing and after failures, show progress and reveal validation errors. Public-key files are rejected; use the matching private key without `.pub`. Surrounding spaces in hostnames/usernames are trimmed.
 
 ## Project
 

@@ -3,6 +3,8 @@ package com.tajchert.trefoil.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -23,7 +25,7 @@ import kotlinx.coroutines.withContext
 private const val MAX_KEY_BYTES = 256 * 1024
 
 @Composable
-internal fun SshConnectionDialog(busy: Boolean, initial: SshConnectionInput?, dismiss: () -> Unit, pickerActive: (Boolean) -> Unit, connect: (SshConnectionInput) -> Unit) {
+internal fun SshConnectionDialog(busy: Boolean, initial: SshConnectionInput?, dismiss: () -> Unit, pickerActive: (Boolean) -> Unit, attempt: ConnectionAttempt = ConnectionAttempt(), connect: (SshConnectionInput) -> Unit) {
     // Credentials deliberately never enter rememberSaveable / Android saved state.
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var host by remember { mutableStateOf(initial?.host.orEmpty()) }
@@ -64,19 +66,22 @@ internal fun SshConnectionDialog(busy: Boolean, initial: SshConnectionInput?, di
                         } ?: kotlin.error("Cannot open file")
                     }
                 }
-                imported.onSuccess { privateKey = it }.onFailure { error = "Could not read private key. Choose a readable file of at most 256 KiB, or paste it below." }
+                imported.onSuccess { privateKey = it; error = privateKeyValidationError(it) }.onFailure { error = "Could not read private key. Choose a readable file of at most 256 KiB, or paste it below." }
                 importing = false
             }
         }
     }
     val enabled = !busy && !importing
+    val errorReveal = remember { BringIntoViewRequester() }
+    val shownError = error ?: attempt.message.takeIf { attempt.phase == ConnectionPhase.Failed }
+    LaunchedEffect(shownError) { if (shownError != null) errorReveal.bringIntoView() }
     AlertDialog(onDismissRequest = dismiss, title = { Text(if (initial == null) "Connect over SSH" else "SSH login required") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (initial == null) "Connect to an installed, running T3 Code server through an encrypted SSH tunnel." else "Enter credentials to reconnect to ${initial.name}.")
             OutlinedTextField(name, { name = it; error = null }, label = { Text("Display name") }, singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(host, { host = it; error = null }, label = { Text("IP address or hostname") }, singleLine = true, enabled = enabled && initial == null, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(username, { username = it; error = null }, label = { Text("SSH username") }, singleLine = true, enabled = enabled && initial == null, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(port, { port = it; error = null }, label = { Text("SSH port") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, enabled = enabled && initial == null, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(host, { host = it; error = null }, label = { Text("IP address or hostname") }, singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(username, { username = it; error = null }, label = { Text("SSH username") }, singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(port, { port = it; error = null }, label = { Text("SSH port") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(method == SshAuthMethod.Password, { method = SshAuthMethod.Password; error = null }, enabled = enabled)
                 Text("Password")
@@ -87,8 +92,8 @@ internal fun SshConnectionDialog(busy: Boolean, initial: SshConnectionInput?, di
                 OutlinedTextField(password, { password = it; error = null }, label = { Text("SSH password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
             } else {
                 OutlinedButton(onClick = { pickerActive(true); runCatching { importer.launch(arrayOf("*/*")) }.onFailure { pickerActive(false); error = "No file picker is available. Paste the private key instead." } }, enabled = enabled) { Text(if (importing) "Reading key…" else "Import private key file") }
-                OutlinedTextField(privateKey, { privateKey = it; error = null }, label = { Text("Paste private key") }, visualTransformation = PasswordVisualTransformation(), minLines = 2, maxLines = 4, enabled = enabled, modifier = Modifier.fillMaxWidth())
-                Text("OpenSSH private key, up to 256 KiB.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(privateKey, { privateKey = it; error = privateKeyValidationError(it) }, label = { Text("Paste private key") }, visualTransformation = PasswordVisualTransformation(), minLines = 2, maxLines = 4, enabled = enabled, modifier = Modifier.fillMaxWidth())
+                Text("OpenSSH or PEM private key, up to 256 KiB.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(passphrase, { passphrase = it; error = null }, label = { Text("Key passphrase (optional)") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -98,25 +103,16 @@ internal fun SshConnectionDialog(busy: Boolean, initial: SshConnectionInput?, di
             Text("Saved login credentials are encrypted. Otherwise, you will be asked again when reconnecting.", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { advanced = !advanced }, enabled = enabled) { Text(if (advanced) "Hide advanced settings" else "Advanced settings") }
             if (advanced) {
-                OutlinedTextField(home, { home = it; error = null }, label = { Text("T3 data directory") }, singleLine = true, enabled = enabled && initial == null, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(executable, { executable = it; error = null }, label = { Text("T3 executable (optional)") }, singleLine = true, enabled = enabled && initial == null, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(home, { home = it; error = null }, label = { Text("T3 data directory") }, singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(executable, { executable = it; error = null }, label = { Text("T3 executable (optional)") }, singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth())
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (busy) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text(attempt.message.ifBlank { "Testing connection…" }) }
+            shownError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.bringIntoViewRequester(errorReveal)) }
         }
     }, confirmButton = {
         Button(enabled = enabled, onClick = {
             val parsedPort = port.toIntOrNull()
-            error = when {
-                name.isBlank() -> "Enter a display name."
-                host.isBlank() || host.any { it.isWhitespace() || it.isISOControl() } || host.contains("://") -> "Enter a hostname or IP address without a URL scheme or spaces."
-                username.isBlank() || username.any { it.isWhitespace() || it.isISOControl() } -> "Enter an SSH username without spaces."
-                parsedPort == null || parsedPort !in 1..65535 -> "SSH port must be between 1 and 65535."
-                method == SshAuthMethod.Password && password.isEmpty() -> "Enter the SSH password."
-                method == SshAuthMethod.PrivateKey && privateKey.isBlank() -> "Import or paste a private key."
-                method == SshAuthMethod.PrivateKey && privateKey.toByteArray(Charsets.UTF_8).size > MAX_KEY_BYTES -> "Private key must be at most 256 KiB."
-                home.isBlank() -> "Enter the T3 data directory."
-                else -> null
-            }
+            error = sshInputValidationError(SshConnectionInput(name, host, username, parsedPort ?: 0, method, password, privateKey, passphrase, t3Home = home))
             if (error == null && parsedPort != null) connect(SshConnectionInput(
                 name = name.trim(), host = host.trim(), username = username.trim(), port = parsedPort,
                 authMethod = method, password = if (method == SshAuthMethod.Password) password else "",
@@ -124,7 +120,10 @@ internal fun SshConnectionDialog(busy: Boolean, initial: SshConnectionInput?, di
                 passphrase = if (method == SshAuthMethod.PrivateKey) passphrase else "", rememberCredentials = saveLogin,
                 t3Home = home.trim(), executable = executable.trim(), savedEnvironmentId = initial?.savedEnvironmentId,
             ))
-        }) { Text(if (busy) "Connecting…" else "Connect") }
+        }) {
+            if (busy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
+            Text(if (busy) "Testing connection…" else "Connect")
+        }
     }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
 }
 

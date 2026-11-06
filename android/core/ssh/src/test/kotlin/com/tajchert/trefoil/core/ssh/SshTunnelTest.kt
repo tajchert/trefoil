@@ -30,6 +30,16 @@ class SshTunnelTest {
             assertEquals(0, attempts.get())
         } finally { server.stop(true) }
     }
+    @Test fun publicKeyRejectedBeforeOpeningSsh() = runBlocking {
+        try {
+            SshTunnelConnector().open(SshConnectionInput("Test", "127.0.0.1", "user", 1,
+                SshAuthMethod.PrivateKey, privateKey = "ssh-ed25519 AAAA fixture-public-key"), null)
+            fail("A public key must never reach SSH authentication")
+        } catch (e: SshConnectionException) {
+            assertTrue(e.message.orEmpty().contains("public key", ignoreCase = true))
+            assertFalse(e.message.orEmpty().contains("AAAA"))
+        }
+    }
     @Test fun quotesInjectionAsOneLiteralArgument() {
         assertEquals("'a'\\''; $(touch bad)'", remoteQuote("a'; $(touch bad)"))
         assertEquals("\"\$HOME\"/'a b'", remotePath("~/a b"))

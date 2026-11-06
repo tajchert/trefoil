@@ -31,6 +31,7 @@ private fun fingerprint(key: PublicKey) = "SHA256:" + Base64.getEncoder().withou
 
 class SshTunnelConnector {
     suspend fun open(input: SshConnectionInput, expectedFingerprint: String?): SshTunnel = coroutineScope {
+        sshInputValidationError(input)?.let { throw SshConnectionException(it) }
         synchronized(SshTunnelConnector::class.java) {
             if (Security.getProvider("BC") !is BouncyCastleProvider) { Security.removeProvider("BC"); Security.insertProviderAt(BouncyCastleProvider(), 1) }
         }
@@ -59,8 +60,12 @@ class SshTunnelConnector {
             client.connect(input.host, input.port)
             client.connection.keepAlive.keepAliveInterval = 15
             when (input.authMethod) {
-                SshAuthMethod.Password -> client.authPassword(input.username, input.password.toCharArray())
-                SshAuthMethod.PrivateKey -> client.authPublickey(input.username, client.loadKeys(input.privateKey, null, input.passphrase.takeIf { it.isNotEmpty() }?.let { PasswordUtils.createOneOff(it.toCharArray()) }))
+                SshAuthMethod.Password -> client.authPassword(input.username.trim(), input.password.toCharArray())
+                SshAuthMethod.PrivateKey -> {
+                    val keys = try { client.loadKeys(input.privateKey.trim(), null, input.passphrase.takeIf { it.isNotEmpty() }?.let { PasswordUtils.createOneOff(it.toCharArray()) }) }
+                    catch (_: Exception) { throw SshConnectionException("Could not unlock the private key. Check its format and passphrase; select the private key, not its .pub file.") }
+                    client.authPublickey(input.username.trim(), keys)
+                }
             }
             tunnel = SshTunnel(client, presented.get(), input.copy(password = "", privateKey = "", passphrase = ""))
             tunnel.initialize()
@@ -70,7 +75,13 @@ class SshTunnelConnector {
             val key = presented.get()
             if (key != null && key.fingerprint != pin) throw SshHostKeyException(key, pin != null)
             if (e is SshConnectionException) throw e
-            throw SshConnectionException(if (e is net.schmizz.sshj.userauth.UserAuthException) "SSH authentication failed. Check the username and credentials." else "SSH connection failed. Check the address, credentials and running T3 installation.")
+            throw SshConnectionException(when (e) {
+                is net.schmizz.sshj.userauth.UserAuthException -> "SSH authentication failed. The server rejected the username or credentials. Edit your login and try again."
+                is UnknownHostException -> "SSH hostname could not be resolved. Check the address."
+                is ConnectException -> "SSH connection was refused. Check the address, SSH port and that SSH is enabled on the server."
+                is SocketTimeoutException -> "SSH connection timed out. Check the address, port and network."
+                else -> "SSH connection failed during login or server discovery. Check the address, credentials and running T3 installation."
+            })
         }
     }
 }
@@ -164,7 +175,8 @@ class SshTunnel internal constructor(private val client: SSHClient, val hostKey:
                 val output = readers.submit<ByteArray> { cmd.inputStream.readBounded() }
                 val errors = readers.submit<ByteArray> { cmd.errorStream.readBounded() }
                 cmd.join(15, TimeUnit.SECONDS)
-                if (!cmd.isEOF || cmd.exitStatus != 0) throw SshConnectionException("T3 command failed or timed out. Check the running installation and executable.")
+                if (!cmd.isEOF || cmd.exitStatus == null) throw SshConnectionException("T3 command timed out after 15 seconds. Check the running server and executable.")
+                if (cmd.exitStatus != 0) throw SshConnectionException("T3 command failed with exit code ${cmd.exitStatus}. Check the T3 executable and data directory.")
                 val bytes = output.get(1, TimeUnit.SECONDS)
                 if (bytes.size > 65_536 || errors.get(1, TimeUnit.SECONDS).size > 65_536) throw SshConnectionException("T3 command returned excessive output.")
                 return bytes.toString(Charsets.UTF_8)

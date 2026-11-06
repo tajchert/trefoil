@@ -3,7 +3,7 @@
 Pinned reference: T3 Code `46449b5379a0089f4ef3ce85bce10a1d28beb4cb`.
 Sources: `packages/contracts/src/{environment,environmentHttp,auth,orchestrationV2,server,providerPolicy,modelSelection}.ts`, `packages/shared/src/remote.ts`, `apps/server/src/ws.ts`, installed Effect 4.1.2 `src/rpc/{RpcMessage,RpcSerialization}.ts`.
 
-1. Parse a direct pairing URL's fragment/query `token` (or `t3code:` wrapper `pairingUrl`). Only HTTPS remote origins are accepted. Explicit loopback development URLs may use HTTP (`localhost`, `127.0.0.1`, `::1`, emulator `10.0.2.2`). No redirects are followed; bootstrap and bearer credentials cannot cross origins.
+1. Parse a direct pairing URL's fragment/query `token` (or `t3code:` wrapper `pairingUrl`). HTTPS is the default. Literal RFC1918 private IPv4 HTTP origins require explicit per-environment `allowInsecureHttp` consent; public HTTP and private-looking DNS hosts are rejected. Explicit loopback development URLs may use HTTP (`localhost`, `127.0.0.1`, `::1`); the emulator host address `10.0.2.2` requires the private-LAN consent like other RFC1918 addresses. No redirects are followed; bootstrap and bearer credentials cannot cross origins.
 2. GET `/.well-known/t3/environment`, require `orchestrationProtocolVersion: 2`, retain `environmentId`.
 3. POST form `/oauth/token`: `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, `subject_token=<bootstrap>`, `subject_token_type=urn:t3:params:oauth:token-type:environment-bootstrap`, `requested_token_type=urn:ietf:params:oauth:token-type:access_token`, mobile client metadata. Save only issued Bearer access token.
 4. Each connect checks descriptor identity and authenticated `/api/auth/session` using bearer. Effective permissions (falling back to legacy scopes only when absent) control `orchestration:operate` writes.
@@ -40,3 +40,9 @@ it is never persisted as an environment's durable endpoint. Reconnect opens a
 new SSH tunnel before reusing the saved T3 token. Background/disconnect closes
 the local tunnel; remote agents continue running. An unsaved login is requested
 again when a new SSH connection is needed.
+
+## Connection setup corrections (0.2.1 source)
+
+A transient attempt state reports testing stages, host-trust pauses, safe failures and success to retained forms. Entered secrets stay in memory only, never Android saved state. Forms close only after success or cancellation. Public-key content is rejected before SSH, hostname/username edges are trimmed, and errors scroll into view. SSH command errors may report a numeric exit code, but raw stdout/stderr is not shown because it can contain credentials.
+
+Android cleartext configuration permits dynamic private-IP requests; the shared URL policy is the enforcement point, checking literal RFC1918 addresses and stored consent before requests. Redirects remain disabled. Both pairing and reconnect honor the consent flag; old saved environments default to false. Connection cancellation cleans the matching socket generation, and internal timeouts become actionable failures.

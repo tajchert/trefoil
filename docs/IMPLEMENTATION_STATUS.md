@@ -41,3 +41,7 @@ reverse port for emulator-to-host access; no real T3 credentials or threads were
 used. Selecting a file in the system picker was not verified; key paste was.
 
 The signed [0.2.0 release](https://github.com/tajchert/trefoil/releases/tag/v0.2.0) uses the original release certificate, supporting in-place upgrades from 0.1.0.
+
+Current source 0.2.1 corrects retained connection forms, public-key-file validation, visible errors/progress, surrounding username whitespace, and private IPv4 LAN HTTP pairing with explicit consent. IPv6 ULA HTTP is not supported; use HTTPS or SSH for IPv6 remote endpoints. Connection setup cancellation/timeout cleanup has regression coverage. The published 0.2.0 predates these corrections.
+
+0.2.1 verification: 42 tests pass (model/policy, protocol/session, SSH, Compose and credential envelope), lintDebug and both APK builds pass. Android emulator checks confirm retained input on connection refusal, visible/revealed validation errors, public-key rejection and the HTTP consent control for app links. HTTP network policy is tested using isolated fixtures and URL guards; no real user pairing token was consumed during testing. Pairing links are short-lived; generate a fresh one when testing a new build.

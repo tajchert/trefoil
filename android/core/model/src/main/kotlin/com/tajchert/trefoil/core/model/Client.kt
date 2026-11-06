@@ -4,7 +4,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class SavedEnvironment(val id: String, val name: String, val baseUrl: String, val accessToken: String, val ssh: SshProfile? = null) {
+data class SavedEnvironment(val id: String, val name: String, val baseUrl: String, val accessToken: String, val ssh: SshProfile? = null, val allowInsecureHttp: Boolean = false) {
     override fun toString() = "SavedEnvironment(credentials=***)"
 }
 data class Project(val id: String, val title: String, val path: String = "")
@@ -34,7 +34,7 @@ data class ClientState(
 /** All commands fail explicitly; implementations must never replay uncertain mutations. */
 interface TrefoilClient {
     val state: StateFlow<ClientState>
-    suspend fun pair(pairingUrl: String, name: String): SavedEnvironment
+    suspend fun pair(pairingUrl: String, name: String, allowInsecureHttp: Boolean = false): SavedEnvironment
     suspend fun connect(environment: SavedEnvironment)
     suspend fun disconnect()
     suspend fun selectThread(threadId: String)

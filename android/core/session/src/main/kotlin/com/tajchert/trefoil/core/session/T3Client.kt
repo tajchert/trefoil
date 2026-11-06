@@ -14,7 +14,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /** Native direct-environment client. Mutations are never retried or replayed. */
-class T3Client(private val scope: CoroutineScope) : TrefoilClient {
+class T3Client(
+    private val scope: CoroutineScope,
+    private val connectionTimeoutMillis: Long = 20_000,
+    private val requestTimeoutMillis: Long = 30_000,
+) : TrefoilClient {
     private val mutable = MutableStateFlow(ClientState())
     override val state: StateFlow<ClientState> = mutable.asStateFlow()
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).build()
@@ -34,10 +38,7 @@ class T3Client(private val scope: CoroutineScope) : TrefoilClient {
     private var refreshJob: Job? = null
     private var projection = JsonObject(emptyMap())
     private fun update(block: (ClientState) -> ClientState) = mutable.update(block)
-    private fun url(value: String): HttpUrl = value.toHttpUrl().also {
-        require(it.username.isEmpty() && it.password.isEmpty()) { "Credentials in URL authority are unsupported" }
-        require(it.isHttps || (it.scheme == "http" && it.host in setOf("localhost", "127.0.0.1", "::1", "10.0.2.2"))) { "Use HTTPS for remote environments" }
-    }
+    private fun url(value: String, allowInsecureHttp: Boolean = false): HttpUrl = validatedEnvironmentUrl(value, allowInsecureHttp)
     private suspend fun fetch(request: Request): JsonObject = withContext(Dispatchers.IO) {
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw HttpFailure(response.code)
@@ -46,33 +47,34 @@ class T3Client(private val scope: CoroutineScope) : TrefoilClient {
     }
     private class HttpFailure(val status: Int) : IllegalStateException(if (status == 401 || status == 403) "Authorization expired or denied; pair again" else "Server HTTP error $status")
     private suspend fun descriptor(base: HttpUrl): JsonObject = fetch(Request.Builder().url(base.resolve("/.well-known/t3/environment")!!).build()).also {
-        require(it["orchestrationProtocolVersion"]?.jsonPrimitive?.intOrNull == 2) { "This environment does not support orchestration protocol 2" }
+        if (it["orchestrationProtocolVersion"]?.jsonPrimitive?.intOrNull != 2) throw PairingException("This environment does not support orchestration protocol 2")
     }
-    override suspend fun pair(pairingUrl: String, name: String): SavedEnvironment {
-        // Native app wrappers carry a complete direct pairing URL, never a separate credential destination.
-        val input = if (pairingUrl.startsWith("t3code:") && pairingUrl.contains("pairingUrl=")) {
-            "https://wrapper.invalid/?".plus(pairingUrl.substringAfter('?')).toHttpUrl().queryParameter("pairingUrl") ?: error("Missing pairing URL")
-        } else pairingUrl
-        val target = url(input)
-        val fragment = target.fragment?.let { "https://fragment.invalid/?$it".toHttpUrl() }
-        val credential = fragment?.queryParameter("token") ?: target.queryParameter("token") ?: error("Pairing link is missing its token")
-        val base = target.newBuilder().encodedPath("/").query(null).fragment(null).build()
+    override suspend fun pair(pairingUrl: String, name: String, allowInsecureHttp: Boolean): SavedEnvironment = try {
+        val target = parsePairingLink(pairingUrl)
+        val base = url(target.baseUrl, allowInsecureHttp)
+        val credential = target.token
         val info = descriptor(base)
         val form = FormBody.Builder().add("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
             .add("subject_token", credential).add("subject_token_type", "urn:t3:params:oauth:token-type:environment-bootstrap")
             .add("requested_token_type", "urn:ietf:params:oauth:token-type:access_token")
             .add("client_label", name.ifBlank { "Trefoil" }).add("client_device_type", "mobile").add("client_os", "Android").build()
+        currentCoroutineContext().ensureActive()
         val token = fetch(Request.Builder().url(base.resolve("/oauth/token")!!).post(form).build())
+        currentCoroutineContext().ensureActive()
         require(token.string("token_type") == "Bearer") { "Server did not issue a bearer token" }
         require(token.string("access_token").isNotBlank()) { "Server returned an empty access token" }
-        return SavedEnvironment(info.string("environmentId").ifBlank { error("Missing environment identity") }, name.ifBlank { info.string("label") }, base.toString(), token.string("access_token"))
-    }
+        SavedEnvironment(info.string("environmentId").ifBlank { error("Missing environment identity") }, name.ifBlank { info.string("label") }, base.toString(), token.string("access_token"), allowInsecureHttp = allowInsecureHttp && base.scheme == "http" && isPrivateLanAddress(base.host))
+    } catch (error: CancellationException) { throw error }
+    catch (error: PairingException) { throw error }
+    catch (error: HttpFailure) { throw PairingException(if (error.status == 401 || error.status == 403) "Pairing token expired or was denied. Generate a new pairing link." else "Pairing server returned HTTP ${error.status}. Check the server and try again.") }
+    catch (_: Exception) { throw PairingException("Pairing failed. Check the link, network, and server compatibility, then try again.") }
+
     override suspend fun connect(environment: SavedEnvironment) {
         disconnect()
         val epoch = generation
         update { ClientState(environment = environment, connection = ConnectionStatus.Connecting) }
         try {
-            val base = url(environment.baseUrl)
+            val base = url(environment.baseUrl, environment.allowInsecureHttp)
             require(descriptor(base).string("environmentId") == environment.id) { "Environment identity changed; pair again" }
             fun ticketRequest(path: String) = Request.Builder().url(base.resolve(path)!!).header("Authorization", "Bearer ${environment.accessToken}").post(ByteArray(0).toRequestBody()).build()
             val session = fetch(Request.Builder().url(base.resolve("/api/auth/session")!!).header("Authorization", "Bearer ${environment.accessToken}").build())
@@ -98,7 +100,7 @@ class T3Client(private val scope: CoroutineScope) : TrefoilClient {
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { fail(epoch, "Connection closed; reconnect to refresh") }
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
             })
-            withTimeout(20_000) { opened.await() }
+            withTimeout(connectionTimeoutMillis) { opened.await() }
             pongAt = System.currentTimeMillis()
             heartbeat = scope.launch { while (isActive && epoch == generation) {
                 delay(15_000)
@@ -114,14 +116,31 @@ class T3Client(private val scope: CoroutineScope) : TrefoilClient {
             update { it.copy(connection = ConnectionStatus.Connected, models = models) }
             subscribe("orchestration.subscribeShell", buildJsonObject { put("requestCompletionMarker", true) }, ::shellItem)
             state.value.selectedThreadId?.let { selectThread(it) }
-        } catch (error: Exception) { fail(epoch, error.message ?: "Connection failed"); throw error }
+        } catch (error: CancellationException) {
+            if (error is TimeoutCancellationException && currentCoroutineContext().isActive) {
+                val message = "T3 connection timed out. Check the server and network, then try again."
+                fail(epoch, message)
+                throw PairingException(message)
+            }
+            synchronized(lifecycleLock) { if (epoch == generation) disconnectNow() }
+            throw error
+        }
+        catch (error: Exception) {
+            val message = when (error) {
+                is PairingException -> error.message ?: "Connection failed"
+                is HttpFailure -> error.message ?: "Connection failed"
+                else -> "Connection failed. Check the network and server, or pair again."
+            }
+            fail(epoch, message)
+            throw PairingException(message)
+        }
     }
     private fun send(frame: JsonObject) { check(socket?.send(frame.toString()) == true) { "Connection is unavailable" } }
     private suspend fun rpc(tag: String, payload: JsonObject, epoch: Long = generation): JsonElement {
         check(pending.size < 64) { "Too many outstanding requests" }
         val id = serial.incrementAndGet().toString()
         val result = CompletableDeferred<JsonElement>(); pending[id] = result
-        try { synchronized(lifecycleLock) { check(epoch == generation) { "Session changed; command was not sent" }; send(EffectRpc.request(id, tag, payload)) }; return withTimeout(30_000) { result.await() } }
+        try { synchronized(lifecycleLock) { check(epoch == generation) { "Session changed; command was not sent" }; send(EffectRpc.request(id, tag, payload)) }; return withTimeout(requestTimeoutMillis) { result.await() } }
         finally { if (pending.remove(id) != null) runCatching { send(EffectRpc.signal("Interrupt", id)) } }
     }
     private fun subscribe(tag: String, payload: JsonObject, handler: (JsonObject) -> Unit): String {
@@ -280,4 +299,18 @@ class T3Client(private val scope: CoroutineScope) : TrefoilClient {
     /** Remove in-memory credentials as well as the local connection; no remote revoke. */
     fun forgetEnvironment() { disconnectNow(); mutable.value = ClientState() }
     override fun close() { disconnectNow(); http.connectionPool.evictAll() }
+}
+
+/** Policy applies before every environment request; redirects remain disabled on the HTTP client. */
+internal fun validatedEnvironmentUrl(value: String, allowInsecureHttp: Boolean = false): HttpUrl {
+    val target = try { value.toHttpUrl() } catch (_: Exception) { throw PairingException("Invalid environment address") }
+    if (target.username.isNotEmpty() || target.password.isNotEmpty()) throw PairingException("Credentials in URL authority are unsupported")
+    if (target.isHttps) return target
+    if (target.host in setOf("localhost", "127.0.0.1", "::1")) return target
+    val literalHost = try { java.net.URI(value).host } catch (_: Exception) { null }
+    if (literalHost == target.host && isPrivateLanAddress(target.host)) {
+        if (allowInsecureHttp) return target
+        throw PairingException("This link uses unencrypted HTTP. Enable private LAN HTTP for this environment or use SSH/HTTPS.")
+    }
+    throw PairingException("Use HTTPS or SSH for remote environments. HTTP is only allowed for private LAN IP addresses with explicit consent.")
 }
