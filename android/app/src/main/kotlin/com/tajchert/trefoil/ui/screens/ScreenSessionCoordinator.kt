@@ -31,7 +31,7 @@ class ScreenSessionCoordinator(private val scope: CoroutineScope, private val cl
                 if (viewer.target != null) {
                     if (viewer.environmentId != environmentId || viewer.target.threadId != threadId) close()
                     else if (connection != ConnectionStatus.Connected) suspendViewer()
-                    else if (!paused && fresh && viewer.access == null && !viewer.loading) open(viewer.target)
+                    else if (!paused && fresh && viewer.access == null && !viewer.loading && viewer.error == null) open(viewer.target)
                 }
             }
         }
@@ -40,6 +40,7 @@ class ScreenSessionCoordinator(private val scope: CoroutineScope, private val cl
     fun isCurrent(access: ScreenAccess): Boolean = !paused && client.isScreenAccessCurrent(access)
 
     fun refresh() {
+        if (paused) return
         catalogRequest?.cancel()
         catalogRequest = scope.launch {
             val environmentId = client.state.value.environment?.id
@@ -52,6 +53,7 @@ class ScreenSessionCoordinator(private val scope: CoroutineScope, private val cl
     }
 
     fun open(target: ScreenTarget) {
+        if (paused) return
         val environmentId = client.state.value.environment?.id ?: return
         val epoch = ++revision
         request?.cancel()
@@ -82,7 +84,7 @@ class ScreenSessionCoordinator(private val scope: CoroutineScope, private val cl
     fun resume() {
         paused = false
         val viewer = mutable.value
-        if (viewer.target != null && viewer.access == null && !viewer.loading && client.state.value.connection == ConnectionStatus.Connected && (client.state.value.canRead || client.state.value.canWrite)) open(viewer.target)
+        if (viewer.target != null && viewer.access == null && !viewer.loading && viewer.error == null && client.state.value.connection == ConnectionStatus.Connected && (client.state.value.canRead || client.state.value.canWrite)) open(viewer.target)
     }
     fun close() {
         revision++

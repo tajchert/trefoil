@@ -72,3 +72,7 @@ Release `0.5.0` (`versionCode = 7`) adds remote Screens and phone fullscreen. Ve
 Release `0.6.0` (`versionCode = 8`) adds file downloads and Android APK installer handoff. Use isolated fixture files; the debug-only `trefoil-file-fixture://download` activity copies its own APK to MediaStore without opening a server or vault. Its entry point is absent from release builds. Verify original signing certificate for upgrades.
 
 Release `0.6.1` (`versionCode = 9`) corrects lineage filtering, shelf grouping/sorting and retained row decoration. Include shell fixtures containing hidden child rows when validating counts.
+
+Release `0.6.2` (`versionCode = 10`) fixes SSH forwarding workers spinning after disconnect.
+Run `TunnelShutdownRegressionTest` and use the debug-only SSH shutdown fixture for repeated native
+connect/close checks against the isolated service. The activity is absent from release builds.

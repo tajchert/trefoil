@@ -7,6 +7,39 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ScreenSessionCoordinatorTest {
+    @Test fun failedViewerDoesNotRetryOnThreadRefreshesOrForegroundUntilExplicitlyOpened() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val client = FakeClient(); val coordinator = ScreenSessionCoordinator(scope, client)
+        try {
+            coordinator.open(client.target)
+            client.next.completeExceptionally(IllegalStateException("fixture access denied")); yield()
+            assertNotNull(coordinator.state.value.error)
+            repeat(100) {
+                client.state.value = client.state.value.copy(canRead = false, canWrite = false)
+                client.state.value = client.state.value.copy(canRead = true)
+            }
+            coordinator.pause(); coordinator.resume()
+            assertEquals(1, client.requests)
+            assertEquals(1, client.refreshes)
+            client.next = CompletableDeferred()
+            coordinator.open(client.target)
+            assertEquals(2, client.requests)
+            client.next.complete(client.access()); yield()
+            assertNotNull(coordinator.state.value.access)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun pausedCoordinatorCannotStartCatalogOrAccessWork() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val client = FakeClient(); val coordinator = ScreenSessionCoordinator(scope, client)
+        try {
+            coordinator.pause()
+            coordinator.refresh(); coordinator.open(client.target); yield()
+            assertEquals(0, client.refreshes)
+            assertEquals(0, client.requests)
+            assertNull(coordinator.state.value.target)
+        } finally { scope.cancel() }
+    }
     private class FakeClient : TrefoilClient {
         val environment = SavedEnvironment("fixture", "Fixture", "https://fixture.invalid", "fixture-token")
         override val state = MutableStateFlow(ClientState(environment = environment, connection = ConnectionStatus.Connected, selectedThreadId = "thread", canWrite = true))

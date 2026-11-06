@@ -19,6 +19,7 @@ import java.net.*
 import java.util.Base64
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SshHostKeyException(val presented: SshHostKey, val changed: Boolean) : Exception(if (changed) "SSH host key changed. Verify it independently before reconnecting." else "Confirm the SSH host key before connecting.")
 class SshConnectionException(message: String) : Exception(message)
@@ -92,7 +93,8 @@ class SshTunnel internal constructor(private val client: SSHClient, val hostKey:
     val active: StateFlow<Boolean> = mutableActive.asStateFlow()
     @Volatile private var descriptorConnection: HttpURLConnection? = null
     private val forwardedSockets = ConcurrentHashMap.newKeySet<Socket>()
-    @Volatile private var closed = false
+    private val closed = AtomicBoolean(false)
+    private val lifecycleLock = Any()
     private var listener: ServerSocket? = null
     private var forwarder: net.schmizz.sshj.connection.channel.direct.LocalPortForwarder? = null
     lateinit var baseUrl: String; private set
@@ -112,13 +114,18 @@ class SshTunnel internal constructor(private val client: SSHClient, val hostKey:
         val socket = object : ServerSocket() {
             override fun accept(): Socket = super.accept().also {
                 forwardedSockets.add(it)
-                if (closed) it.close()
+                if (closed.get()) it.close()
             }
         }.apply { bind(InetSocketAddress("127.0.0.1", 0)) }
-        listener = socket
-        forwarder = client.newLocalPortForwarder(Parameters("127.0.0.1", socket.localPort, "127.0.0.1", port), socket)
+        synchronized(lifecycleLock) {
+            if (closed.get()) { socket.close(); throw SshConnectionException("SSH tunnel closed during discovery") }
+            listener = socket
+            forwarder = client.newLocalPortForwarder(Parameters("127.0.0.1", socket.localPort, "127.0.0.1", port), socket)
+        }
         baseUrl = "http://127.0.0.1:${socket.localPort}/"
-        scope.launch { try { forwarder!!.listen() } catch (_: Exception) {} finally { close() } }
+        // SSHJ 0.41's listener exits only when its thread is interrupted. Closing its
+        // socket first makes it catch SocketException forever, even after Job.cancel().
+        scope.launch { try { runInterruptible { forwarder!!.listen() } } catch (_: Exception) {} finally { close() } }
         validateDescriptor()
         executable = if (input.executable.isNotBlank()) remotePath(input.executable) else {
             val preferred = remotePath(input.t3Home.trimEnd('/') + "/runtime/versions/$serverVersion/t3")
@@ -127,7 +134,10 @@ class SshTunnel internal constructor(private val client: SSHClient, val hostKey:
         }
         val version = exec("$executable --version").trim().removePrefix("t3 ").removePrefix("v")
         if (version != serverVersion) throw SshConnectionException("The installed T3 CLI does not match the running server. Choose a matching executable.")
-        mutableActive.value = true
+        synchronized(lifecycleLock) {
+            check(!closed.get()) { "SSH tunnel closed during discovery" }
+            mutableActive.value = true
+        }
         scope.launch { while (isActive) { delay(500); if (!client.isConnected) { close(); break } } }
     }
     private fun validateDescriptor() {
@@ -187,12 +197,17 @@ class SshTunnel internal constructor(private val client: SSHClient, val hostKey:
     }
     /** Closes sockets synchronously; call from an IO dispatcher, including cancellation cleanup. */
     fun close() {
-        closed = true
-        mutableActive.value = false
+        synchronized(lifecycleLock) {
+            if (!closed.compareAndSet(false, true)) return
+            mutableActive.value = false
+        }
+        // Cancel before closing the listener so runInterruptible interrupts its worker.
+        // Avoid LocalPortForwarder.close(): it can target a stale pooled worker thread.
+        scope.cancel()
         forwardedSockets.forEach { runCatching { it.close() } }
         forwardedSockets.clear()
         runCatching { descriptorConnection?.disconnect() }
-        runCatching { listener?.close() }; runCatching { forwarder?.close() }; runCatching { client.close() }; scope.cancel()
+        runCatching { listener?.close() }; runCatching { client.close() }
     }
 }
 

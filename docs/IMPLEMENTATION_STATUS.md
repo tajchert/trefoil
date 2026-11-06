@@ -89,3 +89,15 @@ Adds native file cards for assistant absolute file paths and structured message 
 Corrects thread list membership: subagents, side chats and deleted rows no longer inflate search results or shelf/header counts; forks stay listed. Settlement is explicitly server-owned and precedes pins/working/attention placement. Snooze wake rules, background-held work, parent approval indicators and send/return/settled sorting use the T3 source rules. Removes retained selected-row decoration without clearing conversation/list caches. The shell explicitly requests all child and older settled rows.
 
 0.6.1 validation: 183 tests pass, plus debug/release lint and APK builds. Fixtures reproduce 3 open, 2 working, 1 snoozed and 25 settled rows alongside 56 hidden children, then retain every row across enrichment/live updates. Selection/back navigation and hidden-child search regressions pass. The signed APK upgraded and launched on the isolated Android 17 tablet with the original certificate. Two independent source reviews informed the changes. No real threads were modified. The coding session's attached server exposes a different live settled count from the reported desktop 25; that exact live discrepancy remains unverified, so no history-loss cause is claimed. Native still lacks T3's two-second working-exit grace.
+
+## 0.6.2
+
+Fixes an SSH shutdown worker leak that could accumulate a saturated worker on each disconnect,
+including app backgrounding. SSHJ's accept loop retried a socket Trefoil had already closed;
+interruptible cancellation now stops it before socket cleanup. Shutdown is idempotent and guarded
+against startup races. Failed screen-access attempts also stop retrying on ordinary thread refreshes;
+paused coordinators cannot start new catalog/access work.
+
+188 tests, debug/release lint and builds pass. A baseline isolated test reproduced one-core saturation;
+twelve native Android SSH cycles now leave zero forwarding loops, with near-idle sampled background
+CPU. Signing and upgrade/launch verified. See [cause and validation limits](reference/background-cpu-validation.md).
