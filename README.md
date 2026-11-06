@@ -17,11 +17,11 @@
 
 ## Connect
 
-**SSH (current source / upcoming 0.2.0):** choose **Connect over SSH**, enter the host/IP, SSH username and password or private key, then verify the server fingerprint. Trefoil discovers the installed running T3 server, obtains its pairing credential and carries HTTP/WebSocket traffic inside SSH. No public HTTPS endpoint or Tailscale is needed. Saving login credentials is optional; without it, reconnect asks for them again. Advanced settings support a custom T3 data directory and matching executable.
+**SSH (0.2.0+):** choose **Connect over SSH**, enter the host/IP, SSH username and password or private key, then verify the server fingerprint. Trefoil discovers the installed running T3 server, obtains its pairing credential and carries HTTP/WebSocket traffic inside SSH. No public HTTPS endpoint or Tailscale is needed. Saving login credentials is optional; without it, reconnect asks for them again. Advanced settings support a custom T3 data directory and matching executable.
 
 The server must already be installed and running; Trefoil does not install, update or restart it. Changed SSH host keys block authentication.
 
-**Direct HTTPS pairing (also available in the published 0.1.0):**
+**Direct HTTPS pairing:**
 
 1. Install the [signed release APK](https://github.com/tajchert/trefoil/releases/latest) on Android **10 or newer**.
 2. Create a direct pairing link in your T3 environment.
@@ -51,7 +51,7 @@ cd android
 
 [Signing and release instructions](docs/RELEASING.md) · [Isolated T3 interoperability check](docs/reference/live-wire-validation.md)
 
-Loopback HTTP is allowed for local development only; Android Emulator reaches the host through `10.0.2.2`. Remote endpoints require HTTPS.
+Loopback HTTP is allowed for local development only; Android Emulator reaches the host through `10.0.2.2`. Direct remote endpoints require HTTPS; SSH connections carry their loopback HTTP traffic inside the encrypted tunnel.
 
 ## Project
 

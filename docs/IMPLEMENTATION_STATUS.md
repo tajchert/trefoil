@@ -2,7 +2,7 @@
 
 Trefoil is an early native Android client, package `com.tajchert.trefoil`.
 
-Implemented in current source (0.2.0; published 0.1.0 predates SSH): verified SSH password/private-key login, existing-server discovery and automatic pairing over a persistent loopback tunnel, encrypted SSH profiles and host pins, optional saved login credentials; direct HTTPS pairing, encrypted saved access tokens and environment
+Implemented in 0.2.0 (0.1.0 predates SSH): verified SSH password/private-key login, existing-server discovery and automatic pairing over a persistent loopback tunnel, encrypted SSH profiles and host pins, optional saved login credentials; direct HTTPS pairing, encrypted saved access tokens and environment
 selection, T3 project/thread browsing, full native message projections, updates
 via conflated authoritative refresh, text send/queue, interrupt current run,
 basic supported live approvals/user questions, server model selection for new
@@ -40,5 +40,4 @@ the login form, and forgetting the fixture environment. The test used an ADB
 reverse port for emulator-to-host access; no real T3 credentials or threads were
 used. Selecting a file in the system picker was not verified; key paste was.
 
-The current source builds a signed 0.2.0 APK with the original release certificate.
-No 0.2.0 GitHub release was published by this change.
+The signed [0.2.0 release](https://github.com/tajchert/trefoil/releases/tag/v0.2.0) uses the original release certificate, supporting in-place upgrades from 0.1.0.
