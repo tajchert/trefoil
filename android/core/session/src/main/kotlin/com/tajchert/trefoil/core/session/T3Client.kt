@@ -219,19 +219,18 @@ class T3Client(
     private fun writable() = update { it.copy(canWrite = authorized && shellReady && (it.selectedThreadId == null || threadReady) && it.connection == ConnectionStatus.Connected) }
     private fun shellItem(item: JsonObject) {
         when (item.string("kind")) {
-            "snapshot" -> { val snapshot = item.obj("snapshot"); update { it.copy(projects = snapshot.objects("projects").map(::project), threads = (snapshot.objects("threads") + snapshot.objects("archivedThreads")).map(::thread)) } }
+            "snapshot" -> { val snapshot = item.obj("snapshot"); update { it.copy(projects = snapshot.objects("projects").map(::project), threads = snapshot.objects("threads").map { threadSummary(it) } + snapshot.objects("archivedThreads").map { threadSummary(it, archived = true) }) } }
             "project.updated" -> { val value = project(item.obj("project")); update { it.copy(projects = it.projects.filterNot { p -> p.id == value.id } + value) } }
             "project.removed" -> update { it.copy(projects = it.projects.filterNot { p -> p.id == item.string("projectId") }) }
-            "thread.updated" -> { val value = thread(item.obj("thread")); update { it.copy(threads = it.threads.filterNot { t -> t.id == value.id } + value) } }
+            "thread.updated" -> { val value = threadSummary(item.obj("thread")); update { it.copy(threads = it.threads.filterNot { t -> t.id == value.id } + value) } }
             "thread.removed" -> update { it.copy(threads = it.threads.filterNot { t -> t.id == item.string("threadId") }) }
             "synchronized" -> { shellReady = true; writable() }
         }
     }
     private fun project(value: JsonObject) = Project(value.string("id"), value.string("title"), value.string("workspaceRoot"))
-    private fun thread(value: JsonObject) = ThreadSummary(value.string("id"), value.string("projectId"), value.string("title"), value.string("status").ifBlank { value.obj("runSummary").string("status").ifBlank { "idle" } })
     private fun applyProjection(value: JsonObject) {
         projection = value
-        val items = value.objects("turnItems")
+        val items = presentationItems(value)
         val requests = value.objects("runtimeRequests").filter { it.string("status") == "pending" }.map { request ->
             val item = items.firstOrNull { it.string("requestId") == request.string("id") } ?: JsonObject(emptyMap())
             val questions = item.objects("questions").map { q -> Question(q.string("id"), q.string("question"), q.objects("options").map { it.string("label") }, q["multiSelect"]?.jsonPrimitive?.booleanOrNull == true, q["required"]?.jsonPrimitive?.booleanOrNull != false) }
@@ -242,8 +241,8 @@ class T3Client(
             RuntimeRequest(request.string("id"), item.string("prompt").ifBlank { kind }, if (supported) item.string("reason") else "Respond using another T3 client: unsupported or non-resumable request", questions, supported)
         }
         val active = value.objects("runs").lastOrNull { it.string("status") in setOf("preparing", "running", "starting", "waiting") }?.string("id")
-        update { it.copy(messages = value.objects("messages").map { m -> ConversationMessage(m.string("id"), m.string("role"), m.string("text"), m["streaming"]?.jsonPrimitive?.booleanOrNull == true) },
-            activities = items.filter { item -> item.string("type") !in setOf("message", "user_message", "assistant_message", "user_input_request", "approval_request") }.map { item -> ToolActivity(item.string("id"), item.string("type").replace('_', ' '), item.string("input").ifBlank { item.string("text") }) }, requests = requests, activeRunId = active) }
+        update { it.copy(messages = conversationMessages(value),
+            activities = toolActivities(value), requests = requests, activeRunId = active) }
     }
     private fun requireWrite() { check(state.value.canWrite) { "Wait for a fresh connection before writing" } }
     private fun command(type: String, extra: JsonObject): JsonObject = buildJsonObject {
@@ -266,7 +265,7 @@ class T3Client(
         requireWrite()
         val request = state.value.requests.firstOrNull { it.id == requestId } ?: error("Request is no longer pending")
         check(request.canApprove) { "Use another T3 client to respond to this request" }
-        val item = projection.objects("turnItems").firstOrNull { it.string("requestId") == requestId } ?: error("Missing request detail")
+        val item = presentationItems(projection).firstOrNull { it.string("requestId") == requestId } ?: error("Missing request detail")
         dispatch("runtime-request.respond", buildJsonObject {
             put("requestId", requestId)
             if (item.string("type") == "user_input_request") {

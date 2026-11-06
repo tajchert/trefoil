@@ -45,3 +45,11 @@ The signed [0.2.0 release](https://github.com/tajchert/trefoil/releases/tag/v0.2
 Current source 0.2.1 corrects retained connection forms, public-key-file validation, visible errors/progress, surrounding username whitespace, and private IPv4 LAN HTTP pairing with explicit consent. IPv6 ULA HTTP is not supported; use HTTPS or SSH for IPv6 remote endpoints. Connection setup cancellation/timeout cleanup has regression coverage. The published 0.2.0 predates these corrections.
 
 0.2.1 verification: 42 tests pass (model/policy, protocol/session, SSH, Compose and credential envelope), lintDebug and both APK builds pass. Android emulator checks confirm retained input on connection refusal, visible/revealed validation errors, public-key rejection and the HTTP consent control for app links. HTTP network policy is tested using isolated fixtures and URL guards; no real user pairing token was consumed during testing. Pairing links are short-lived; generate a fresh one when testing a new build.
+
+## 0.3.0
+
+Adds T3 mobile-inspired thread shelves, search, status precedence, selection, relative times and collapsed archive/settlement groups. The mixed conversation feed preserves projected inherited/local order and groups consecutive work by run. User prompts use compact right-aligned bubbles; assistant replies use basic Markdown, fenced code and copy controls. Active/failed work stays visible. Draft acknowledgment and disconnected write gates have fixture coverage.
+
+68 tests pass across model, SSH, protocol, session and app. Native Robolectric light/dark renders verify thread and conversation layouts. The signed release uses the original certificate for in-place upgrades and includes the previously unpublished 0.2.1 connection fixes. Full CommonMark, attachments and rich diff rendering remain future work.
+
+0.3.0 release validation: debug/release lint and APK assembly pass. Verified the signing certificate against the original SHA-256 fingerprint, installed the signed APK on a separate Android 17 tablet emulator and confirmed onboarding launches. No live environment was connected.

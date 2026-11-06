@@ -64,3 +64,5 @@ and checksum; signing credentials stay outside Git.
 
 Release `0.2.0` (`versionCode = 2`) adds SSH onboarding. Verify `:core:model:test` and `:core:ssh:test` as well when releasing SSH
 changes. Keep the same release keystore for in-place upgrades.
+
+Release `0.3.0` (`versionCode = 4`) adds T3-style thread shelves and a mixed conversation/activity timeline, and includes the retained connection forms and private-LAN pairing fixes from source 0.2.1. Use the same release certificate for upgrades.

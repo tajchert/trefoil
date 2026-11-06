@@ -8,9 +8,30 @@ data class SavedEnvironment(val id: String, val name: String, val baseUrl: Strin
     override fun toString() = "SavedEnvironment(credentials=***)"
 }
 data class Project(val id: String, val title: String, val path: String = "")
-data class ThreadSummary(val id: String, val projectId: String, val title: String, val status: String = "idle")
-data class ConversationMessage(val id: String, val role: String, val text: String, val streaming: Boolean = false)
-data class ToolActivity(val id: String, val title: String, val detail: String = "")
+data class ThreadSummary(
+    val id: String, val projectId: String, val title: String, val status: String = "idle",
+    val createdAt: String? = null, val updatedAt: String? = null,
+    val latestUserMessageAt: String? = null, val latestUserAuthoredMessageAt: String? = null,
+    val archivedAt: String? = null, val archived: Boolean = false,
+    val pinnedAt: String? = null, val settledAt: String? = null, val settledOverride: String? = null,
+    val activeOrderKey: String? = null, val pinOrderKey: String? = null,
+    val pendingRequestKind: String? = null, val latestMessage: String = "",
+    val branch: String? = null, val model: String? = null,
+    val blockedOnThreadWait: Boolean? = null, val activityRunStatus: String? = null,
+    val snoozedUntil: String? = null, val unsettledAt: String? = null,
+    val latestRunRequestedAt: String? = null, val latestRunCompletedAt: String? = null,
+)
+data class ConversationMessage(
+    val id: String, val role: String, val text: String, val streaming: Boolean = false,
+    val createdAt: String? = null, val updatedAt: String? = null,
+    val runId: String? = null, val ordinal: Int? = null,
+)
+data class ToolActivity(
+    val id: String, val title: String, val detail: String = "",
+    val kind: String = "", val status: String = "",
+    val startedAt: String? = null, val completedAt: String? = null,
+    val runId: String? = null, val ordinal: Int? = null,
+)
 data class Question(val id: String, val title: String, val options: List<String> = emptyList(), val multiple: Boolean = false, val required: Boolean = true)
 data class RuntimeRequest(val id: String, val title: String, val detail: String = "", val questions: List<Question> = emptyList(), val canApprove: Boolean = true)
 data class ModelOption(val instanceId: String, val model: String, val label: String = model)

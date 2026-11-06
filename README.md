@@ -8,12 +8,13 @@
 
 - SSH connections with password or private-key login, verified host fingerprints and automatic pairing through an encrypted tunnel.
 - Direct HTTPS pairing and encrypted credentials for saved environments.
-- Projects, threads and native conversations with streaming updates.
+- Searchable T3-style thread shelves with pinned, working, snoozed, settled and archived groups.
+- Ordered conversations with streaming updates, expandable work activity, basic Markdown and code copying.
 - Text messages, queueing during active runs and interrupting a run.
 - Supported live approvals and questions, plus new conversations with server-provided models.
 - Phone and wide layouts, light/dark themes, retained drafts and explicit reconnect.
 
-**Early release:** attachments, rich Markdown, diffs, shell terminals, notifications, T3 Connect relay and iOS are still planned. Some provider requests require another T3 client. See [current limits and validation](docs/IMPLEMENTATION_STATUS.md).
+**Early release:** attachments, full Markdown support, diffs, shell terminals, notifications, T3 Connect relay and iOS are still planned. Some provider requests require another T3 client. See [current limits and validation](docs/IMPLEMENTATION_STATUS.md).
 
 ## Connect
 
@@ -27,7 +28,7 @@ The server must already be installed and running; Trefoil does not install, upda
 2. Create a direct pairing link in your T3 environment.
 3. In Trefoil, choose **Pair an environment**, paste the link and give it a name.
 
-HTTPS endpoints must be reachable from your phone with a trusted certificate. Current source (0.2.1) also accepts HTTP on literal private IPv4 LAN addresses after you explicitly enable **Allow unencrypted HTTP on this private network**. That choice is saved per environment; public internet HTTP is blocked. Trefoil supports T3 orchestration protocol **V2**, pinned to the [documented contract](protocol/SPEC.md).
+HTTPS endpoints must be reachable from your phone with a trusted certificate. Version 0.3.0 also accepts HTTP on literal private IPv4 LAN addresses after you explicitly enable **Allow unencrypted HTTP on this private network**. That choice is saved per environment; public internet HTTP is blocked. Trefoil supports T3 orchestration protocol **V2**, pinned to the [documented contract](protocol/SPEC.md).
 
 Tokens are encrypted with Android Keystore and excluded from backups. Forgetting an environment removes its local credentials; revoke the session in T3 to revoke server access. Remote work continues when Trefoil closes. Uncertain writes are never automatically replayed—check the conversation before retrying.
 
@@ -53,7 +54,7 @@ cd android
 
 Loopback HTTP is allowed for local development only; Android Emulator reaches the host through `10.0.2.2`. Direct public endpoints require HTTPS. Private IPv4 LAN HTTP requires explicit consent; SSH carries loopback HTTP inside its encrypted tunnel.
 
-Connection forms in 0.2.1 retain input while testing and after failures, show progress and reveal validation errors. Public-key files are rejected; use the matching private key without `.pub`. Surrounding spaces in hostnames/usernames are trimmed.
+Connection forms in 0.3.0 retain input while testing and after failures, show progress and reveal validation errors. Public-key files are rejected; use the matching private key without `.pub`. Surrounding spaces in hostnames/usernames are trimmed.
 
 ## Project
 
