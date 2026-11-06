@@ -61,3 +61,11 @@ Fixes project-enrichment snapshots being mistaken for authoritative shell resets
 Retains list search, shelf expansion and scroll state across conversation navigation. Reconnect/foreground refresh keeps the last environment and conversation visible, read-only until synchronization. Recently viewed projections are cached in memory, scoped by environment and thread; forgetting an environment clears its cache. No transcript cache is written to disk. Reopening the current thread reuses its subscription.
 
 0.3.1 validation: 76 tests pass, including the 30-thread enrichment reproduction, reconnect freshness/write gating, cache isolation/forgetting and navigation retention. Debug/release lint and APK builds pass. The signed APK upgrades and launches over 0.3.0 on the Android 17 tablet emulator using the original certificate.
+
+## 0.4.0
+
+A deeper source comparison with T3's React Native/Expo Android app adds catalog-based provider marks/account badges/history, run-owned live elapsed timers and exact snooze wake timing. Successful turns fold intermediate commentary/tools while keeping terminal answers, plans/notices/requests and failed or active work visible. Work groups respect run/attempt boundaries. Typed command/file/search/reasoning rows show structured details once; command output and stripped file bodies can be loaded with a read-only RPC. Generation, selection, source-owner and revision guards protect cached content. Unchanged stripped snapshots retain hydrated details; a changed item invalidates them.
+
+See [mobile presentation reference](reference/mobile-presentation.md) for source paths, exact rules and remaining gaps. Remote icon downloads, terminal output streaming, rich diff widgets, subagent navigation and full CommonMark remain future work.
+
+0.4.0 validation: 109 tests pass, including provider identity/custom accounts, timing null/fallback semantics, work folds, prominent rows, output/file-detail hydration and retained-state regressions. Debug/release lint and builds pass. Light/dark thread, completed-turn and failed-command renders were inspected. Signed upgrade/launch verified on Android 17 with the original release certificate. No real user threads were modified.

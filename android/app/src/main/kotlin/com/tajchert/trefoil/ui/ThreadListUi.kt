@@ -28,6 +28,11 @@ import com.tajchert.trefoil.core.model.*
 import java.time.Instant
 import java.util.Locale
 import kotlinx.coroutines.delay
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.isActive
+import kotlin.coroutines.coroutineContext
 
 internal data class ThreadShelf(val title: String, val threads: List<ThreadSummary>)
 internal data class ThreadIndicator(val label: String, val kind: String)
@@ -90,7 +95,20 @@ internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: ()
     var expanded by rememberSaveable(state.environment?.id) { mutableStateOf(listOf("Pinned", "Threads", "Working")) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val shelves = remember(filtered, now) { threadShelves(filtered, now) }
-    LaunchedEffect(Unit) { while (true) { delay(60_000); now = System.currentTimeMillis() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val liveTiming = remember(filtered) { filtered.any { thread ->
+        (threadIndicator(thread).kind == "working" && threadWorkStartedAt(thread) != null) ||
+            (threadIndicator(thread).kind == "waiting" && validThreadInstant(thread.latestRunCompletedAt) != null)
+    } }
+    LaunchedEffect(lifecycle, liveTiming, state.threads) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (coroutineContext.isActive) {
+                val current = System.currentTimeMillis()
+                now = current
+                delay(nextThreadClockDelay(current, liveTiming, state.threads.mapNotNull { validThreadInstant(it.snoozedUntil) }))
+            }
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -120,7 +138,7 @@ internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: ()
                     }
                 }
                 items(shelf.threads.filter { query.isNotBlank() || shelf.title in expanded }, key = { "thread:${it.id}" }) { thread ->
-                    ThreadRow(thread, projects[thread.projectId], state.selectedThreadId == thread.id, now) { select(thread.id) }
+                    ThreadRow(thread, projects[thread.projectId], state.providers, state.selectedThreadId == thread.id, now) { select(thread.id) }
                 }
             }
         }
@@ -138,7 +156,7 @@ private fun ShelfHeading(title: String, count: Int, open: Boolean, toggle: () ->
     }
 }
 @Composable
-private fun ThreadRow(thread: ThreadSummary, project: Project?, selected: Boolean, now: Long, select: () -> Unit) {
+private fun ThreadRow(thread: ThreadSummary, project: Project?, providers: List<ProviderInstance>, selected: Boolean, now: Long, select: () -> Unit) {
     val indicator = threadIndicator(thread)
     val tint = when (indicator.kind) {
         "attention" -> Color(0xFFB7791F)
@@ -152,17 +170,27 @@ private fun ThreadRow(thread: ThreadSummary, project: Project?, selected: Boolea
         Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
             Box(Modifier.padding(top = 6.dp, end = 10.dp).size(7.dp).background(if (selected) MaterialTheme.colorScheme.primary else tint.copy(alpha = if (indicator.kind == "ready") .35f else 1f), CircleShape))
             Column(Modifier.weight(1f)) {
+                val providerStack = threadProviders(thread, providers)
+                val hasContext = !thread.branch.isNullOrBlank() || !thread.model.isNullOrBlank()
                 Text(thread.title.ifBlank { "Untitled conversation" }, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, fontWeight = if (indicator.kind in setOf("working", "waiting") && !selected) FontWeight.Normal else FontWeight.Medium)
                 Row(Modifier.padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Folder, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(project?.title ?: "Project", Modifier.padding(start = 4.dp).weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val label = if (indicator.kind in setOf("ready", "waiting")) relativeThreadTime(thread.updatedAt ?: thread.createdAt, now) else indicator.label
+                    if (!hasContext && providerStack.isNotEmpty()) {
+                        ThreadProviderStack(providerStack, providers)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    val label = if (indicator.kind == "ready") relativeThreadTime(thread.updatedAt ?: thread.createdAt, now) else threadStatusLabel(thread, now)
                     if (label.isNotBlank()) {
                         if (indicator.kind == "working") CircularProgressIndicator(Modifier.padding(start = 8.dp).size(10.dp), strokeWidth = 1.5.dp, color = tint)
                         Text(label, Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelSmall, color = tint)
                     }
                 }
-                if (!thread.branch.isNullOrBlank()) Text("⑂ ${thread.branch}", Modifier.padding(top = 4.dp), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (hasContext) Row(Modifier.fillMaxWidth().padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (!thread.branch.isNullOrBlank() || !thread.model.isNullOrBlank()) Text(thread.branch?.takeIf { it.isNotBlank() }?.let { "⑂ $it" } ?: thread.model.orEmpty(), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else Spacer(Modifier.weight(1f))
+                    ThreadProviderStack(providerStack, providers)
+                }
             }
         }
     }

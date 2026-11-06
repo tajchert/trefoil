@@ -2,6 +2,7 @@ package com.tajchert.trefoil.ui
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.test.*
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
@@ -44,6 +45,93 @@ class ConversationUiTest {
         compose.onNodeWithText("Approve").assertIsNotEnabled()
         compose.onNodeWithText("Deny").assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).assertTextEquals("Draft")
+    }
+
+    @Test fun completedResponseDisclosureKeepsFinalAnswerAndRevealsIntermediateWork() {
+        val state = ClientState(selectedThreadId = "fixture", messages = listOf(
+            ConversationMessage("c", "assistant", "Checking the fixture", runId = "r", ordinal = 0),
+            ConversationMessage("a", "assistant", "The result is ready", runId = "r", ordinal = 2)),
+            activities = listOf(ToolActivity("t", "Read file", "fixture.txt", status = "completed", runId = "r", ordinal = 1)))
+        compose.setContent { MaterialTheme { Conversation(state, {}, {}, { _, _, _ -> }) } }
+        compose.onNodeWithText("The result is ready").assertExists()
+        compose.onNodeWithText("Checking the fixture").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Expand completed work").performClick()
+        compose.onNodeWithText("Checking the fixture").assertExists()
+        compose.onNodeWithText("fixture.txt").assertExists()
+        compose.onNodeWithContentDescription("Collapse completed work").performClick()
+        compose.onNodeWithText("Checking the fixture").assertDoesNotExist()
+        compose.onNodeWithText("The result is ready").assertExists()
+    }
+
+    @Test fun failedCommandShowsItsInputOutputAndExitCodeWithoutDisclosure() {
+        compose.setContent { MaterialTheme { Conversation(ClientState(selectedThreadId = "fixture", activities = listOf(
+            ToolActivity("command", "Run checks", kind = "command_execution", status = "completed", input = "./fixture-check", output = "Fixture failed", exitCode = 2))), {}, {}, { _, _, _ -> }) } }
+        compose.onNodeWithText("$ ./fixture-check").assertExists()
+        compose.onNodeWithText("Fixture failed").assertExists()
+        compose.onNodeWithText("Exit code 2").assertExists()
+        compose.onNodeWithContentDescription("Copy activity").assertExists()
+    }
+
+    @Test fun omittedOutputLoadsOnlyOnExplicitConnectedRequest() {
+        val state = mutableStateOf(ClientState(selectedThreadId = "fixture", canWrite = false, connection = ConnectionStatus.Connected,
+            activities = listOf(ToolActivity("command", "Run checks", kind = "command_execution", status = "completed", input = "./fixture-check", outputOmitted = true))))
+        val loads = mutableListOf<String>()
+        compose.setContent { MaterialTheme { Conversation(state.value, {}, {}, { _, _, _ -> }, onLoadActivity = { loads += it }) } }
+        compose.onNodeWithContentDescription("Expand activity").performClick()
+        compose.runOnIdle { assertTrue(loads.isEmpty()) }
+        compose.onNodeWithText("Load output").performClick()
+        compose.runOnIdle {
+            assertEquals(listOf("command"), loads)
+            state.value = state.value.copy(activities = state.value.activities.map { it.copy(outputOmitted = false, output = "Hydrated fixture") })
+        }
+        compose.onNodeWithText("Hydrated fixture").assertExists()
+        compose.onNodeWithText("Load output").assertDoesNotExist()
+        compose.runOnIdle { state.value = state.value.copy(connection = ConnectionStatus.Disconnected, canWrite = false, activities = state.value.activities.map { it.copy(outputOmitted = true, output = null) }) }
+        compose.onNodeWithText("Load output").assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(listOf("command"), loads) }
+    }
+
+    @Test fun structuredCommandDetailsDoNotRepeatTheLegacyAggregate() {
+        compose.setContent { MaterialTheme { Conversation(ClientState(selectedThreadId = "fixture", activities = listOf(
+            ToolActivity("command", "Run checks", detail = "./fixture-check\n\nfixture-output", kind = "command_execution", status = "completed", input = "./fixture-check", output = "fixture-output", exitCode = 0))), {}, {}, { _, _, _ -> }) } }
+        compose.onNodeWithText("./fixture-check").assertExists()
+        compose.onNodeWithContentDescription("Expand activity").performClick()
+        compose.onAllNodesWithText("fixture-output", substring = true).assertCountEquals(1)
+        compose.onNodeWithText("$ ./fixture-check").assertExists()
+        compose.onNodeWithText("Exit code 0").assertExists()
+    }
+
+    @Test fun requestsRemainVisibleBesideCompletedWork() {
+        compose.setContent { MaterialTheme { Conversation(ClientState(selectedThreadId = "fixture", canWrite = true,
+            messages = listOf(ConversationMessage("a", "assistant", "Ready", runId = "r", ordinal = 1)),
+            activities = listOf(ToolActivity("t", "Read file", status = "completed", runId = "r", ordinal = 0)),
+            requests = listOf(RuntimeRequest("approval", "Review the next command"))), {}, {}, { _, _, _ -> }) } }
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        compose.onNodeWithContentDescription("Expand completed work").assertExists()
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Review the next command"))
+        compose.onNodeWithText("Review the next command").assertExists()
+        compose.onNodeWithText("Approve").assertIsEnabled()
+    }
+
+    @Test fun navigatingAwayRestoresDraftAndExpandedWorkWithinTheThreadStateProvider() {
+        val selected = mutableStateOf("a")
+        compose.setContent {
+            val holder = rememberSaveableStateHolder()
+            MaterialTheme {
+                holder.SaveableStateProvider(selected.value) {
+                    Conversation(ClientState(selectedThreadId = selected.value,
+                        activities = listOf(ToolActivity("tool", "Read file", "fixture.txt", status = "completed"))), {}, {}, { _, _, _ -> })
+                }
+            }
+        }
+        compose.onNodeWithText("Message T3…").performTextInput("Keep my draft")
+        compose.onNodeWithContentDescription("Expand activity").performClick()
+        compose.runOnIdle { selected.value = "b" }
+        compose.onNode(hasSetTextAction()).assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithText("fixture.txt").assertDoesNotExist()
+        compose.runOnIdle { selected.value = "a" }
+        compose.onNode(hasSetTextAction()).assertTextEquals("Keep my draft")
+        compose.onNodeWithText("fixture.txt").assertExists()
     }
 
     @Test fun activityDetailsAreCollapsedUntilExpanded() {

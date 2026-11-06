@@ -221,6 +221,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectThread(id: String) = action("Could not open the thread. Reconnect and try again.") { client.selectThread(id) }
     fun send(text: String) = action("Message outcome is uncertain. Check the conversation before sending again.") { client.sendMessage(text) }
+    fun loadActivity(id: String) = action("Could not load activity output. Reconnect and try again.") { client.loadActivity(id) }
     fun interrupt() = action("Interrupt outcome is uncertain. Check the run status.") { client.interruptRun() }
     fun respond(id: String, decision: String, answers: Map<String,List<String>>) = action("Response outcome is uncertain. Check the request status before responding again.") { client.respond(id, decision, answers) }
     fun createThread(projectId: String, title: String, model: ModelOption) = action("Thread creation outcome is uncertain. Check the thread list before retrying.") {

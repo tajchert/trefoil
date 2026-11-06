@@ -43,6 +43,7 @@ fun TrefoilApp(
     sshLogin: SshConnectionInput? = null,
     onSshKeyPickerActive: (Boolean) -> Unit = {},
     connectionAttempt: ConnectionAttempt = ConnectionAttempt(),
+    onLoadActivity: (String) -> Unit = {},
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -96,7 +97,7 @@ fun TrefoilApp(
                             if (wide) VerticalDivider()
                             if (wide || showThread) Box(Modifier.weight(1f).fillMaxHeight()) {
                                 conversationState.SaveableStateProvider("${state.environment?.id}:${state.selectedThreadId}") {
-                                    Conversation(state, onSend, onInterrupt, onRespond)
+                                    Conversation(state, onSend, onInterrupt, onRespond, onLoadActivity = onLoadActivity)
                                 }
                             }
                         }

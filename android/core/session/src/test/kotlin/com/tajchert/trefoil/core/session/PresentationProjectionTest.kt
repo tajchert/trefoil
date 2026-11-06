@@ -8,6 +8,120 @@ import org.junit.Test
 class PresentationProjectionTest {
     private fun fixture(value: String) = Json.parseToJsonElement(value).jsonObject
 
+    @Test fun providerCatalogAndThreadMetadataKeepRoutingIdentitySeparateFromModelNames() {
+        val providers = providerInstances(fixture("""{"providers":[
+          {"instanceId":"work-account","driver":"codex","displayName":"Work","accentColor":"#123456","enabled":false},
+          {"instanceId":"custom-server","driver":"claudeAgent","enabled":true}
+        ]}"""))
+        assertEquals(listOf("work-account", "custom-server"), providers.map { it.instanceId })
+        assertEquals("codex", providers.first().driver)
+        assertEquals("Work", providers.first().displayName)
+        assertEquals("#123456", providers.first().accentColor)
+        assertFalse(providers.first().enabled)
+        val thread = threadSummary(fixture("""{"providerInstanceId":"work-account",
+          "modelSelection":{"instanceId":"custom-server","model":"codex-named-model","options":{"effort":"high"}},
+          "providerInstanceHistory":["old-account","work-account"],
+          "latestRunId":"latest","activeRunId":"active","latestRunStartedAt":"2026-11-06T10:00:00Z",
+          "activityRunStartedAt":null}"""))
+        assertEquals("work-account", thread.providerInstanceId)
+        assertEquals("custom-server", thread.modelInstanceId)
+        assertEquals(listOf("old-account", "work-account"), thread.providerInstanceHistory)
+        assertEquals("latest", thread.latestRunId)
+        assertEquals("active", thread.activeRunId)
+        assertEquals("2026-11-06T10:00:00Z", thread.latestRunStartedAt)
+        assertTrue(thread.activityRunStartedAtPresent)
+        assertNull(thread.activityRunStartedAt)
+        assertFalse(threadSummary(fixture("""{}""")).activityRunStartedAtPresent)
+    }
+
+    @Test fun runsAndAttemptsPreserveCompletionAndRecoveryBoundaries() {
+        val projection = fixture("""{"runs":[{"id":"run","ordinal":2,"status":"completed",
+          "requestedAt":"2026-11-06T10:00:00Z","startedAt":"2026-11-06T10:00:01Z",
+          "completedAt":"2026-11-06T10:00:06Z","workStartedAt":"2026-11-06T09:59:00Z",
+          "activeAttemptId":"retry","userMessageId":"prompt","providerInstanceId":"work",
+          "modelSelection":{"instanceId":"work","model":"model"}}],
+          "attempts":[{"id":"initial","runId":"run","attemptOrdinal":1,"status":"superseded","reason":"initial"},
+          {"id":"retry","runId":"run","attemptOrdinal":2,"status":"completed","reason":"provider_recovery",
+          "rootNodeId":"node","providerTurnId":"turn","providerInstanceId":"work",
+          "startedAt":"2026-11-06T10:00:03Z","completedAt":"2026-11-06T10:00:06Z"}]}""")
+        val run = conversationRuns(projection).single()
+        assertEquals("run", run.id)
+        assertEquals("completed", run.status)
+        assertEquals("2026-11-06T10:00:00Z", run.requestedAt)
+        assertEquals("2026-11-06T10:00:01Z", run.startedAt)
+        assertEquals("2026-11-06T10:00:06Z", run.completedAt)
+        assertEquals("2026-11-06T09:59:00Z", run.workStartedAt)
+        assertEquals("retry", run.activeAttemptId)
+        assertEquals("prompt", run.userMessageId)
+        assertEquals("work", run.providerInstanceId)
+        val attempts = runAttempts(projection)
+        assertEquals(listOf("initial", "retry"), attempts.map { it.id })
+        assertEquals(listOf(1, 2), attempts.map { it.attemptOrdinal })
+        assertEquals("provider_recovery", attempts.last().reason)
+        assertEquals("turn", attempts.last().providerTurnId)
+        assertEquals("2026-11-06T10:00:06Z", attempts.last().completedAt)
+    }
+
+    @Test fun activityDetailsAndAttemptIdsUseStructuredWireFields() {
+        val projection = fixture("""{"messages":[{"id":"answer","role":"assistant","text":"done"}],
+          "attempts":[{"id":"retry","runId":"run","rootNodeId":"root","status":"completed"}],
+          "providerTurns":[{"id":"turn","runAttemptId":"retry"}],"turnItems":[
+          {"id":"command","type":"command_execution","runId":"run","providerTurnId":"turn","nodeId":"node",
+          "input":"./gradlew test","output":"failed","exitCode":1,"outputIndicatesFailure":true,"status":"completed"},
+          {"id":"file","type":"file_change","fileName":"Main.kt","diffStr":"+hello","oldStr":"old","newStr":"new"},
+          {"id":"search","type":"file_search","pattern":"hello","results":[{"fileName":"Main.kt","line":7,"preview":"hello"}]},
+          {"id":"error","type":"error","failure":{"class":"unknown","message":"Process failed","code":null,"retryable":false}},
+          {"id":"a","type":"assistant_message","messageId":"answer","providerTurnId":"turn","runId":"run"}
+        ]}""")
+        val command = toolActivities(projection).first()
+        assertEquals("./gradlew test", command.input)
+        assertEquals("failed", command.output)
+        assertEquals(1, command.exitCode)
+        assertEquals(true, command.outputIndicatesFailure)
+        assertEquals("retry", command.runAttemptId)
+        assertEquals("node", command.nodeId)
+        val file = toolActivities(projection)[1]
+        assertEquals("Main.kt", file.fileName)
+        assertEquals("+hello", file.diffStr)
+        assertTrue(file.detail.contains("+hello"))
+        assertTrue(toolActivities(projection)[2].searchResults.orEmpty().contains("Main.kt"))
+        assertEquals("hello", toolActivities(projection)[2].input)
+        assertEquals("Process failed", toolActivities(projection)[3].failure)
+        assertEquals("retry", conversationMessages(projection).single().runAttemptId)
+    }
+
+    @Test fun omittedOutputHydrationPreservesProjectedPositionAndSourceIdentity() {
+        val projection = fixture("""{"visibleTurnItems":[{"position":8,"sourceThreadId":"parent","sourceItemId":"source",
+          "item":{"id":"projected","type":"command_execution","threadId":"parent","runId":"run","ordinal":91,
+          "status":"completed","updatedAt":"2026-11-06T10:00:00Z","input":"test","outputOmitted":true}}]}""")
+        val full = fixture("""{"id":"source","type":"command_execution","threadId":"parent","runId":"run","ordinal":91,
+          "status":"completed","updatedAt":"2026-11-06T10:00:00Z","input":"test","output":"Test output","exitCode":0}""")
+        val hydrated = toolActivities(hydrateActivityProjection(projection, "projected", full)).single()
+        assertEquals("projected", hydrated.id)
+        assertEquals(8, hydrated.ordinal)
+        assertEquals("parent", hydrated.sourceThreadId)
+        assertEquals("source", hydrated.sourceItemId)
+        assertEquals("run", hydrated.runId)
+        assertEquals("completed", hydrated.status)
+        assertEquals("Test output", hydrated.output)
+        assertFalse(hydrated.outputOmitted)
+    }
+
+    @Test fun attemptResolutionTraversesExecutionNodesAndRejectsDifferentRunsAndCycles() {
+        val projection = fixture("""{"attempts":[{"id":"retry","runId":"run","rootNodeId":"root","status":"completed"}],
+          "nodes":[{"id":"child","rootNodeId":"root","parentNodeId":null},
+          {"id":"parent","rootNodeId":"other","parentNodeId":"child"},
+          {"id":"cycle","rootNodeId":"unknown","parentNodeId":"cycle"}],"turnItems":[
+          {"id":"tool","type":"dynamic_tool","nodeId":"parent","runId":"run"},
+          {"id":"other","type":"dynamic_tool","nodeId":"child","runId":"different-run"},
+          {"id":"cycle-tool","type":"dynamic_tool","nodeId":"cycle","runId":"run"}
+        ]}""")
+        val activities = toolActivities(projection)
+        assertEquals("retry", activities[0].runAttemptId)
+        assertNull(activities[1].runAttemptId)
+        assertNull(activities[2].runAttemptId)
+    }
+
     @Test fun shellPreservesOrderingAndAttentionMetadataWithoutInventingMissingDates() {
         val thread = threadSummary(fixture("""{
             "id":"t", "projectId":"p", "title":"Design", "status":"waiting",

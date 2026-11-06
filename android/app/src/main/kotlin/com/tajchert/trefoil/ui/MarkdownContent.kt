@@ -27,10 +27,24 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
     val lines = mutableListOf<String>()
     var code = false
     var language = ""
+    var fenceCharacter = '`'
+    var fenceLength = 0
     fun flush() { if (lines.isNotEmpty()) { result += MarkdownBlock(lines.joinToString("\n"), code, language); lines.clear() } }
     text.lines().forEach { line ->
-        if (line.trimStart().startsWith("```")) { flush(); code = !code; language = if (code) line.trim().removePrefix("```").trim() else "" }
-        else if (!code && line.isBlank()) flush() else lines += line
+        val trimmed = line.trimStart()
+        val fence = Regex("^(`{3,}|~{3,})(.*)$").matchEntire(trimmed)
+        val marker = fence?.groupValues?.get(1)
+        if (!code && marker != null) {
+            flush()
+            code = true
+            fenceCharacter = marker.first()
+            fenceLength = marker.length
+            language = fence.groupValues[2].trim()
+        } else if (code && marker != null && marker.first() == fenceCharacter && marker.length >= fenceLength && fence.groupValues[2].isBlank()) {
+            flush()
+            code = false
+            language = ""
+        } else if (!code && line.isBlank()) flush() else lines += line
     }
     flush()
     return result

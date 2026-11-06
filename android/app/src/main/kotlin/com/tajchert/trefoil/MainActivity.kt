@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
                 onSelectThread = model::selectThread,
                 onSend = model::send,
                 onInterrupt = model::interrupt,
+                onLoadActivity = model::loadActivity,
                 onRespond = model::respond,
                 onCreateThread = model::createThread,
                 onReconnect = model::reconnect,

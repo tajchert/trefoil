@@ -162,9 +162,9 @@ class T3ClientTest {
        val id = request.string("id")
        fun chunk(value: String) { webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[$value]}""") }
        when (request.string("tag")) {
-         "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[{"instanceId":"codex","enabled":true,"models":[{"slug":"test","name":"Test"}]}]}}}""")
+         "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[{"instanceId":"codex","driver":"codex","displayName":"Fixture Codex","accentColor":"#123456","enabled":true,"models":[{"slug":"test","name":"Test"}]},{"instanceId":"historical-account","driver":"claudeAgent","displayName":"Previous account","enabled":false,"models":[{"slug":"hidden","name":"Hidden"}]}]}}}""")
          "orchestration.subscribeShell" -> chunk("""{"kind":"snapshot","snapshot":{"snapshotSequence":1,"projects":[{"id":"p","title":"Project","workspaceRoot":"/tmp/p"}],"threads":[{"id":"t","projectId":"p","title":"Thread","status":"idle"}],"archivedThreads":[]}}, {"kind":"synchronized"}""")
-         "orchestration.subscribeThread" -> chunk("""{"kind":"snapshot","snapshotSequence":2,"projection":{"thread":{"id":"t"},"runs":[{"id":"run","status":"waiting"}],"messages":[{"id":"m","role":"assistant","text":"Hello","streaming":true}],"turnItems":[{"id":"item","type":"user_input_request","requestId":"optional","questions":[{"id":"q","question":"Optional?","options":[],"required":false}]}],"runtimeRequests":[{"id":"optional","kind":"user_input","status":"pending","responseCapability":{"type":"live"}},{"id":"unsupported","kind":"auth_refresh","status":"pending","responseCapability":{"type":"not_resumable"}}]}}, {"kind":"synchronized"}""")
+         "orchestration.subscribeThread" -> chunk("""{"kind":"snapshot","snapshotSequence":2,"projection":{"thread":{"id":"t"},"runs":[{"id":"run","status":"waiting","requestedAt":"2026-11-06T10:00:00Z","activeAttemptId":"attempt"}],"attempts":[{"id":"attempt","runId":"run","status":"running","attemptOrdinal":1,"reason":"initial"}],"messages":[{"id":"m","role":"assistant","text":"Hello","streaming":true}],"turnItems":[{"id":"item","type":"user_input_request","requestId":"optional","questions":[{"id":"q","question":"Optional?","options":[],"required":false}]}],"runtimeRequests":[{"id":"optional","kind":"user_input","status":"pending","responseCapability":{"type":"live"}},{"id":"unsupported","kind":"auth_refresh","status":"pending","responseCapability":{"type":"not_resumable"}}]}}, {"kind":"synchronized"}""")
          "orchestration.dispatchCommand" -> { synchronized(mutations) { mutations.add(request.obj("payload")) }
            if (request.obj("payload").string("type") == "runtime-request.respond") webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"sequence":3}}}""")
            else webSocket.close(1000, "disconnect before receipt") }
@@ -184,6 +184,13 @@ class T3ClientTest {
      client.selectThread("t")
      val ready = withTimeout(5_000) { client.state.first { it.canWrite && it.messages.isNotEmpty() } }
      assertEquals("Hello", ready.messages.single().text); assertEquals("run", ready.activeRunId)
+     assertEquals(listOf("codex", "historical-account"), ready.providers.map { it.instanceId })
+     assertEquals("Fixture Codex", ready.providers.first().displayName)
+     assertEquals("#123456", ready.providers.first().accentColor)
+     assertFalse(ready.providers.last().enabled)
+     assertEquals(listOf("test"), ready.models.map { it.model })
+     assertEquals("2026-11-06T10:00:00Z", ready.runs.single().requestedAt)
+     assertEquals("attempt", ready.attempts.single().id)
      assertFalse(ready.requests.first { it.id == "optional" }.questions.single().required)
      assertTrue(ready.requests.first { it.id == "optional" }.canApprove)
      assertFalse(ready.requests.first { it.id == "unsupported" }.canApprove)
@@ -204,6 +211,9 @@ class T3ClientTest {
      assertNull(client.state.value.environment)
      assertFalse(client.state.value.canWrite)
      assertTrue(client.state.value.messages.isEmpty())
+     assertTrue(client.state.value.runs.isEmpty())
+     assertTrue(client.state.value.attempts.isEmpty())
+     assertTrue(client.state.value.providers.isEmpty())
    } finally { client.disconnect(); scope.cancel(); runCatching { server.shutdown() } }
  }
 }

@@ -20,17 +20,50 @@ data class ThreadSummary(
     val blockedOnThreadWait: Boolean? = null, val activityRunStatus: String? = null,
     val snoozedUntil: String? = null, val unsettledAt: String? = null,
     val latestRunRequestedAt: String? = null, val latestRunCompletedAt: String? = null,
+    val latestRunStartedAt: String? = null, val activityRunStartedAt: String? = null,
+    val activityRunStartedAtPresent: Boolean = false,
+    val latestRunId: String? = null, val activeRunId: String? = null,
+    val providerInstanceId: String? = null, val modelInstanceId: String? = null,
+    val providerInstanceHistory: List<String> = emptyList(),
 )
 data class ConversationMessage(
     val id: String, val role: String, val text: String, val streaming: Boolean = false,
     val createdAt: String? = null, val updatedAt: String? = null,
     val runId: String? = null, val ordinal: Int? = null,
+    val runAttemptId: String? = null, val nodeId: String? = null, val providerTurnId: String? = null,
 )
 data class ToolActivity(
     val id: String, val title: String, val detail: String = "",
     val kind: String = "", val status: String = "",
     val startedAt: String? = null, val completedAt: String? = null,
     val runId: String? = null, val ordinal: Int? = null,
+    val runAttemptId: String? = null, val nodeId: String? = null, val providerTurnId: String? = null,
+    val parentItemId: String? = null,
+    val input: String? = null, val output: String? = null, val exitCode: Int? = null,
+    val outputIndicatesFailure: Boolean? = null, val outputOmitted: Boolean = false,
+    val detailsOmitted: Boolean = false,
+    val fileName: String? = null, val diffStr: String? = null,
+    val oldStr: String? = null, val newStr: String? = null,
+    val searchResults: String? = null, val failure: String? = null,
+    val sourceThreadId: String? = null, val sourceItemId: String? = null,
+)
+data class ConversationRun(
+    val id: String, val status: String,
+    val requestedAt: String? = null, val startedAt: String? = null, val completedAt: String? = null,
+    val workStartedAt: String? = null, val ordinal: Int? = null,
+    val activeAttemptId: String? = null, val userMessageId: String? = null,
+    val providerInstanceId: String? = null, val modelInstanceId: String? = null, val model: String? = null,
+)
+data class RunAttempt(
+    val id: String, val runId: String, val status: String,
+    val attemptOrdinal: Int? = null, val reason: String? = null,
+    val startedAt: String? = null, val completedAt: String? = null,
+    val rootNodeId: String? = null, val providerInstanceId: String? = null, val providerTurnId: String? = null,
+)
+/** Routing identity comes from the server catalog, independently of its model names. */
+data class ProviderInstance(
+    val instanceId: String, val driver: String,
+    val displayName: String? = null, val accentColor: String? = null, val enabled: Boolean = true,
 )
 data class Question(val id: String, val title: String, val options: List<String> = emptyList(), val multiple: Boolean = false, val required: Boolean = true)
 data class RuntimeRequest(val id: String, val title: String, val detail: String = "", val questions: List<Question> = emptyList(), val canApprove: Boolean = true)
@@ -50,6 +83,9 @@ data class ClientState(
     val error: String? = null,
     val busy: Boolean = false,
     val canWrite: Boolean = false,
+    val providers: List<ProviderInstance> = emptyList(),
+    val runs: List<ConversationRun> = emptyList(),
+    val attempts: List<RunAttempt> = emptyList(),
 )
 
 /** All commands fail explicitly; implementations must never replay uncertain mutations. */
@@ -59,6 +95,8 @@ interface TrefoilClient {
     suspend fun connect(environment: SavedEnvironment)
     suspend fun disconnect()
     suspend fun selectThread(threadId: String)
+    /** Read a body withheld from the synchronized projection, without dispatching a mutation. */
+    suspend fun loadActivity(itemId: String) { error("Activity details are unavailable") }
     suspend fun sendMessage(text: String)
     suspend fun interruptRun()
     suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>> = emptyMap())

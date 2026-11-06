@@ -37,6 +37,7 @@ class T3Client(
     private var refreshSignals: Channel<Unit>? = null
     private var refreshJob: Job? = null
     private var projection = JsonObject(emptyMap())
+    private var projectionRevision = 0L
     private var threadGeneration = 0L
     // Memory only: navigation/foreground refreshes retain content without writing transcripts to disk.
     private val environmentStates = linkedMapOf<String, ClientState>()
@@ -133,7 +134,7 @@ class T3Client(
             val models = config.objects("providers").filter { it["enabled"]?.jsonPrimitive?.booleanOrNull != false }.flatMap { provider ->
                 provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name")) }
             }
-            update { it.copy(connection = ConnectionStatus.Connected, models = models) }
+            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config)) }
             subscribe("orchestration.subscribeShell", buildJsonObject { put("requestCompletionMarker", true) }, ::shellItem)
             state.value.selectedThreadId?.let { selectThread(it) }
         } catch (error: CancellationException) {
@@ -217,7 +218,7 @@ class T3Client(
         val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
         if (cached != null) applyProjection(cached, threadId)
         else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false) }
-        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), activeRunId = null, canWrite = false) }
+        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), activeRunId = null, canWrite = false) }
         val epoch = generation
         refreshSignals?.close(); refreshJob?.cancel()
         val signals = Channel<Unit>(Channel.CONFLATED)
@@ -244,7 +245,7 @@ class T3Client(
                 when (item.string("kind")) {
                     "snapshot" -> { applyProjection(item.obj("projection")); appliedRevision = revision }
                     "synchronized" -> { synchronizedSeen = true; threadReady = appliedRevision == revision; writable() }
-                    "event" -> { revision++; threadReady = false; writable(); signals.trySend(Unit) }
+                    "event" -> { revision++; projectionRevision++; threadReady = false; writable(); signals.trySend(Unit) }
                 }
             }
         }
@@ -271,7 +272,9 @@ class T3Client(
         }
     }
     private fun project(value: JsonObject) = Project(value.string("id"), value.string("title"), value.string("workspaceRoot"))
-    private fun applyProjection(value: JsonObject, threadId: String? = state.value.selectedThreadId) {
+    private fun applyProjection(incoming: JsonObject, threadId: String? = state.value.selectedThreadId, authoritative: Boolean = true) {
+        if (authoritative) projectionRevision++
+        val value = if (authoritative) retainHydratedActivities(incoming, projection) else incoming
         projection = value
         val current = state.value
         val environmentId = current.environment?.id
@@ -293,8 +296,37 @@ class T3Client(
         }
         val active = value.objects("runs").lastOrNull { it.string("status") in setOf("preparing", "running", "starting", "waiting") }?.string("id")
         update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, messages = conversationMessages(value),
-            activities = toolActivities(value), requests = requests, activeRunId = active) }
+            activities = toolActivities(value), requests = requests, activeRunId = active,
+            runs = conversationRuns(value), attempts = runAttempts(value)) }
     }
+    override suspend fun loadActivity(itemId: String) {
+        val captured = synchronized(lifecycleLock) {
+            check(state.value.connection == ConnectionStatus.Connected && threadReady) { "Wait for a fresh thread connection" }
+            val threadId = state.value.selectedThreadId ?: error("Select a thread")
+            val item = presentationItems(projection).firstOrNull { it.string("id") == itemId } ?: error("Activity is unavailable")
+            check((item["outputOmitted"] as? JsonPrimitive)?.booleanOrNull == true || fileDetailsOmitted(item)) { "Activity details are already loaded" }
+            ActivityRead(generation, threadGeneration, projectionRevision, threadId, item)
+        }
+        val sourceThreadId = captured.item.string("sourceThreadId").ifBlank { captured.threadId }
+        val sourceItemId = captured.item.string("sourceItemId").ifBlank { captured.item.string("id") }
+        val full = rpc("orchestration.getTurnItem", buildJsonObject {
+            put("threadId", sourceThreadId); put("itemId", sourceItemId)
+        }, captured.generation).jsonObject["item"] as? JsonObject ?: error("Activity details are unavailable")
+        synchronized(lifecycleLock) {
+            check(captured.generation == generation && captured.selection == threadGeneration &&
+                captured.revision == projectionRevision && state.value.selectedThreadId == captured.threadId &&
+                state.value.connection == ConnectionStatus.Connected && threadReady) { "Activity changed; load its details again" }
+            check(full.string("id") == sourceItemId && full.string("type") == captured.item.string("type") &&
+                (full["outputOmitted"] as? JsonPrimitive)?.booleanOrNull != true) { "Activity details are unavailable" }
+            check(listOf("status", "startedAt", "completedAt", "updatedAt").all { full[it] == captured.item[it] }) {
+                "Activity changed; refresh its details"
+            }
+            applyProjection(hydrateActivityProjection(projection, itemId, full), captured.threadId, authoritative = false)
+        }
+    }
+    private data class ActivityRead(
+        val generation: Long, val selection: Long, val revision: Long, val threadId: String, val item: JsonObject,
+    )
     private fun requireWrite() { check(state.value.canWrite) { "Wait for a fresh connection before writing" } }
     private fun command(type: String, extra: JsonObject): JsonObject = buildJsonObject {
         put("type", type); put("commandId", UUID.randomUUID().toString()); put("threadId", state.value.selectedThreadId ?: error("Select a thread")); extra.forEach { (key, value) -> put(key, value) }

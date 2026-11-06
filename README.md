@@ -8,8 +8,8 @@
 
 - SSH connections with password or private-key login, verified host fingerprints and automatic pairing through an encrypted tunnel.
 - Direct HTTPS pairing and encrypted credentials for saved environments.
-- Searchable T3-style thread shelves with pinned, working, snoozed, settled and archived groups.
-- Ordered conversations with streaming updates, expandable work activity, basic Markdown and code copying.
+- Searchable T3-style thread shelves with provider/account icons, live work timers, and pinned, working, snoozed, settled and archived groups.
+- Ordered conversations with successful-turn folds, typed command/file/search activity, on-demand output/details, basic Markdown and copy controls.
 - Text messages, queueing during active runs and interrupting a run.
 - Supported live approvals and questions, plus new conversations with server-provided models.
 - Phone and wide layouts, light/dark themes, retained drafts and explicit reconnect.

@@ -23,12 +23,15 @@ class RetainedSessionTest {
         val subscriptions = AtomicInteger()
         @Volatile var environmentId = "env"
         @Volatile var holdConfiguration = false
+        @Volatile var mayOperate = true
         val configurations = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
+        val itemReads = Channel<Pair<WebSocket, JsonObject>>(Channel.UNLIMITED)
+        val otherCalls = Channel<String>(Channel.UNLIMITED)
         init {
             server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse = when {
                     request.path == "/.well-known/t3/environment" -> json("""{"environmentId":"$environmentId","orchestrationProtocolVersion":2}""")
-                    request.path == "/api/auth/session" -> json("""{"authenticated":true,"permissions":["orchestration:operate"]}""")
+                    request.path == "/api/auth/session" -> json("""{"authenticated":true,"permissions":["orchestration:read"${if (mayOperate) ",\"orchestration:operate\"" else ""}]}""")
                     request.path.orEmpty().startsWith("/api/auth/websocket-ticket") -> json("""{"ticket":"fixture"}""")
                     request.path.orEmpty().startsWith("/ws?") -> MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
@@ -41,6 +44,8 @@ class RetainedSessionTest {
                                 "server.getConfig" -> if (holdConfiguration) { configurations.trySend(webSocket to id); Unit } else webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
                                 "orchestration.subscribeShell" -> shells.trySend(webSocket to id)
                                 "orchestration.subscribeThread" -> { subscriptions.incrementAndGet(); threads.trySend(webSocket to id) }
+                                "orchestration.getTurnItem" -> itemReads.trySend(webSocket to frame)
+                                else -> otherCalls.trySend(frame.string("tag"))
                             }
                         }
                     })
@@ -188,4 +193,139 @@ class RetainedSessionTest {
             assertTrue(f.client.state.value.canWrite)
         }
     }
+
+    @Test fun conversationRunMetadataIsRetainedWithItsProjectionAndClearedForUncachedSelections() = runBlocking {
+        Fixture().use { f ->
+            f.shell(f.connect()); f.client.selectThread("working")
+            f.chunk(withTimeout(5000) { f.threads.receive() }, """{"kind":"snapshot","projection":{
+                "messages":[],"turnItems":[],"runtimeRequests":[],
+                "runs":[{"id":"original-run","status":"completed","completedAt":"2026-11-06T10:00:00Z"}],
+                "attempts":[{"id":"original-attempt","runId":"original-run","status":"completed"}]
+            }}, {"kind":"synchronized"}""")
+            assertEquals("original-run", f.client.state.value.runs.single().id)
+            f.client.selectThread("open-0")
+            assertTrue(f.client.state.value.runs.isEmpty())
+            assertTrue(f.client.state.value.attempts.isEmpty())
+            f.threadSnapshot(withTimeout(5000) { f.threads.receive() }, "Other thread")
+            f.client.disconnect()
+            f.client.selectThread("working")
+            assertEquals("original-run", f.client.state.value.runs.single().id)
+            assertEquals("original-attempt", f.client.state.value.attempts.single().id)
+            assertFalse(f.client.state.value.canWrite)
+            f.client.disconnect(); f.environmentId = "other-env"; f.connect()
+            assertTrue(f.client.state.value.runs.isEmpty())
+            assertTrue(f.client.state.value.attempts.isEmpty())
+        }
+    }
+
+    @Test fun strippedFileDiffLoadsOnDemandAndSurvivesUnchangedSnapshotOnly() = runBlocking {
+        Fixture().use { f ->
+            f.shell(f.connect()); f.client.selectThread("working")
+            val stream = withTimeout(5000) { f.threads.receive() }
+            val snapshot = """{"kind":"snapshot","projection":{"messages":[],"runs":[],"runtimeRequests":[],"turnItems":[{"id":"file","type":"file_change","fileName":"Main.kt","status":"completed","updatedAt":"2026-11-06T10:00:00Z"}]}}, {"kind":"synchronized"}"""
+            f.chunk(stream, snapshot)
+            val load = async { f.client.loadActivity("file") }
+            val (socket, request) = withTimeout(5000) { f.itemReads.receive() }
+            socket.send("""{"_tag":"Exit","requestId":"${request.string("id")}","exit":{"_tag":"Success","value":{"item":{"id":"file","type":"file_change","fileName":"Main.kt","status":"completed","updatedAt":"2026-11-06T10:00:00Z","diffStr":"-old +new"}}}}""")
+            load.await()
+            assertEquals("-old +new", f.client.state.value.activities.single().diffStr)
+            f.chunk(stream, snapshot)
+            assertEquals("-old +new", f.client.state.value.activities.single().diffStr)
+            f.chunk(stream, snapshot.replace("10:00:00Z", "10:01:00Z"))
+            assertNull(f.client.state.value.activities.single().diffStr)
+            assertTrue(f.otherCalls.tryReceive().isFailure)
+        }
+    }
+    @Test fun expandingOmittedOutputUsesReadRpcAndRetainsTheHydratedProjectionOffline() = runBlocking {
+        Fixture().use { f ->
+            f.mayOperate = false
+            f.shell(f.connect()); f.client.selectThread("working")
+            f.chunk(withTimeout(5000) { f.threads.receive() }, omittedSnapshot)
+            assertFalse(f.client.state.value.canWrite)
+            val load = async { f.client.loadActivity("command") }
+            val (socket, request) = withTimeout(5000) { f.itemReads.receive() }
+            assertEquals("working", request.obj("payload").string("threadId"))
+            assertEquals("command", request.obj("payload").string("itemId"))
+            socket.send("""{"_tag":"Exit","requestId":"${request.string("id")}","exit":{"_tag":"Success","value":{"item":$fullCommand}}}""")
+            load.await()
+            assertEquals("Full output", f.client.state.value.activities.single().output)
+            assertFalse(f.client.state.value.activities.single().outputOmitted)
+            f.client.disconnect(); f.client.selectThread("working")
+            assertEquals("Full output", f.client.state.value.activities.single().output)
+            assertFalse(f.client.state.value.canWrite)
+            try { f.client.loadActivity("command"); fail("Offline reads must fail") } catch (_: IllegalStateException) { }
+            assertTrue(f.otherCalls.tryReceive().isFailure)
+        }
+    }
+
+    @Test fun failedOutputReadCanRetryWithoutDisconnectingOrDispatchingAMutation() = runBlocking {
+        Fixture().use { f ->
+            f.shell(f.connect()); f.client.selectThread("working")
+            f.chunk(withTimeout(5000) { f.threads.receive() }, omittedSnapshot)
+            val failed = async { runCatching { f.client.loadActivity("command") } }
+            val (socket, request) = withTimeout(5000) { f.itemReads.receive() }
+            socket.send("""{"_tag":"Exit","requestId":"${request.string("id")}","exit":{"_tag":"Failure","cause":{}}}""")
+            assertTrue(failed.await().isFailure)
+            assertEquals(ConnectionStatus.Connected, f.client.state.value.connection)
+            assertTrue(f.client.state.value.activities.single().outputOmitted)
+            val retry = async { f.client.loadActivity("command") }
+            val second = withTimeout(5000) { f.itemReads.receive() }
+            second.first.send("""{"_tag":"Exit","requestId":"${second.second.string("id")}","exit":{"_tag":"Success","value":{"item":$fullCommand}}}""")
+            retry.await()
+            assertEquals("Full output", f.client.state.value.activities.single().output)
+            assertTrue(f.otherCalls.tryReceive().isFailure)
+        }
+    }
+
+    @Test fun inheritedActivityReadsUseItsExplicitOwnerAndPreserveTheVisiblePosition() = runBlocking {
+        Fixture().use { f ->
+            f.shell(f.connect()); f.client.selectThread("working")
+            f.chunk(withTimeout(5000) { f.threads.receive() }, """{"kind":"snapshot","projection":{"messages":[],"runs":[],"runtimeRequests":[],
+                "visibleTurnItems":[{"position":12,"sourceThreadId":"parent","sourceItemId":"source-command","item":{
+                "id":"visible-command","threadId":"parent","type":"command_execution","ordinal":3,"runId":"parent-run",
+                "status":"completed","updatedAt":"2026-11-06T10:00:00Z","input":"test","outputOmitted":true}}]}}, {"kind":"synchronized"}""")
+            val load = async { f.client.loadActivity("visible-command") }
+            val (socket, request) = withTimeout(5000) { f.itemReads.receive() }
+            assertEquals("parent", request.obj("payload").string("threadId"))
+            assertEquals("source-command", request.obj("payload").string("itemId"))
+            val full = fullCommand.replace("\"command\"", "\"source-command\"").replace("\"working\"", "\"parent\"")
+            socket.send("""{"_tag":"Exit","requestId":"${request.string("id")}","exit":{"_tag":"Success","value":{"item":$full}}}""")
+            load.await()
+            val activity = f.client.state.value.activities.single()
+            assertEquals("visible-command", activity.id)
+            assertEquals("parent-run", activity.runId)
+            assertEquals(12, activity.ordinal)
+            assertEquals("Full output", activity.output)
+            assertEquals("source-command", activity.sourceItemId)
+        }
+    }
+
+    @Test fun lateOutputReadCannotOverwriteANewerProjectionOrAnotherThread() = runBlocking {
+        Fixture().use { f ->
+            f.shell(f.connect()); f.client.selectThread("working")
+            val stream = withTimeout(5000) { f.threads.receive() }
+            f.chunk(stream, omittedSnapshot)
+            val load = async { runCatching { f.client.loadActivity("command") } }
+            val (socket, request) = withTimeout(5000) { f.itemReads.receive() }
+            f.chunk(stream, omittedSnapshot.replace("completed", "failed").replace("10:00:00Z", "10:01:00Z"))
+            socket.send("""{"_tag":"Exit","requestId":"${request.string("id")}","exit":{"_tag":"Success","value":{"item":$fullCommand}}}""")
+            assertTrue(load.await().isFailure)
+            assertEquals("failed", f.client.state.value.activities.single().status)
+            assertTrue(f.client.state.value.activities.single().outputOmitted)
+            val secondLoad = async { runCatching { f.client.loadActivity("command") } }
+            val second = withTimeout(5000) { f.itemReads.receive() }
+            f.client.selectThread("open-0")
+            second.first.send("""{"_tag":"Exit","requestId":"${second.second.string("id")}","exit":{"_tag":"Success","value":{"item":$fullCommand}}}""")
+            assertTrue(secondLoad.await().isFailure)
+            assertEquals("open-0", f.client.state.value.selectedThreadId)
+            assertTrue(f.client.state.value.activities.isEmpty())
+            assertTrue(f.otherCalls.tryReceive().isFailure)
+        }
+    }
+
+    private val omittedSnapshot = """{"kind":"snapshot","projection":{"messages":[],"runtimeRequests":[],"runs":[],"turnItems":[
+        {"id":"command","type":"command_execution","threadId":"working","ordinal":7,"status":"completed",
+        "updatedAt":"2026-11-06T10:00:00Z","input":"test","outputOmitted":true}]}}, {"kind":"synchronized"}"""
+    private val fullCommand = """{"id":"command","type":"command_execution","threadId":"working","ordinal":7,"status":"completed",
+        "updatedAt":"2026-11-06T10:00:00Z","input":"test","output":"Full output","exitCode":0}"""
 }

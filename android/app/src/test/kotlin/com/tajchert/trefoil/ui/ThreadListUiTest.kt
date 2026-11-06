@@ -24,12 +24,13 @@ import java.io.File
 class ThreadListUiTest {
     @get:Rule val compose = createComposeRule()
     private val fixture = ClientState(connection = ConnectionStatus.Connected, canWrite = true,
+        providers = listOf(ProviderInstance("team", "codex", "Work Codex", "#326B41"), ProviderInstance("claudeAgent", "claudeAgent", "Claude")),
         projects = listOf(Project("trefoil", "Trefoil"), Project("t3", "T3 Code")),
         threads = listOf(
-            ThreadSummary("pin", "trefoil", "Give every conversation a little more clarity", "completed", pinnedAt = "2026-11-06T08:00:00Z", branch = "feat/conversation-ui"),
+            ThreadSummary("pin", "trefoil", "Give every conversation a little more clarity", "completed", pinnedAt = "2026-11-06T08:00:00Z", branch = "feat/conversation-ui", providerInstanceId = "team", providerInstanceHistory = listOf("claudeAgent")),
             ThreadSummary("approval", "trefoil", "Review the connection flow", "running", pendingRequestKind = "approval"),
             ThreadSummary("active", "trefoil", "Polish the Android thread list", "completed"),
-            ThreadSummary("work", "t3", "Keep activity in the right order", "running"),
+            ThreadSummary("work", "t3", "Keep activity in the right order", "running", providerInstanceId = "claudeAgent", activityRunStartedAt = java.time.Instant.now().minusSeconds(150).toString(), activityRunStartedAtPresent = true),
             ThreadSummary("done", "trefoil", "Secure environment storage", "completed", settledAt = "2026-11-06T08:00:00Z")
         ))
     @Test fun searchFindsProjectAndCollapseHidesEvenTheSelectedThread() {
@@ -57,6 +58,12 @@ class ThreadListUiTest {
         compose.onNode(hasSetTextAction()).assertTextContains("Polish")
         compose.onNodeWithText("Review the connection flow").assertDoesNotExist()
     }
+    @Test fun providerMarksAndWorkingDurationUseServerMetadata() {
+        compose.setContent { TrefoilTheme { ThreadList(fixture, {}, {}) } }
+        compose.onNodeWithContentDescription("Agent: Work Codex").assertExists()
+        compose.onNodeWithContentDescription("Agent: Claude").assertExists()
+        compose.onNodeWithText("Working 2m").assertExists()
+    }
     @Test fun renderOfflineThreadList() {
         compose.setContent { TrefoilTheme { Surface { Box(Modifier.size(411.dp, 810.dp)) { ThreadList(fixture, {}, {}) } } } }
         compose.waitForIdle()
@@ -71,11 +78,25 @@ class ThreadListUiTest {
         output.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
         assertTrue(output.length() > 0)
     }
+    @Test fun renderCommandWorkLog() {
+        val state = fixture.copy(selectedThreadId = "work", activeRunId = "run", messages = listOf(
+            ConversationMessage("prompt", "user", "Run the Android checks and investigate any failures.", runId = "run", ordinal = 0)),
+            activities = listOf(
+                ToolActivity("search", "file_search", kind = "file_search", status = "completed", input = "ConnectionPolicy", runId = "run", ordinal = 1),
+                ToolActivity("command", "command_execution", kind = "command_execution", status = "failed", input = "./gradlew :app:testDebugUnitTest", output = "> Task :app:testDebugUnitTest\n\nConnectionPolicyTest > validates consent FAILED\nExpected explicit private LAN consent.\n\n1 test failed", exitCode = 1, runId = "run", ordinal = 2)))
+        compose.setContent { TrefoilTheme { Surface { Box(Modifier.size(411.dp, 810.dp)) { Conversation(state, {}, {}, { _, _, _ -> }) } } } }
+        compose.waitForIdle()
+        val output = File("build/reports/ui/command-work-log.png").apply { parentFile?.mkdirs() }
+        output.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
+        assertTrue(output.length() > 0)
+    }
     @Test fun renderOfflineConversation() {
         val state = fixture.copy(selectedThreadId = "pin", messages = listOf(
-            ConversationMessage("user", "user", "Make the conversation calmer and easier to follow.", ordinal = 0),
-            ConversationMessage("answer", "assistant", "## A clearer conversation\n\nYour **ideas stay in focus**, with room for the work to breathe.\n\n- Related activity stays together.\n- Code is easier to read.\n- New replies follow naturally.\n\n```kotlin\nConversation(state = state)\n```", ordinal = 3)
-        ), activities = listOf(ToolActivity("read", "Read ThreadFeed.tsx", "Inspect message groups", runId = "run", ordinal = 1), ToolActivity("test", "Run Android checks", "BUILD SUCCESSFUL", runId = "run", ordinal = 2)))
+            ConversationMessage("user", "user", "Make the conversation calmer and easier to follow.", ordinal = 0, runId = "run", createdAt = "2026-11-06T10:00:00Z"),
+            ConversationMessage("commentary", "assistant", "I’ll compare the message hierarchy and run the Android checks.", ordinal = 1, runId = "run"),
+            ConversationMessage("answer", "assistant", "## A clearer conversation\n\nYour **ideas stay in focus**, with room for the work to breathe.\n\n- Related activity stays together.\n- Code is easier to read.\n- New replies follow naturally.\n\n```kotlin\nConversation(state = state)\n```", ordinal = 4, runId = "run", createdAt = "2026-11-06T10:01:30Z")
+        ), activities = listOf(ToolActivity("read", "Read ThreadFeed.tsx", "Inspect message groups", kind = "file_read", status = "completed", runId = "run", ordinal = 2), ToolActivity("test", "Run Android checks", kind = "command_execution", status = "completed", input = "./gradlew test", output = "BUILD SUCCESSFUL", exitCode = 0, runId = "run", ordinal = 3)),
+            runs = listOf(ConversationRun("run", "completed", startedAt = "2026-11-06T10:00:00Z", completedAt = "2026-11-06T10:01:30Z")))
         compose.setContent { TrefoilTheme { Surface { Box(Modifier.size(411.dp, 810.dp)) { Conversation(state, {}, {}, { _, _, _ -> }) } } } }
         compose.waitForIdle()
         val output = File("build/reports/ui/conversation.png").apply { parentFile?.mkdirs() }
