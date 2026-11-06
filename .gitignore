@@ -3,6 +3,8 @@
 **/build/
 local.properties
 *.jks
+*.keystore
+*.p12
 keystore.properties
 .superpowers/
 .worktrees/

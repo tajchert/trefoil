@@ -1,58 +1,61 @@
-# Trefoil
+# ☘️ Trefoil
 
-Native Android client for T3 Code, built with Kotlin and Jetpack Compose.
-Application ID: `com.tajchert.trefoil`. Native iOS is planned.
+**T3 Code, within reach.** A native Android client built with Kotlin and Jetpack Compose, with selected foundations from [Flocket](https://github.com/tajchert/flocket).
 
-Trefoil uses T3's projects, durable conversation threads and runtime requests.
-It connects directly to a T3 environment over HTTPS and Effect RPC WebSockets.
-The app reuses selected Android foundations from [Flocket](https://github.com/tajchert/flocket).
+[Download the latest APK](https://github.com/tajchert/trefoil/releases/latest) · [Release notes](https://github.com/tajchert/trefoil/releases) · [Implementation status](docs/IMPLEMENTATION_STATUS.md)
 
-## Development
+## 📱 What works
 
-Install Java 21 and Android SDK platform 37.0. Set `ANDROID_HOME`, or create
-`android/local.properties` with `sdk.dir=/your/android/sdk`.
+- Direct T3 pairing and encrypted credentials for saved environments.
+- Projects, threads and native conversations with streaming updates.
+- Text messages, queueing during active runs and interrupting a run.
+- Supported live approvals and questions, plus new conversations with server-provided models.
+- Phone and wide layouts, light/dark themes, retained drafts and explicit reconnect.
+
+**Early release:** attachments, rich Markdown, diffs, shell terminals, notifications, T3 Connect relay and iOS are still planned. Some provider requests require another T3 client. See [current limits and validation](docs/IMPLEMENTATION_STATUS.md).
+
+## Connect
+
+1. Install the [signed release APK](https://github.com/tajchert/trefoil/releases/latest) on Android **10 or newer**.
+2. Create a direct pairing link in your T3 environment.
+3. In Trefoil, choose **Pair an environment**, paste the link and give it a name.
+
+Use an HTTPS endpoint reachable from your phone with a trusted certificate. Trefoil supports T3 orchestration protocol **V2**, pinned to the [documented contract](protocol/SPEC.md).
+
+Tokens are encrypted with Android Keystore and excluded from backups. Forgetting an environment removes its local credentials; revoke the session in T3 to revoke server access. Remote work continues when Trefoil closes. Uncertain writes are never automatically replayed—check the conversation before retrying.
+
+## 🛠️ Build
+
+Requires Java **21** and Android SDK platform **37.0**. Set `ANDROID_HOME` or `sdk.dir` in the ignored `android/local.properties`.
 
 ```sh
 cd android
 ./gradlew :core:protocol:test :core:session:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-The debug APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
+Debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
 
-## Connecting
+For a signed release, configure the ignored `android/keystore.properties`, then run:
 
-Create a direct pairing link in your T3 environment. In Trefoil, select
-**Pair an environment**, paste the link and give it a name. Use an HTTPS
-endpoint reachable from your phone with a trusted certificate. Pairing credentials
-are exchanged for access tokens; saved access tokens are encrypted using Android
-Keystore and excluded from backups. Forgetting an environment removes its local
-credentials; revoke its session in T3 to revoke server access too.
+```sh
+cd android
+./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
+```
 
-For isolated development only, loopback HTTP is permitted. Android Emulator can
-reach the development host through `10.0.2.2`. Production connections require HTTPS.
-Never paste a real pairing credential into an issue, log or test fixture.
+[Signing and release instructions](docs/RELEASING.md) · [Isolated T3 interoperability check](docs/reference/live-wire-validation.md)
 
-## Scope
-
-The first Android implementation covers direct pairing, saved environments,
-projects/threads, native conversation rendering, streaming updates, text messages,
-interrupting runs, runtime approvals/questions and reconnect. It uses T3 V2 full
-projections initially. Verify supported details and constraints in [protocol](protocol/SPEC.md).
-
-This is an early client, with no claim of feature parity. Attachments, rich Markdown,
-diffs/checkpoints, shell terminals, notifications, T3 Connect relay and native iOS
-are follow-on work. Remote work continues when the app closes. Failed writes are
-never automatically replayed; inspect remote state before retrying an uncertain action.
-
-For validation evidence and precise limits, see [implementation status](docs/IMPLEMENTATION_STATUS.md).
+Loopback HTTP is allowed for local development only; Android Emulator reaches the host through `10.0.2.2`. Remote endpoints require HTTPS.
 
 ## Project
 
-- `android/core/model`: shared native client contract and immutable UI data.
-- `android/core/protocol`: Effect RPC wire handling.
-- `android/core/session`: direct authorization, subscriptions and commands.
-- `android/app`: Compose UI, lifecycle and encrypted local credentials.
-- `protocol`: pinned T3 integration documentation and fixtures.
-- [Design](docs/superpowers/specs/2026-11-06-trefoil-design.md) and [implementation plan](docs/superpowers/plans/2026-11-06-trefoil.md).
+| Path | Purpose |
+|---|---|
+| `android/core/model` | Native client contract and immutable state |
+| `android/core/protocol` | Effect RPC wire handling |
+| `android/core/session` | Authorization, subscriptions and commands |
+| `android/app` | Compose UI, lifecycle and encrypted credentials |
+| `protocol` | Platform-independent contract and fixtures for future iOS |
 
-Apache-2.0; see [LICENSE](LICENSE), [NOTICE](NOTICE) and [T3 MIT attribution](licenses/T3-Code-MIT.txt).
+Application ID: `com.tajchert.trefoil`. Trefoil is an independent client for T3 Code.
+
+Apache-2.0 · [License](LICENSE) · [Notices](NOTICE) · [T3 attribution](licenses/T3-Code-MIT.txt)
