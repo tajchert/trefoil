@@ -83,9 +83,11 @@ data class ClientState(
     val error: String? = null,
     val busy: Boolean = false,
     val canWrite: Boolean = false,
+    val canRead: Boolean = false,
     val providers: List<ProviderInstance> = emptyList(),
     val runs: List<ConversationRun> = emptyList(),
     val attempts: List<RunAttempt> = emptyList(),
+    val screens: ScreenCatalog = ScreenCatalog(),
 )
 
 /** All commands fail explicitly; implementations must never replay uncertain mutations. */
@@ -95,6 +97,9 @@ interface TrefoilClient {
     suspend fun connect(environment: SavedEnvironment)
     suspend fun disconnect()
     suspend fun selectThread(threadId: String)
+    suspend fun refreshScreens() { error("Remote screens are unavailable") }
+    suspend fun screenAccess(target: ScreenTarget): ScreenAccess { error("Remote screens are unavailable") }
+    fun isScreenAccessCurrent(access: ScreenAccess): Boolean = false
     /** Read a body withheld from the synchronized projection, without dispatching a mutation. */
     suspend fun loadActivity(itemId: String) { error("Activity details are unavailable") }
     suspend fun sendMessage(text: String)

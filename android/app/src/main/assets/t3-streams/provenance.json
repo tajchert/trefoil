@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/tajchert/t3code",
+  "upstream": "https://github.com/pingdotgg/t3code",
+  "revision": "46449b5379a0089f4ef3ce85bce10a1d28beb4cb",
+  "bundles": {
+    "device-stream.js": {
+      "generatedSource": "apps/mobile/.generated/device-stream/index.js",
+      "sha256": "bfd0fc06b2da6fef631daabee2519aadf238b27315193d8f959a2380bf7f592d",
+      "upstreamSha256": "164609ac3a58ec436062f6888efde6161353d11f861aa7832a2417ec734fa86c",
+      "patch": {
+        "name": "device-unicode-text-export-v1",
+        "before": "return e.command=rd,e.start=id,e.stop=nd,e})({});",
+        "after": "return e.text=function(text){td?.sendText(text)},e.command=rd,e.start=id,e.stop=nd,e})({});",
+        "activeClientMarker": "var td=null;function nd(){td?.stop(),td=null}"
+      },
+      "entryPoint": "apps/mobile/src/features/devices/device-stream.browser.ts"
+    },
+    "preview-stream.js": {
+      "generatedSource": "apps/mobile/.generated/preview-stream/index.js",
+      "sha256": "019bd8afe7daca21e096e04235b4c9fe3cf4f6798a01ab47219aaffe5637e6b0",
+      "upstreamSha256": "019bd8afe7daca21e096e04235b4c9fe3cf4f6798a01ab47219aaffe5637e6b0",
+      "patch": null,
+      "entryPoint": "apps/mobile/src/features/browser/preview-stream.browser.ts"
+    }
+  }
+}

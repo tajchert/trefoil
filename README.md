@@ -12,6 +12,7 @@
 - Ordered conversations with successful-turn folds, typed command/file/search activity, on-demand output/details, basic Markdown and copy controls.
 - Text messages, queueing during active runs and interrupting a run.
 - Supported live approvals and questions, plus new conversations with server-provided models.
+- Browser and attached-device pixel streams with touch/input controls and immersive phone fullscreen.
 - Phone and wide layouts, light/dark themes, retained drafts and explicit reconnect.
 
 **Early release:** attachments, full Markdown support, diffs, shell terminals, notifications, T3 Connect relay and iOS are still planned. Some provider requests require another T3 client. See [current limits and validation](docs/IMPLEMENTATION_STATUS.md).
@@ -31,6 +32,12 @@ The server must already be installed and running; Trefoil does not install, upda
 HTTPS endpoints must be reachable from your phone with a trusted certificate. Version 0.3.0 also accepts HTTP on literal private IPv4 LAN addresses after you explicitly enable **Allow unencrypted HTTP on this private network**. That choice is saved per environment; public internet HTTP is blocked. Trefoil supports T3 orchestration protocol **V2**, pinned to the [documented contract](protocol/SPEC.md).
 
 Tokens are encrypted with Android Keystore and excluded from backups. Forgetting an environment removes its local credentials; revoke the session in T3 to revoke server access. Remote work continues when Trefoil closes. Uncertain writes are never automatically replayed—check the conversation before retrying.
+
+## Remote screens
+
+Choose a conversation, then tap **Screen sessions** in the toolbar. Open one of its existing browser tabs or attached devices. Tap **Enter full screen** to hide app/system chrome; the floating exit button restores it without restarting the stream. Browser controls include explicit takeover/release, back/forward/reload and text; devices provide supported home/back/app-switcher/rotation/text controls.
+
+Media stays on your validated T3 connection, including SSH. Reconnect gets a new ticket; gestures are never replayed. This release supports the standard HTTP/WebSocket JPEG/H.264/MJPEG paths. WebRTC-only hosts, native multitouch and arbitrary iOS text paste are not supported. Update Android System WebView for codec support. [Screen protocol and validation](protocol/SCREENS.md).
 
 ## 🛠️ Build
 

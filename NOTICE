@@ -6,10 +6,14 @@ Flocket, Copyright 2026 Michal Tajchert and Flocket contributors (Apache-2.0).
 Flocket baseline: afbd8315809c6f9c7e209692ea0b18493eadb13c.
 
 The T3 protocol implementation and adapted native mobile presentation, including
-provider vector marks, are based on contracts, mobile UI and runtime behavior in
+provider vector marks and trusted pixel stream viewers, are based on contracts, mobile UI and runtime behavior in
 T3 Code, Copyright (c) 2026 T3 Tools Inc., licensed under MIT.
 T3 baseline: 46449b5379a0089f4ef3ce85bce10a1d28beb4cb.
 See licenses/T3-Code-MIT.txt.
 
 The encrypted SSH key fixture in core SSH/model tests is adapted from Flocket
 test data and is not a production credential.
+
+The bundled T3 screen viewers include Effect 4.1.2 runtime/Schema code,
+Copyright (c) 2023 Effectful Technologies Inc., licensed under MIT.
+Effect's license and third-party notices are included with the viewer assets.

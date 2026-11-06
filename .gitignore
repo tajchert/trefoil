@@ -9,3 +9,5 @@ keystore.properties
 .superpowers/
 .worktrees/
 .DS_Store
+
+__pycache__/

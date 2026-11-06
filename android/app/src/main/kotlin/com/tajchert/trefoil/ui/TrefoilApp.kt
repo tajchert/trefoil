@@ -26,6 +26,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.ui.screens.ScreenViewerState
+import com.tajchert.trefoil.ui.screens.ScreenSessionsScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +46,11 @@ fun TrefoilApp(
     onSshKeyPickerActive: (Boolean) -> Unit = {},
     connectionAttempt: ConnectionAttempt = ConnectionAttempt(),
     onLoadActivity: (String) -> Unit = {},
+    screenViewer: ScreenViewerState = ScreenViewerState(),
+    onRefreshScreens: () -> Unit = {},
+    onOpenScreen: (ScreenTarget) -> Unit = {},
+    onCloseScreen: () -> Unit = {},
+    isScreenAccessCurrent: (ScreenAccess) -> Boolean = { false },
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -52,6 +59,9 @@ fun TrefoilApp(
         var pairing by rememberSaveable { mutableStateOf(false) }
         var choosingEnvironment by rememberSaveable { mutableStateOf(false) }
         var creating by rememberSaveable { mutableStateOf(false) }
+        var showScreens by rememberSaveable(state.environment?.id) { mutableStateOf(false) }
+        var screenFullscreen by rememberSaveable { mutableStateOf(false) }
+        LaunchedEffect(state.environment?.id, screenViewer.target) { if (screenViewer.target == null) screenFullscreen = false }
         var showThread by rememberSaveable { mutableStateOf(false) }
         var submittedSsh by remember { mutableStateOf(false) }
         var submittedPair by remember { mutableStateOf(false) }
@@ -65,9 +75,9 @@ fun TrefoilApp(
         Surface(Modifier.fillMaxSize()) {
             BoxWithConstraints {
                 val wide = maxWidth >= 840.dp
-                BackHandler((showThread || choosingEnvironment) && !wide) { showThread = false; choosingEnvironment = false }
+                BackHandler(!showScreens && (showThread || choosingEnvironment) && !wide) { showThread = false; choosingEnvironment = false }
                 Scaffold(topBar = {
-                    TopAppBar(title = {
+                    if (!showScreens) TopAppBar(title = {
                         Column {
                             Text("Trefoil", fontWeight = FontWeight.Bold)
                             Text(state.environment?.let { "${it.name} · ${state.connection.name}" } ?: "Your work, within reach", style = MaterialTheme.typography.labelMedium,
@@ -77,15 +87,20 @@ fun TrefoilApp(
                         if (showThread && !wide) IconButton(onClick = { showThread = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to threads") }
                         else Icon(Icons.Default.Spa, null, Modifier.padding(start = 20.dp, end = 8.dp), tint = MaterialTheme.colorScheme.primary)
                     }, actions = {
+                        if (state.environment != null) IconButton(onClick = { showScreens = true }, enabled = !state.busy) { Icon(Icons.Default.Devices, "Screen sessions") }
                         if (savedEnvironments.isNotEmpty()) IconButton(onClick = { choosingEnvironment = true; showThread = false }) { Icon(Icons.Default.Dns, "Saved environments") }
                         IconButton(onClick = { adding = true }, enabled = !state.busy) { Icon(Icons.Default.AddLink, "Add environment") }
                         if (state.environment != null) IconButton(onClick = { onDisconnect(); choosingEnvironment = true; showThread = false }) { Icon(Icons.Default.LinkOff, "Disconnect environment") }
                     })
                 }) { padding ->
                     Column(Modifier.padding(padding).imePadding()) {
-                        ConnectionBanner(state, onReconnect)
+                        if (!showScreens || !screenFullscreen) ConnectionBanner(state, onReconnect)
                         if (state.environment == null || choosingEnvironment) {
                             EnvironmentScreen(savedEnvironments, state.busy, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true }, { sshConnecting = true })
+                        } else if (showScreens) {
+                            ScreenSessionsScreen(state, screenViewer, screenFullscreen, { screenFullscreen = it }, onRefreshScreens, onOpenScreen,
+                                { screenFullscreen = false; onCloseScreen() }, { screenFullscreen = false; showScreens = false; onCloseScreen() },
+                                Modifier.weight(1f), isAccessCurrent = isScreenAccessCurrent)
                         } else Row(Modifier.weight(1f)) {
                             if (wide || !showThread) {
                                 Box(if (wide) Modifier.width(320.dp).fillMaxHeight() else Modifier.fillMaxSize()) {

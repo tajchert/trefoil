@@ -1,0 +1,17 @@
+# Remote screen sessions
+
+Pinned to T3 Code `46449b5379a0089f4ef3ce85bce10a1d28beb4cb`. This is optional beside orchestration V2; a screen failure must not disconnect conversations.
+
+Discovery is read-only: `preview.list {threadId}` plus `subscribePreviewEvents {}` lists server browser tabs; `device.list {inspectOnly:true}` plus `subscribeDeviceState {}` lists existing attached sessions. Device identity is `(hostId, deviceId)`, never deviceId alone. Trefoil does not open/boot/install devices or create browser tabs during discovery. Epoch/revision reconciliation rejects stale lists and closed sessions.
+
+Bearer clients POST `/api/auth/websocket-ticket/media` for each viewer attempt. The short-lived ticket enters `query.wsTicket`; the bearer never enters JavaScript. Browser base `/api/preview-stream`, device base `/api/device-hub`, and `hostId` query for devices all stay on the current validated environment origin, including its current SSH loopback tunnel. Tickets and tunnel ports are not persisted. Environment/transport/selection generation changes invalidate access, even when navigating away and back to the same thread.
+
+Browser input needs `preview:operate`, device input `orchestration:operate`; read-only viewers may still stream. Browser ownership is established by stream control messages; explicit Take control requests are permitted, other inputs require ownership. Device controls also require the stream's input-connected handshake. No input is queued or replayed after disconnect/pause.
+
+The trusted T3 mobile JavaScript viewers are bundled under `android/app/src/main/assets/t3-streams`, with revision, hashes, one recorded Unicode text export and MIT/Effect notices. They implement browser JPEG/ACK/backpressure and device H.264/SEMU/MJPEG, letterbox/orientation mapping and single-pointer gestures. The native shell does not navigate to remote page HTML: it paints the host's pixel stream.
+
+The WebView serves one exact random bootstrap document URL from memory. Android/browser uses a synthetic secure localhost origin for WebCodecs; iOS MJPEG uses the approved environment origin, matching RN. Every other main-frame document, external navigation, file/content access, popup, worker, permission, download and remote script is blocked. CSP permits only the validated media origin and HTTP requests are additionally limited to the exact media API root. TLS errors fail closed. WebRTC is disabled because ICE destinations escape that validated HTTP/WS route; WebRTC-only hosts are not supported in this release.
+
+Native Screens state retains selection while reconnecting. A fresh readable connection refreshes/awaits the catalog before minting new access, including read-only clients. Pause destroys input access; resume uses a new ticket. Fullscreen changes chrome and system bars without replacing the viewer. Device gestures are single touch; arbitrary iOS text paste and Android serve-sim HID paste are not supported.
+
+Validation uses isolated WS/RPC/JPEG fixtures. `node scripts/verify-screen-bundles.mjs` exercises the actual trusted bundles' H.264/SEMU, JPEG/ACK and touch/text/ownership paths. `python3 -m unittest discover -s scripts -p 'test_screen_stream_fixture.py'` tests the local fixture server. Native Android verified live JPEG+ACK and a tap through an ADB reverse port; Compose tests verify fullscreen retains the viewer. No real user threads or remote T3 services are changed.

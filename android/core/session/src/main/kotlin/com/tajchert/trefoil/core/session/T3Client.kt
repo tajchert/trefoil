@@ -29,6 +29,17 @@ class T3Client(
     private var shellReady = false
     private var threadReady = false
     private var authorized = false
+    private var previewAuthorized = false
+    private var serverBrowser = false
+    private var browserScreensFresh = false
+    private var deviceScreensFresh = false
+    private var screenRead = 0L
+    private var deviceScreenRevision = -1L
+    private var previewScreenValue = JsonObject(emptyMap())
+    private val previewScreenEvents = ArrayDeque<JsonObject>()
+    private var previewScreenSubscription: String? = null
+    private var deviceScreenSubscription: String? = null
+    private val optionalScreenStreams = mutableSetOf<String>()
     private var pongAt = 0L
     private val serial = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonElement>>()
@@ -46,7 +57,7 @@ class T3Client(
         val current = state.value
         current.environment?.id?.let { id ->
             environmentStates.remove(id)
-            environmentStates[id] = current.copy(canWrite = false, busy = false, error = null)
+            environmentStates[id] = current.copy(canWrite = false, canRead = false, busy = false, error = null, screens = ScreenCatalog())
             while (environmentStates.size > 4) {
                 val evicted = environmentStates.keys.first()
                 environmentStates.remove(evicted)
@@ -56,8 +67,10 @@ class T3Client(
     }
     private fun update(block: (ClientState) -> ClientState) = mutable.update(block)
     private fun url(value: String, allowInsecureHttp: Boolean = false): HttpUrl = validatedEnvironmentUrl(value, allowInsecureHttp)
-    private suspend fun fetch(request: Request): JsonObject = withContext(Dispatchers.IO) {
-        http.newCall(request).execute().use { response ->
+    private suspend fun fetch(request: Request, timeoutMillis: Long? = null): JsonObject = withContext(Dispatchers.IO) {
+        val call = http.newCall(request)
+        timeoutMillis?.let { call.timeout().timeout(it, java.util.concurrent.TimeUnit.MILLISECONDS) }
+        call.execute().use { response ->
             if (!response.isSuccessful) throw HttpFailure(response.code)
             EffectRpc.json.parseToJsonElement(response.body?.string() ?: error("Empty server response")).jsonObject
         }
@@ -92,7 +105,7 @@ class T3Client(
         synchronized(lifecycleLock) {
             val retained = environmentStates[environment.id] ?: ClientState()
             projection = JsonObject(emptyMap())
-            update { retained.copy(environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, busy = false, error = null) }
+            update { retained.copy(environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, canRead = false, busy = false, error = null) }
         }
         try {
             val base = url(environment.baseUrl, environment.allowInsecureHttp)
@@ -131,6 +144,8 @@ class T3Client(
             val config = rpc("server.getConfig", buildJsonObject {}).jsonObject
             check(epoch == generation) { "Connection was cancelled" }
             authorized = mayOperate
+            previewAuthorized = permissions?.any { it.jsonPrimitive.content == "preview:operate" } == true
+            serverBrowser = config.obj("environment").obj("capabilities")["serverBrowser"]?.jsonPrimitive?.booleanOrNull == true
             val models = config.objects("providers").filter { it["enabled"]?.jsonPrimitive?.booleanOrNull != false }.flatMap { provider ->
                 provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name")) }
             }
@@ -179,7 +194,13 @@ class T3Client(
                 val result = pending.remove(id)
                 if (exit.string("_tag") == "Success") result?.complete(exit["value"] ?: JsonNull)
                 else result?.completeExceptionally(IllegalStateException("Server rejected request; refresh before trying again"))
-                if (streams.remove(id) != null) fail(generation, "Subscription ended; reconnect to refresh")
+                if (streams.remove(id) != null) {
+                    if (optionalScreenStreams.remove(id)) {
+                        if (id == previewScreenSubscription) { previewScreenSubscription = null; browserScreensFresh = false }
+                        if (id == deviceScreenSubscription) { deviceScreenSubscription = null; deviceScreensFresh = false }
+                        update { it.copy(screens = it.screens.copy(error = "Remote screen updates ended. Refresh screens to try again.")) }
+                    } else fail(generation, "Subscription ended; reconnect to refresh")
+                }
             }
             "Defect", "ClientProtocolError" -> fail(generation, "Server protocol failure; reconnect to refresh")
         }
@@ -188,8 +209,9 @@ class T3Client(
         if (epoch != generation) return@synchronized
         generation++
         refreshSignals?.close(); refreshJob?.cancel()
-        shellReady = false; threadReady = false; authorized = false
-        update { it.copy(connection = ConnectionStatus.Error, canWrite = false, busy = false, error = message) }
+        shellReady = false; threadReady = false; authorized = false; previewAuthorized = false
+        resetScreens()
+        update { it.copy(connection = ConnectionStatus.Error, canWrite = false, canRead = false, busy = false, error = message) }
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
     }
@@ -199,10 +221,12 @@ class T3Client(
         generation++; threadGeneration++; refreshSignals?.close(); refreshJob?.cancel(); heartbeat?.cancel(); heartbeat = null
         socket?.close(1000, null); socket = null
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Disconnected; pending command outcome may be uncertain")) }
-        pending.clear(); streams.clear(); threadSubscription = null; shellReady = false; threadReady = false; authorized = false
-        update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, busy = false) }
+        pending.clear(); streams.clear(); threadSubscription = null; shellReady = false; threadReady = false; authorized = false; previewAuthorized = false
+        resetScreens()
+        update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, canRead = false, busy = false) }
     }
     override suspend fun selectThread(threadId: String) = synchronized(lifecycleLock) {
+        if (state.value.selectedThreadId != threadId) resetScreens(interrupt = true)
         if (state.value.connection != ConnectionStatus.Connected) {
             val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
             check(cached != null) { "Connect to load this thread" }
@@ -217,7 +241,7 @@ class T3Client(
         projection = JsonObject(emptyMap())
         val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
         if (cached != null) applyProjection(cached, threadId)
-        else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false) }
+        else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false, canRead = false) }
         else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), activeRunId = null, canWrite = false) }
         val epoch = generation
         refreshSignals?.close(); refreshJob?.cancel()
@@ -250,7 +274,10 @@ class T3Client(
             }
         }
     }
-    private fun writable() = update { it.copy(canWrite = authorized && shellReady && (it.selectedThreadId == null || threadReady) && it.connection == ConnectionStatus.Connected) }
+    private fun writable() = update {
+        val fresh = shellReady && (it.selectedThreadId == null || threadReady) && it.connection == ConnectionStatus.Connected
+        it.copy(canRead = fresh, canWrite = authorized && fresh)
+    }
     private fun shellItem(item: JsonObject) {
         when (item.string("kind")) {
             "snapshot" -> {
@@ -295,7 +322,7 @@ class T3Client(
             RuntimeRequest(request.string("id"), item.string("prompt").ifBlank { kind }, if (supported) item.string("reason") else "Respond using another T3 client: unsupported or non-resumable request", questions, supported)
         }
         val active = value.objects("runs").lastOrNull { it.string("status") in setOf("preparing", "running", "starting", "waiting") }?.string("id")
-        update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, messages = conversationMessages(value),
+        update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, canRead = it.canRead && threadReady, messages = conversationMessages(value),
             activities = toolActivities(value), requests = requests, activeRunId = active,
             runs = conversationRuns(value), attempts = runAttempts(value)) }
     }
@@ -327,6 +354,124 @@ class T3Client(
     private data class ActivityRead(
         val generation: Long, val selection: Long, val revision: Long, val threadId: String, val item: JsonObject,
     )
+    private fun resetScreens(interrupt: Boolean = false) {
+        listOfNotNull(previewScreenSubscription, deviceScreenSubscription).forEach { id ->
+            optionalScreenStreams.remove(id)
+            streams.remove(id)
+            if (interrupt) runCatching { send(EffectRpc.signal("Interrupt", id)) }
+        }
+        previewScreenSubscription = null; deviceScreenSubscription = null
+        optionalScreenStreams.clear(); browserScreensFresh = false; deviceScreensFresh = false
+        deviceScreenRevision = -1L; previewScreenValue = JsonObject(emptyMap()); previewScreenEvents.clear(); screenRead++
+        update { it.copy(screens = ScreenCatalog()) }
+    }
+    private data class ScreenRead(val epoch: Long, val selection: Long, val read: Long, val threadId: String, val environment: SavedEnvironment)
+    private fun screenReadCurrent(read: ScreenRead) = read.epoch == generation && read.selection == threadGeneration &&
+        state.value.environment?.id == read.environment.id && state.value.selectedThreadId == read.threadId && state.value.connection == ConnectionStatus.Connected
+    private fun subscribeScreens(read: ScreenRead) {
+        if (serverBrowser && previewScreenSubscription == null) {
+            previewScreenSubscription = subscribe("subscribePreviewEvents", buildJsonObject {}) { event ->
+                if (screenReadCurrent(read) && event.string("threadId") == read.threadId) {
+                    previewScreenEvents.addLast(event)
+                    while (previewScreenEvents.size > 200) previewScreenEvents.removeFirst()
+                    val next = applyPreviewScreenEvent(previewScreenValue, event)
+                    if (next == null) {
+                        browserScreensFresh = false
+                        update { it.copy(screens = it.screens.copy(browsers = emptyList())) }
+                        scope.launch { runCatching { refreshScreens() } }
+                    } else {
+                        previewScreenValue = next
+                        update { it.copy(screens = it.screens.copy(browsers = browserScreens(next, read.threadId, previewAuthorized))) }
+                    }
+                }
+            }.also { optionalScreenStreams.add(it) }
+        }
+        if (deviceScreenSubscription == null) {
+            deviceScreenSubscription = subscribe("subscribeDeviceState", buildJsonObject {}) { value ->
+                if (screenReadCurrent(read)) applyDeviceScreens(value, read.threadId)
+            }.also { optionalScreenStreams.add(it) }
+        }
+    }
+    private fun applyDeviceScreens(value: JsonObject, threadId: String) {
+        val revision = (value["revision"] as? JsonPrimitive)?.longOrNull ?: return
+        if (revision < deviceScreenRevision) return
+        deviceScreenRevision = revision; deviceScreensFresh = true
+        update { it.copy(screens = it.screens.copy(devices = deviceScreens(value, threadId))) }
+    }
+    override suspend fun refreshScreens() {
+        val captured = synchronized(lifecycleLock) {
+            check(state.value.connection == ConnectionStatus.Connected && shellReady) { "Connect before refreshing screens" }
+            val threadId = state.value.selectedThreadId ?: error("Select a thread")
+            val read = ScreenRead(generation, threadGeneration, ++screenRead, threadId, state.value.environment ?: error("Connect an environment"))
+            update { it.copy(screens = it.screens.copy(loading = true, error = null)) }
+            subscribeScreens(read)
+            read
+        }
+        try {
+            supervisorScope {
+                val browser = async { if (serverBrowser) runCatching { rpc("preview.list", buildJsonObject { put("threadId", captured.threadId) }, captured.epoch).jsonObject } else Result.success(buildJsonObject { put("sessions", JsonArray(emptyList())) }) }
+                val device = async { runCatching { rpc("device.list", buildJsonObject { put("inspectOnly", true) }, captured.epoch).jsonObject } }
+                val browsers = browser.await(); val devices = device.await()
+                currentCoroutineContext().ensureActive()
+                synchronized(lifecycleLock) {
+                    if (!screenReadCurrent(captured) || captured.read != screenRead) return@synchronized
+                    browsers.getOrNull()?.let { listed ->
+                        val listedEpoch = listed.string("serverEpoch")
+                        val oldRevision = (previewScreenValue["revision"] as? JsonPrimitive)?.longOrNull ?: -1
+                        val listedRevision = (listed["revision"] as? JsonPrimitive)?.longOrNull ?: 0
+                        if (previewScreenValue.string("serverEpoch") != listedEpoch || listedRevision >= oldRevision) {
+                            previewScreenValue = previewScreenEvents.filter { it.string("serverEpoch") == listedEpoch }.fold(listed) { value, event -> applyPreviewScreenEvent(value, event) ?: value }
+                        }
+                        browserScreensFresh = true
+                        update { it.copy(screens = it.screens.copy(browsers = browserScreens(previewScreenValue, captured.threadId, previewAuthorized))) }
+                    }
+                    devices.getOrNull()?.let { applyDeviceScreens(it, captured.threadId) }
+                    if (browsers.isFailure) browserScreensFresh = false
+                    if (devices.isFailure) deviceScreensFresh = false
+                    update { it.copy(screens = it.screens.copy(loaded = true, loading = false,
+                        error = if (browsers.isFailure || devices.isFailure) "Some remote screens could not be loaded. Refresh to try again." else null)) }
+                }
+            }
+        } catch (error: CancellationException) {
+            synchronized(lifecycleLock) { if (screenReadCurrent(captured) && captured.read == screenRead) update { it.copy(screens = it.screens.copy(loading = false)) } }
+            throw error
+        }
+    }
+    private fun currentScreenTarget(target: ScreenTarget): ScreenTarget? = state.value.screens.targets.firstOrNull { sameScreenTarget(it, target) }
+    override fun isScreenAccessCurrent(access: ScreenAccess): Boolean = synchronized(lifecycleLock) {
+        val environment = state.value.environment ?: return@synchronized false
+        access.connectionGeneration == generation && access.selectionGeneration == threadGeneration && access.environmentId == environment.id &&
+            state.value.connection == ConnectionStatus.Connected && access.target.threadId == state.value.selectedThreadId &&
+            currentScreenTarget(access.target) != null && validateScreenAccess(access, environment) &&
+            (if (access.target is ScreenTarget.Browser) browserScreensFresh else deviceScreensFresh)
+    }
+    private data class ScreenViewerRead(val epoch: Long, val selection: Long, val environment: SavedEnvironment, val target: ScreenTarget)
+    override suspend fun screenAccess(target: ScreenTarget): ScreenAccess {
+        val captured = synchronized(lifecycleLock) {
+            check(state.value.connection == ConnectionStatus.Connected && shellReady) { "Connect before opening a remote screen" }
+            check(target.threadId == state.value.selectedThreadId) { "Select this screen's thread" }
+            check(if (target is ScreenTarget.Browser) browserScreensFresh else deviceScreensFresh) { "Refresh remote screens before opening" }
+            val current = currentScreenTarget(target) ?: error("This remote screen is no longer available")
+            ScreenViewerRead(generation, threadGeneration, state.value.environment ?: error("Connect an environment"), current)
+        }
+        val (epoch, selection, environment, currentTarget) = captured
+        val base = url(environment.baseUrl, environment.allowInsecureHttp)
+        val ticket = try { fetch(Request.Builder().url(base.resolve("/api/auth/websocket-ticket/media")!!)
+            .header("Authorization", "Bearer ${environment.accessToken}").post(ByteArray(0).toRequestBody()).build(), timeoutMillis = 8_000).string("ticket") }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { throw IllegalStateException("Remote screen access failed. Refresh and try again.") }
+        currentCoroutineContext().ensureActive()
+        check(ticket.isNotBlank()) { "Server returned no media ticket" }
+        return synchronized(lifecycleLock) {
+            check(epoch == generation && selection == threadGeneration && environment.id == state.value.environment?.id && currentScreenTarget(currentTarget) != null &&
+                state.value.connection == ConnectionStatus.Connected && currentTarget.threadId == state.value.selectedThreadId &&
+                (if (currentTarget is ScreenTarget.Browser) browserScreensFresh else deviceScreensFresh)) { "Remote screen changed; open it again" }
+            val httpBase = base.resolve(screenBasePath(currentTarget))!!.toString().removeSuffix("/")
+            ScreenAccess(environment.id, epoch, currentTarget, httpBase, httpBase.replaceFirst("http", "ws"),
+                buildMap { put("wsTicket", ticket); if (currentTarget is ScreenTarget.Device) put("hostId", currentTarget.hostId) },
+                interactive = if (currentTarget is ScreenTarget.Browser) previewAuthorized else authorized, selectionGeneration = selection)
+        }
+    }
     private fun requireWrite() { check(state.value.canWrite) { "Wait for a fresh connection before writing" } }
     private fun command(type: String, extra: JsonObject): JsonObject = buildJsonObject {
         put("type", type); put("commandId", UUID.randomUUID().toString()); put("threadId", state.value.selectedThreadId ?: error("Select a thread")); extra.forEach { (key, value) -> put(key, value) }

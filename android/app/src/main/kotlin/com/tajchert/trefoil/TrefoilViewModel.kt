@@ -18,6 +18,7 @@ import kotlin.coroutines.coroutineContext
 
 class TrefoilViewModel(application: Application) : AndroidViewModel(application) {
     private val client = T3Client(viewModelScope)
+    val screenSessions = com.tajchert.trefoil.ui.screens.ScreenSessionCoordinator(viewModelScope, client)
     private val connector = SshTunnelConnector()
     private val vault = EnvironmentVault(application)
     private val vaultMutex = Mutex()
@@ -237,6 +238,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun disconnect() {
+        screenSessions.close()
         resumeEnvironment = null; cancelSsh()
         action("Could not disconnect.") { connectionMutex.withLock { disconnectCurrent() } }
     }
@@ -253,6 +255,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         vaultMutex.withLock { save(_environments.value.filterNot { it.id == environment.id }) }
     }
     fun pause() {
+        screenSessions.pause()
         foreground = false
         resumeEnvironment = if (state.value.connection in setOf(ConnectionStatus.Connected, ConnectionStatus.Connecting, ConnectionStatus.Reconnecting)) selectedEnvironment else null
         if (sshFilePickerActive) { connectionEpoch++; connectionJob?.cancel(); _working.value = false } else cancelSsh()
@@ -260,11 +263,13 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     }
     fun resume() {
         foreground = true
+        screenSessions.resume()
         val environment = resumeEnvironment ?: return
         resumeEnvironment = null
         if (_sshLogin.value == null) connect(environment)
     }
     override fun onCleared() {
+        screenSessions.close()
         tunnelMonitor?.cancel()
         val closing = tunnel; tunnel = null
         if (closing != null) Thread({ closing.close() }, "trefoil-ssh-cleanup").apply { isDaemon = true; start() }

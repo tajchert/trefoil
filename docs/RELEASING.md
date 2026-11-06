@@ -66,3 +66,5 @@ Release `0.2.0` (`versionCode = 2`) adds SSH onboarding. Verify `:core:model:tes
 changes. Keep the same release keystore for in-place upgrades.
 
 Release `0.3.0` (`versionCode = 4`) adds T3-style thread shelves and a mixed conversation/activity timeline, and includes the retained connection forms and private-LAN pairing fixes from source 0.2.1. Use the same release certificate for upgrades.
+
+Release `0.5.0` (`versionCode = 7`) adds remote Screens and phone fullscreen. Verify the pinned viewer bundle fixtures (`node scripts/verify-screen-bundles.mjs`) and isolated WS fixture tests in addition to Gradle checks. Viewer and Effect licenses/notices ship with the assets.

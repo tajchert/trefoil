@@ -18,6 +18,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
+            val screenViewer by model.screenSessions.state.collectAsStateWithLifecycle()
             val environments by model.environments.collectAsStateWithLifecycle()
             val notice by model.notice.collectAsStateWithLifecycle()
             val working by model.working.collectAsStateWithLifecycle()
@@ -33,6 +34,11 @@ class MainActivity : ComponentActivity() {
                 onSend = model::send,
                 onInterrupt = model::interrupt,
                 onLoadActivity = model::loadActivity,
+                screenViewer = screenViewer,
+                onRefreshScreens = model.screenSessions::refresh,
+                onOpenScreen = model.screenSessions::open,
+                onCloseScreen = model.screenSessions::close,
+                isScreenAccessCurrent = model.screenSessions::isCurrent,
                 onRespond = model::respond,
                 onCreateThread = model::createThread,
                 onReconnect = model::reconnect,

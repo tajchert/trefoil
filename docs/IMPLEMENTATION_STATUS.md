@@ -69,3 +69,11 @@ A deeper source comparison with T3's React Native/Expo Android app adds catalog-
 See [mobile presentation reference](reference/mobile-presentation.md) for source paths, exact rules and remaining gaps. Remote icon downloads, terminal output streaming, rich diff widgets, subagent navigation and full CommonMark remain future work.
 
 0.4.0 validation: 109 tests pass, including provider identity/custom accounts, timing null/fallback semantics, work folds, prominent rows, output/file-detail hydration and retained-state regressions. Debug/release lint and builds pass. Light/dark thread, completed-turn and failed-command renders were inspected. Signed upgrade/launch verified on Android 17 with the original release certificate. No real user threads were modified.
+
+## 0.5.0
+
+Adds Screens for existing per-thread browser tabs and attached iOS/Android device sessions, including host identity. Native Compose owns discovery, controls, errors/reconnect and immersive phone fullscreen; pinned trusted T3 mobile viewer scripts decode pixels and map touch/input. Fullscreen retains the viewer; reconnect refreshes catalog/access and read-only clients recover using fresh read readiness independently of write permission.
+
+Credentials remain ephemeral, URL policy applies before the viewer is constructed, and the native document is served only at an exact random local route. Inputs drop when unready/disconnected and are never replayed. Browser ownership is explicit. WebRTC-only hosts, native multitouch, rich file/download dialogs and unsupported HID text paste remain outside this release. See [screen protocol](../protocol/SCREENS.md) and viewer asset provenance.
+
+0.5.0 validation: 136 Gradle tests pass; debug/release lint and APK builds pass. Five stdlib fixture-server tests and the actual bundled JS H.264/SEMU, JPEG/ACK, single-touch, Unicode and control-arbitration fixtures pass. A native Android foldable rendered live fixture JPEG frames and delivered a tap; automated Compose tests verify fullscreen retains the viewer. Manual fullscreen walkthrough stopped after the device driver rejected action references. An exact-bootstrap regression now covers the Android-only main-frame routing issue found during that native run. Signed APK certificate matches prior releases.
