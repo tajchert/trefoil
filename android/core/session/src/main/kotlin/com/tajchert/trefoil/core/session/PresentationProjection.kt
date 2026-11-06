@@ -57,7 +57,11 @@ internal fun threadSummary(value: JsonObject, archived: Boolean = false) = Threa
     activityRunStatus = value.optionalText("activityRunStatus"),
     snoozedUntil = value.optionalText("snoozedUntil"), unsettledAt = value.optionalText("unsettledAt"),
     latestRunRequestedAt = value.optionalText("latestRunRequestedAt"),
-    latestRunCompletedAt = value.optionalText("latestRunCompletedAt"),
+    latestRunCompletedAt = if ("latestRunCompletedAt" in value) value.optionalText("latestRunCompletedAt")
+        else value.optionalText("updatedAt")?.takeIf {
+            value.optionalText("latestRunId") != null &&
+                value.string("status") in setOf("idle", "completed", "interrupted", "failed", "cancelled", "rolled_back")
+        },
     latestRunStartedAt = value.optionalText("latestRunStartedAt"),
     activityRunStartedAt = value.optionalText("activityRunStartedAt"),
     activityRunStartedAtPresent = "activityRunStartedAt" in value,
@@ -66,7 +70,28 @@ internal fun threadSummary(value: JsonObject, archived: Boolean = false) = Threa
     modelInstanceId = value.obj("modelSelection").optionalText("instanceId") ?: value.obj("modelSelection").optionalText("provider"),
     providerInstanceHistory = (value["providerInstanceHistory"] as? JsonArray).orEmpty()
         .mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) },
+    parentThreadId = value.obj("lineage").optionalText("parentThreadId"),
+    relationshipToParent = value.obj("lineage").optionalText("relationshipToParent"),
+    sideChat = (value.obj("lineage")["sideChat"] as? JsonPrimitive)?.booleanOrNull == true,
+    creationSource = value.optionalText("creationSource"), deletedAt = value.optionalText("deletedAt"),
+    activeProviderThreadId = value.optionalText("activeProviderThreadId"),
+    activityRunStatusPresent = "activityRunStatus" in value,
+    snoozedAt = value.optionalText("snoozedAt"),
+    pendingRequestId = value.obj("pendingRuntimeRequest").optionalText("id"),
+    pendingRequestCreatedAt = value.obj("pendingRuntimeRequest").optionalText("createdAt"),
+    pendingRequestBlocking = (value.obj("pendingRuntimeRequest")["blocking"] as? JsonPrimitive)?.booleanOrNull,
+    pendingGuestMessageCount = (value["pendingGuestMessageCount"] as? JsonPrimitive)?.intOrNull ?: 0,
+    interactionMode = value.optionalText("interactionMode"),
+    hasActionableProposedPlan = (value["hasActionableProposedPlan"] as? JsonPrimitive)?.booleanOrNull == true,
+    latestUserAuthoredMessageAtPresent = "latestUserAuthoredMessageAt" in value,
+    completionHeldBackgroundWork = pendingBackgroundWorkHoldsCompletion(value.objects("pendingBackgroundTasks")),
 )
+
+/** T3's contract decodes absent and unknown kinds as background_task before checking completion. */
+private fun pendingBackgroundWorkHoldsCompletion(tasks: List<JsonObject>): Boolean = tasks.any { task ->
+    (task["awaited"] as? JsonPrimitive)?.booleanOrNull == true ||
+        task.optionalText("kind") !in setOf("command", "monitor")
+}
 
 /** Projected position spans inherited and local items; native ordinals do not. */
 internal fun presentationItems(projection: JsonObject): List<JsonObject> {

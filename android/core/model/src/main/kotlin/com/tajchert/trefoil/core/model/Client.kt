@@ -25,6 +25,17 @@ data class ThreadSummary(
     val latestRunId: String? = null, val activeRunId: String? = null,
     val providerInstanceId: String? = null, val modelInstanceId: String? = null,
     val providerInstanceHistory: List<String> = emptyList(),
+    val parentThreadId: String? = null, val relationshipToParent: String? = null,
+    val sideChat: Boolean = false, val creationSource: String? = null, val deletedAt: String? = null,
+    val activeProviderThreadId: String? = null, val activityRunStatusPresent: Boolean = false,
+    val snoozedAt: String? = null, val pendingRequestId: String? = null,
+    val pendingRequestCreatedAt: String? = null, val pendingRequestBlocking: Boolean? = null,
+    val pendingGuestMessageCount: Int = 0,
+    val interactionMode: String? = null, val hasActionableProposedPlan: Boolean = false,
+    val latestUserAuthoredMessageAtPresent: Boolean = false,
+    val completionHeldBackgroundWork: Boolean = false,
+    /** Derived from child shells for presentation; never supplied by a shell row. */
+    val pendingChildRequestKind: String? = null,
 )
 data class ConversationMessage(
     val id: String, val role: String, val text: String, val streaming: Boolean = false,

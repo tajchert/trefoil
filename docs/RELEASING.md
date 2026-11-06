@@ -70,3 +70,5 @@ Release `0.3.0` (`versionCode = 4`) adds T3-style thread shelves and a mixed con
 Release `0.5.0` (`versionCode = 7`) adds remote Screens and phone fullscreen. Verify the pinned viewer bundle fixtures (`node scripts/verify-screen-bundles.mjs`) and isolated WS fixture tests in addition to Gradle checks. Viewer and Effect licenses/notices ship with the assets.
 
 Release `0.6.0` (`versionCode = 8`) adds file downloads and Android APK installer handoff. Use isolated fixture files; the debug-only `trefoil-file-fixture://download` activity copies its own APK to MediaStore without opening a server or vault. Its entry point is absent from release builds. Verify original signing certificate for upgrades.
+
+Release `0.6.1` (`versionCode = 9`) corrects lineage filtering, shelf grouping/sorting and retained row decoration. Include shell fixtures containing hidden child rows when validating counts.

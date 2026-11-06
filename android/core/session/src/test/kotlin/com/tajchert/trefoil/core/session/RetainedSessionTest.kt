@@ -21,6 +21,7 @@ class RetainedSessionTest {
         val threads = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
         val acks = Channel<String>(Channel.UNLIMITED)
         val subscriptions = AtomicInteger()
+        @Volatile var shellPayload = JsonObject(emptyMap())
         @Volatile var environmentId = "env"
         @Volatile var holdConfiguration = false
         @Volatile var mayOperate = true
@@ -42,7 +43,7 @@ class RetainedSessionTest {
                             if (frame.string("_tag") != "Request") return
                             when (frame.string("tag")) {
                                 "server.getConfig" -> if (holdConfiguration) { configurations.trySend(webSocket to id); Unit } else webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
-                                "orchestration.subscribeShell" -> shells.trySend(webSocket to id)
+                                "orchestration.subscribeShell" -> { shellPayload = frame.obj("payload"); shells.trySend(webSocket to id) }
                                 "orchestration.subscribeThread" -> { subscriptions.incrementAndGet(); threads.trySend(webSocket to id) }
                                 "orchestration.getTurnItem" -> itemReads.trySend(webSocket to frame)
                                 else -> otherCalls.trySend(frame.string("tag"))
@@ -71,9 +72,35 @@ class RetainedSessionTest {
                 })
                 row("working", "running")
                 row("snoozed") { put("snoozedUntil", "2099-01-01T00:00:00Z") }
-                repeat(24) { row("settled-$it") { put("settledAt", "2026-11-06T09:00:00Z") } }
+                repeat(24) { row("settled-$it") { put("settledOverride", "settled"); put("settledAt", "2026-11-06T09:00:00Z") } }
                 repeat(4) { row("open-$it") }
             }
+        }
+    }
+    @Test fun fullSubscriptionRetainsEverySettledRowAndChildLineageAcrossEnrichment() = runBlocking {
+        Fixture().use { f ->
+            val shell = f.connect()
+            assertEquals(false, f.shellPayload["omitOlderSettled"]?.jsonPrimitive?.booleanOrNull)
+            assertEquals(false, f.shellPayload["omitIdleSubagents"]?.jsonPrimitive?.booleanOrNull)
+            val rows = buildJsonArray {
+                repeat(3) { add(buildJsonObject { put("id", "open-$it"); put("projectId", "p"); put("status", "completed") }) }
+                repeat(2) { add(buildJsonObject { put("id", "working-$it"); put("projectId", "p"); put("status", "running"); put("latestRunId", "run-$it") }) }
+                add(buildJsonObject { put("id", "snoozed"); put("projectId", "p"); put("snoozedUntil", "2099-01-01T00:00:00Z") })
+                repeat(25) { add(buildJsonObject { put("id", "settled-$it"); put("projectId", "p"); put("settledOverride", "settled"); put("settledAt", "2026-11-06T09:00:00Z") }) }
+                repeat(56) { add(buildJsonObject {
+                    put("id", "child-$it"); put("projectId", "p"); put("status", "idle")
+                    put("lineage", buildJsonObject { put("parentThreadId", "open-0"); put("relationshipToParent", "subagent"); put("rootThreadId", "open-0") })
+                }) }
+            }
+            f.chunk(shell, """{"kind":"snapshot","snapshot":{"projects":[{"id":"p","title":"Fixture"}],"threads":$rows,"archivedThreads":[]}}, {"kind":"synchronized"}""")
+            assertEquals(87, f.client.state.value.threads.size)
+            assertEquals(25, f.client.state.value.threads.count { it.settledOverride == "settled" })
+            assertEquals(56, f.client.state.value.threads.count { it.relationshipToParent == "subagent" })
+            f.chunk(shell, """{"kind":"snapshot","resolvedRepositoryIdentityRoots":[],"snapshot":{"projects":[{"id":"p","title":"Enriched"}],"threads":[],"archivedThreads":[]}}""")
+            assertEquals(87, f.client.state.value.threads.size)
+            assertEquals(25, f.client.state.value.threads.count { it.settledOverride == "settled" })
+            f.chunk(shell, """{"kind":"thread.updated","thread":{"id":"open-0","projectId":"p","settledOverride":"settled","settledAt":"2026-11-07T10:00:00Z"}}""")
+            assertEquals(26, f.client.state.value.threads.count { it.settledOverride == "settled" })
         }
     }
     @Test fun enrichmentCannotEraseThreadsOrUnrelatedProjectsButAuthoritativeSnapshotCan() = runBlocking {

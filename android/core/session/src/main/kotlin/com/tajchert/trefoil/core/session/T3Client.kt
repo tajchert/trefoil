@@ -151,7 +151,11 @@ class T3Client(
                 provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name")) }
             }
             update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config)) }
-            subscribe("orchestration.subscribeShell", buildJsonObject { put("requestCompletionMarker", true) }, ::shellItem)
+            subscribe("orchestration.subscribeShell", buildJsonObject {
+                put("requestCompletionMarker", true)
+                // Native grouping needs complete lineage and all settled rows for exact counts.
+                put("omitIdleSubagents", false); put("omitOlderSettled", false)
+            }, ::shellItem)
             state.value.selectedThreadId?.let { selectThread(it) }
         } catch (error: CancellationException) {
             if (error is TimeoutCancellationException && currentCoroutineContext().isActive) {

@@ -31,7 +31,7 @@ class ThreadListUiTest {
             ThreadSummary("approval", "trefoil", "Review the connection flow", "running", pendingRequestKind = "approval"),
             ThreadSummary("active", "trefoil", "Polish the Android thread list", "completed"),
             ThreadSummary("work", "t3", "Keep activity in the right order", "running", providerInstanceId = "claudeAgent", activityRunStartedAt = java.time.Instant.now().minusSeconds(150).toString(), activityRunStartedAtPresent = true),
-            ThreadSummary("done", "trefoil", "Secure environment storage", "completed", settledAt = "2026-11-06T08:00:00Z")
+            ThreadSummary("done", "trefoil", "Secure environment storage", "completed", settledOverride = "settled", settledAt = "2026-11-06T08:00:00Z")
         ))
     @Test fun searchFindsProjectAndCollapseHidesEvenTheSelectedThread() {
         compose.setContent { TrefoilTheme { ThreadList(fixture.copy(selectedThreadId = "work"), {}, {}) } }
@@ -51,6 +51,7 @@ class ThreadListUiTest {
         compose.onNodeWithText("Keep activity in the right order").assertDoesNotExist()
         compose.onNodeWithText("Polish the Android thread list").performClick()
         compose.onNodeWithContentDescription("Back to threads").performClick()
+        compose.onAllNodes(isSelected()).assertCountEquals(0)
         compose.onNodeWithText("Keep activity in the right order").assertDoesNotExist()
         compose.onNodeWithText("Search threads").performTextInput("Polish")
         compose.onNodeWithText("Polish the Android thread list").performClick()
@@ -63,6 +64,20 @@ class ThreadListUiTest {
         compose.onNodeWithContentDescription("Agent: Work Codex").assertExists()
         compose.onNodeWithContentDescription("Agent: Claude").assertExists()
         compose.onNodeWithText("Working 2m").assertExists()
+    }
+    @Test fun retainedClientSelectionDoesNotHighlightAThreadWhenListIsShownAgain() {
+        compose.setContent { TrefoilTheme { ThreadList(fixture.copy(selectedThreadId = "active"), {}, {}) } }
+        compose.onNodeWithText("Polish the Android thread list").assertExists()
+        compose.onAllNodes(isSelected()).assertCountEquals(0)
+    }
+    @Test fun hiddenChildDoesNotInflateConversationCountOrAppearInSearch() {
+        val state = fixture.copy(threads = listOf(ThreadSummary("parent", "trefoil", "Parent conversation"),
+            ThreadSummary("child", "trefoil", "Hidden fixture child", relationshipToParent = "subagent", parentThreadId = "parent")))
+        compose.setContent { TrefoilTheme { ThreadList(state, {}, {}) } }
+        compose.onNodeWithText("1 conversations · 2 projects").assertExists()
+        compose.onNodeWithText("Hidden fixture child").assertDoesNotExist()
+        compose.onNodeWithText("Search threads").performTextInput("Hidden fixture child")
+        compose.onNodeWithText("No matching threads").assertExists()
     }
     @Test fun renderOfflineThreadList() {
         compose.setContent { TrefoilTheme { Surface { Box(Modifier.size(411.dp, 810.dp)) { ThreadList(fixture, {}, {}) } } } }

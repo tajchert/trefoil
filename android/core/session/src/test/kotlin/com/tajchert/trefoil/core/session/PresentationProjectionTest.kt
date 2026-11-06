@@ -6,7 +6,87 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PresentationProjectionTest {
+    @Test fun legacyTerminalCompletionFallsBackToUpdatedOnlyWhenOptionalFieldIsAbsent() {
+        val base = """"id":"legacy","latestRunId":"run","status":"failed","updatedAt":"2026-11-07T11:00:00Z""""
+        assertEquals("2026-11-07T11:00:00Z", threadSummary(fixture("{$base}")).latestRunCompletedAt)
+        assertNull(threadSummary(fixture("{$base,\"latestRunCompletedAt\":null}")).latestRunCompletedAt)
+    }
     private fun fixture(value: String) = Json.parseToJsonElement(value).jsonObject
+
+    @Test fun shellPreservesChildLineageAndRuntimeIdentityForParentAttention() {
+        val thread = threadSummary(fixture("""{
+          "id":"child", "projectId":"p", "title":"Child", "status":"completed",
+          "lineage":{"parentThreadId":"parent","rootThreadId":"root","relationshipToParent":"subagent","sideChat":true},
+          "creationSource":"provider", "deletedAt":"2026-11-06T10:00:00Z",
+          "activeProviderThreadId":"provider-thread", "activityRunStatus":null
+        }"""))
+        assertEquals("parent", thread.parentThreadId)
+        assertEquals("subagent", thread.relationshipToParent)
+        assertTrue(thread.sideChat)
+        assertEquals("provider", thread.creationSource)
+        assertEquals("2026-11-06T10:00:00Z", thread.deletedAt)
+        assertEquals("provider-thread", thread.activeProviderThreadId)
+        assertTrue(thread.activityRunStatusPresent)
+        assertNull(thread.activityRunStatus)
+        val legacy = threadSummary(fixture("""{}"""))
+        assertNull(legacy.parentThreadId)
+        assertNull(legacy.relationshipToParent)
+        assertFalse(legacy.sideChat)
+        assertFalse(legacy.activityRunStatusPresent)
+    }
+
+    @Test fun shellRetainsSnoozeRequestAndPlanMetadataIncludingNonblockingQuestions() {
+        val thread = threadSummary(fixture("""{
+          "snoozedAt":"2026-11-06T09:00:00Z", "pendingGuestMessageCount":2,
+          "pendingRuntimeRequest":{"id":"question","kind":"user_input","createdAt":"2026-11-06T08:00:00Z","blocking":false},
+          "interactionMode":"plan", "hasActionableProposedPlan":true
+        }"""))
+        assertEquals("2026-11-06T09:00:00Z", thread.snoozedAt)
+        assertEquals("question", thread.pendingRequestId)
+        assertEquals("user_input", thread.pendingRequestKind)
+        assertEquals("2026-11-06T08:00:00Z", thread.pendingRequestCreatedAt)
+        assertEquals(false, thread.pendingRequestBlocking)
+        assertEquals(2, thread.pendingGuestMessageCount)
+        assertEquals("plan", thread.interactionMode)
+        assertTrue(thread.hasActionableProposedPlan)
+        assertEquals(true, threadSummary(fixture("""{"pendingRuntimeRequest":{"blocking":true}}""")).pendingRequestBlocking)
+        val legacy = threadSummary(fixture("""{}"""))
+        assertNull(legacy.snoozedAt)
+        assertNull(legacy.pendingRequestId)
+        assertNull(legacy.pendingRequestCreatedAt)
+        assertNull(legacy.pendingRequestBlocking)
+        assertEquals(0, legacy.pendingGuestMessageCount)
+        assertFalse(legacy.hasActionableProposedPlan)
+    }
+
+    @Test fun explicitNullAuthoredMessageTimestampDoesNotBecomeLegacyAbsence() {
+        assertFalse(threadSummary(fixture("""{}""")).latestUserAuthoredMessageAtPresent)
+        val explicitNull = threadSummary(fixture("""{"latestUserAuthoredMessageAt":null}"""))
+        assertTrue(explicitNull.latestUserAuthoredMessageAtPresent)
+        assertNull(explicitNull.latestUserAuthoredMessageAt)
+        val dated = threadSummary(fixture("""{"latestUserAuthoredMessageAt":"2026-11-06T08:00:00Z"}"""))
+        assertTrue(dated.latestUserAuthoredMessageAtPresent)
+        assertEquals("2026-11-06T08:00:00Z", dated.latestUserAuthoredMessageAt)
+    }
+
+    @Test fun pendingBackgroundWorkMatchesT3CompletionHoldsAndUnknownKindFallback() {
+        val cases = listOf(
+            """{"taskId":"command","kind":"command"}""" to false,
+            """{"taskId":"monitor","kind":"monitor"}""" to false,
+            """{"taskId":"command","kind":"command","awaited":true}""" to true,
+            """{"taskId":"monitor","kind":"monitor","awaited":true}""" to true,
+            """{"taskId":"subagent","kind":"subagent"}""" to true,
+            """{"taskId":"background","kind":"background_task"}""" to true,
+            """{"taskId":"future","kind":"future_task"}""" to true,
+            """{"taskId":"legacy"}""" to true,
+        )
+        for ((task, expected) in cases) {
+            assertEquals(task, expected, threadSummary(fixture("""{"pendingBackgroundTasks":[$task]}""")).completionHeldBackgroundWork)
+        }
+        assertTrue(threadSummary(fixture("""{"pendingBackgroundTasks":[{"taskId":"command","kind":"command"},{"taskId":"child","kind":"subagent"}]}""")).completionHeldBackgroundWork)
+        assertFalse(threadSummary(fixture("""{"pendingBackgroundTasks":[]}""")).completionHeldBackgroundWork)
+        assertFalse(threadSummary(fixture("""{}""")).completionHeldBackgroundWork)
+    }
 
     @Test fun providerCatalogAndThreadMetadataKeepRoutingIdentitySeparateFromModelNames() {
         val providers = providerInstances(fixture("""{"providers":[
