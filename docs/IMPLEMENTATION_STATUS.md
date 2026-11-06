@@ -53,3 +53,11 @@ Adds T3 mobile-inspired thread shelves, search, status precedence, selection, re
 68 tests pass across model, SSH, protocol, session and app. Native Robolectric light/dark renders verify thread and conversation layouts. The signed release uses the original certificate for in-place upgrades and includes the previously unpublished 0.2.1 connection fixes. Full CommonMark, attachments and rich diff rendering remain future work.
 
 0.3.0 release validation: debug/release lint and APK assembly pass. Verified the signing certificate against the original SHA-256 fingerprint, installed the signed APK on a separate Android 17 tablet emulator and confirmed onboarding launches. No live environment was connected.
+
+## 0.3.1
+
+Fixes project-enrichment snapshots being mistaken for authoritative shell resets, which hid all threads except those receiving subsequent updates. All thread shelves now survive enrichment; authoritative empty snapshots still remove stale rows. Collapsing a shelf hides its selected row too.
+
+Retains list search, shelf expansion and scroll state across conversation navigation. Reconnect/foreground refresh keeps the last environment and conversation visible, read-only until synchronization. Recently viewed projections are cached in memory, scoped by environment and thread; forgetting an environment clears its cache. No transcript cache is written to disk. Reopening the current thread reuses its subscription.
+
+0.3.1 validation: 76 tests pass, including the 30-thread enrichment reproduction, reconnect freshness/write gating, cache isolation/forgetting and navigation retention. Debug/release lint and APK builds pass. The signed APK upgrades and launches over 0.3.0 on the Android 17 tablet emulator using the original certificate.

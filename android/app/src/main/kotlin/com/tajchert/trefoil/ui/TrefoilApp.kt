@@ -88,7 +88,9 @@ fun TrefoilApp(
                         } else Row(Modifier.weight(1f)) {
                             if (wide || !showThread) {
                                 Box(if (wide) Modifier.width(320.dp).fillMaxHeight() else Modifier.fillMaxSize()) {
-                                    ThreadList(state, select, { creating = true })
+                                    conversationState.SaveableStateProvider("thread-list:${state.environment?.id}") {
+                                        ThreadList(state, select, { creating = true })
+                                    }
                                 }
                             }
                             if (wide) VerticalDivider()

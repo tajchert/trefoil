@@ -60,7 +60,7 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val nearBottom by remember { derivedStateOf { !list.canScrollForward || (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= list.layoutInfo.totalItemsCount - 2 } }
-    var following by remember { mutableStateOf(true) }
+    var following by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(list) {
         snapshotFlow { list.isScrollInProgress to nearBottom }.collect { (scrolling, bottom) -> if (scrolling) following = bottom }
     }

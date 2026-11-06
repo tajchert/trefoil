@@ -32,12 +32,29 @@ class ThreadListUiTest {
             ThreadSummary("work", "t3", "Keep activity in the right order", "running"),
             ThreadSummary("done", "trefoil", "Secure environment storage", "completed", settledAt = "2026-11-06T08:00:00Z")
         ))
-    @Test fun searchFindsProjectAndCollapsedShelfKeepsSelection() {
+    @Test fun searchFindsProjectAndCollapseHidesEvenTheSelectedThread() {
         compose.setContent { TrefoilTheme { ThreadList(fixture.copy(selectedThreadId = "work"), {}, {}) } }
+        compose.onNodeWithContentDescription("Working shelf").performClick()
+        compose.onNodeWithText("Keep activity in the right order").assertDoesNotExist()
         compose.onNodeWithContentDescription("Working shelf").performClick()
         compose.onNodeWithText("Keep activity in the right order").assertExists()
         compose.onNodeWithText("Search threads").performTextInput("T3 Code")
         compose.onNodeWithText("Keep activity in the right order").assertExists()
+        compose.onNodeWithText("Review the connection flow").assertDoesNotExist()
+    }
+    @Test fun returningFromConversationRetainsCollapsedShelvesAndSearch() {
+        val state = androidx.compose.runtime.mutableStateOf(fixture.copy(environment = SavedEnvironment("fixture", "Fixture", "https://fixture.invalid", "fixture-token")))
+        compose.setContent { TrefoilApp(state.value, emptyList(), { _, _, _ -> }, {},
+            { id -> state.value = state.value.copy(selectedThreadId = id) }, {}, {}, { _, _, _ -> }, { _, _, _ -> }, {}, {}, {}) }
+        compose.onNodeWithContentDescription("Working shelf").performClick()
+        compose.onNodeWithText("Keep activity in the right order").assertDoesNotExist()
+        compose.onNodeWithText("Polish the Android thread list").performClick()
+        compose.onNodeWithContentDescription("Back to threads").performClick()
+        compose.onNodeWithText("Keep activity in the right order").assertDoesNotExist()
+        compose.onNodeWithText("Search threads").performTextInput("Polish")
+        compose.onNodeWithText("Polish the Android thread list").performClick()
+        compose.onNodeWithContentDescription("Back to threads").performClick()
+        compose.onNode(hasSetTextAction()).assertTextContains("Polish")
         compose.onNodeWithText("Review the connection flow").assertDoesNotExist()
     }
     @Test fun renderOfflineThreadList() {

@@ -153,8 +153,6 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
 
     fun connectSsh(input: SshConnectionInput) = connectionAction("SSH connection failed. Check the address, login and running T3 server.", ConnectionKind.Ssh) {
         sshInputValidationError(input)?.let { throw SshConnectionException(it) }
-        val previousId = state.value.environment?.id
-        val previousThread = state.value.selectedThreadId
         disconnectCurrent()
         val normalized = input.copy(host = input.host.trim(), username = input.username.trim())
         val saved = normalized.savedEnvironmentId?.let { id -> _environments.value.firstOrNull { it.id == id && it.ssh != null } }
@@ -177,7 +175,6 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
             val configured = environment.copy(name = normalized.name, ssh = normalized.savedProfile(opened.hostKey))
             connectionStage("Testing T3 session through the SSH tunnel…")
             client.connect(configured)
-            if (previousId == configured.id) previousThread?.let { client.selectThread(it) }
             coroutineContext.ensureActive()
             check(opened.active.value) { "SSH tunnel closed" }
             vaultMutex.withLock { save(_environments.value.filterNot { it.id == configured.id } + configured) }
@@ -232,11 +229,9 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
 
     fun reconnect() {
         val environment = selectedEnvironment ?: state.value.environment?.forStorage() ?: return
-        val threadId = state.value.selectedThreadId
         if (environment.ssh != null) connect(environment)
         else connectionAction("Could not reconnect. Check the server or pair again.") {
             disconnectCurrent(); client.connect(environment)
-            threadId?.let { client.selectThread(it) }
         }
     }
 
@@ -245,9 +240,13 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         action("Could not disconnect.") { connectionMutex.withLock { disconnectCurrent() } }
     }
     fun forget(environment: SavedEnvironment) = action("Could not remove saved credentials.") {
-        if (selectedEnvironment?.id == environment.id || state.value.environment?.id == environment.id) {
-            cancelSsh(); resumeEnvironment = null
-            connectionMutex.withLock { disconnectCurrent(); client.forgetEnvironment(); selectedEnvironment = null }
+        if (selectedEnvironment?.id == environment.id || state.value.environment?.id == environment.id) cancelSsh()
+        if (resumeEnvironment?.id == environment.id) resumeEnvironment = null
+        connectionMutex.withLock {
+            if (selectedEnvironment?.id == environment.id || state.value.environment?.id == environment.id) {
+                disconnectCurrent(); selectedEnvironment = null
+            }
+            client.forgetEnvironment(environment.id)
         }
         initialized.await()
         vaultMutex.withLock { save(_environments.value.filterNot { it.id == environment.id }) }

@@ -119,7 +119,7 @@ internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: ()
                         expanded = if (shelf.title in expanded) expanded - shelf.title else expanded + shelf.title
                     }
                 }
-                items(shelf.threads.filter { query.isNotBlank() || shelf.title in expanded || it.id == state.selectedThreadId }, key = { "thread:${it.id}" }) { thread ->
+                items(shelf.threads.filter { query.isNotBlank() || shelf.title in expanded }, key = { "thread:${it.id}" }) { thread ->
                     ThreadRow(thread, projects[thread.projectId], state.selectedThreadId == thread.id, now) { select(thread.id) }
                 }
             }

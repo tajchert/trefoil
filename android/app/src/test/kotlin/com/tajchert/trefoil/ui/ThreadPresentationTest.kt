@@ -39,6 +39,14 @@ class ThreadPresentationTest {
         assertEquals("Threads", threadShelves(listOf(thread), deadline).single().title)
         assertEquals("Waiting", threadIndicator(thread.copy(status = "running", blockedOnThreadWait = true)).label)
     }
+    @Test fun reportedThreadCountsAppearInSeparateShelves() {
+        val threads = listOf(ThreadSummary("work", "p", "Working", "running"),
+            ThreadSummary("snooze", "p", "Snoozed", snoozedUntil = "2099-01-01T00:00:00Z")) +
+            (0 until 24).map { ThreadSummary("settled-$it", "p", "Settled $it", settledAt = "2026-11-06T09:00:00Z") } +
+            (0 until 4).map { ThreadSummary("open-$it", "p", "Open $it") }
+        assertEquals(mapOf("Threads" to 4, "Working" to 1, "Snoozed" to 1, "Settled" to 24),
+            threadShelves(threads).associate { it.title to it.threads.size })
+    }
     @Test fun invalidAndFutureTimesAreSafe() {
         assertEquals("", relativeThreadTime("invalid", 0))
         assertEquals("now", relativeThreadTime("2026-11-06T09:00:00Z", 0))

@@ -37,6 +37,22 @@ class T3Client(
     private var refreshSignals: Channel<Unit>? = null
     private var refreshJob: Job? = null
     private var projection = JsonObject(emptyMap())
+    private var threadGeneration = 0L
+    // Memory only: navigation/foreground refreshes retain content without writing transcripts to disk.
+    private val environmentStates = linkedMapOf<String, ClientState>()
+    private val threadProjections = linkedMapOf<Pair<String, String>, JsonObject>()
+    private fun cacheState() {
+        val current = state.value
+        current.environment?.id?.let { id ->
+            environmentStates.remove(id)
+            environmentStates[id] = current.copy(canWrite = false, busy = false, error = null)
+            while (environmentStates.size > 4) {
+                val evicted = environmentStates.keys.first()
+                environmentStates.remove(evicted)
+                threadProjections.keys.removeAll { it.first == evicted }
+            }
+        }
+    }
     private fun update(block: (ClientState) -> ClientState) = mutable.update(block)
     private fun url(value: String, allowInsecureHttp: Boolean = false): HttpUrl = validatedEnvironmentUrl(value, allowInsecureHttp)
     private suspend fun fetch(request: Request): JsonObject = withContext(Dispatchers.IO) {
@@ -72,7 +88,11 @@ class T3Client(
     override suspend fun connect(environment: SavedEnvironment) {
         disconnect()
         val epoch = generation
-        update { ClientState(environment = environment, connection = ConnectionStatus.Connecting) }
+        synchronized(lifecycleLock) {
+            val retained = environmentStates[environment.id] ?: ClientState()
+            projection = JsonObject(emptyMap())
+            update { retained.copy(environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, busy = false, error = null) }
+        }
         try {
             val base = url(environment.baseUrl, environment.allowInsecureHttp)
             require(descriptor(base).string("environmentId") == environment.id) { "Environment identity changed; pair again" }
@@ -174,17 +194,30 @@ class T3Client(
     }
     override suspend fun disconnect() = disconnectNow()
     private fun disconnectNow() = synchronized(lifecycleLock) {
-        generation++; refreshSignals?.close(); refreshJob?.cancel(); heartbeat?.cancel(); heartbeat = null
+        cacheState()
+        generation++; threadGeneration++; refreshSignals?.close(); refreshJob?.cancel(); heartbeat?.cancel(); heartbeat = null
         socket?.close(1000, null); socket = null
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Disconnected; pending command outcome may be uncertain")) }
         pending.clear(); streams.clear(); threadSubscription = null; shellReady = false; threadReady = false; authorized = false
         update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, busy = false) }
     }
     override suspend fun selectThread(threadId: String) = synchronized(lifecycleLock) {
-        check(state.value.connection == ConnectionStatus.Connected) { "Connect first" }
+        if (state.value.connection != ConnectionStatus.Connected) {
+            val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
+            check(cached != null) { "Connect to load this thread" }
+            threadReady = false
+            applyProjection(cached, threadId)
+            return@synchronized
+        }
+        if (state.value.selectedThreadId == threadId && threadSubscription != null) return@synchronized
         threadSubscription?.let { streams.remove(it); send(EffectRpc.signal("Interrupt", it)) }
-        threadReady = false; projection = JsonObject(emptyMap())
-        update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), activeRunId = null, canWrite = false) }
+        threadReady = false
+        val selection = ++threadGeneration
+        projection = JsonObject(emptyMap())
+        val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
+        if (cached != null) applyProjection(cached, threadId)
+        else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false) }
+        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), activeRunId = null, canWrite = false) }
         val epoch = generation
         refreshSignals?.close(); refreshJob?.cancel()
         val signals = Channel<Unit>(Channel.CONFLATED)
@@ -198,16 +231,16 @@ class T3Client(
                 try {
                     val value = rpc("orchestration.getThreadProjection", buildJsonObject { put("threadId", threadId) }).jsonObject
                     synchronized(lifecycleLock) {
-                        if (epoch == generation && state.value.selectedThreadId == threadId) {
+                        if (epoch == generation && selection == threadGeneration && state.value.selectedThreadId == threadId) {
                             applyProjection(value); appliedRevision = startedRevision; threadReady = synchronizedSeen && appliedRevision == revision; writable()
                         }
                     }
                 } catch (error: CancellationException) { throw error }
-                catch (_: Exception) { synchronized(lifecycleLock) { if (epoch == generation) fail(epoch, "Thread refresh failed; reconnect before writing") }; break }
+                catch (_: Exception) { synchronized(lifecycleLock) { if (epoch == generation && selection == threadGeneration) fail(epoch, "Thread refresh failed; reconnect before writing") }; break }
             }
         }
         threadSubscription = subscribe("orchestration.subscribeThread", buildJsonObject { put("threadId", threadId); put("requestCompletionMarker", true) }) { item ->
-            if (generation == epoch && state.value.selectedThreadId == threadId) {
+            if (generation == epoch && selection == threadGeneration && state.value.selectedThreadId == threadId) {
                 when (item.string("kind")) {
                     "snapshot" -> { applyProjection(item.obj("projection")); appliedRevision = revision }
                     "synchronized" -> { synchronizedSeen = true; threadReady = appliedRevision == revision; writable() }
@@ -219,17 +252,35 @@ class T3Client(
     private fun writable() = update { it.copy(canWrite = authorized && shellReady && (it.selectedThreadId == null || threadReady) && it.connection == ConnectionStatus.Connected) }
     private fun shellItem(item: JsonObject) {
         when (item.string("kind")) {
-            "snapshot" -> { val snapshot = item.obj("snapshot"); update { it.copy(projects = snapshot.objects("projects").map(::project), threads = snapshot.objects("threads").map { threadSummary(it) } + snapshot.objects("archivedThreads").map { threadSummary(it, archived = true) }) } }
+            "snapshot" -> {
+                val snapshot = item.obj("snapshot")
+                val projects = snapshot.objects("projects").map(::project)
+                if (item["resolvedRepositoryIdentityRoots"] is JsonArray) {
+                    // T3 marks project-only enrichment as a snapshot with empty thread arrays.
+                    // It supplements repository identity; it is never an authoritative thread reset.
+                    update { current -> current.copy(projects = current.projects.filterNot { p -> projects.any { it.id == p.id } } + projects) }
+                } else {
+                    update { it.copy(projects = projects, threads = snapshot.objects("threads").map { threadSummary(it) } + snapshot.objects("archivedThreads").map { threadSummary(it, archived = true) }) }
+                }
+            }
             "project.updated" -> { val value = project(item.obj("project")); update { it.copy(projects = it.projects.filterNot { p -> p.id == value.id } + value) } }
             "project.removed" -> update { it.copy(projects = it.projects.filterNot { p -> p.id == item.string("projectId") }) }
-            "thread.updated" -> { val value = threadSummary(item.obj("thread")); update { it.copy(threads = it.threads.filterNot { t -> t.id == value.id } + value) } }
+            "thread.updated" -> { val value = threadSummary(item.obj("thread"), archived = item.string("location") == "archive"); update { it.copy(threads = it.threads.filterNot { t -> t.id == value.id } + value) } }
             "thread.removed" -> update { it.copy(threads = it.threads.filterNot { t -> t.id == item.string("threadId") }) }
             "synchronized" -> { shellReady = true; writable() }
         }
     }
     private fun project(value: JsonObject) = Project(value.string("id"), value.string("title"), value.string("workspaceRoot"))
-    private fun applyProjection(value: JsonObject) {
+    private fun applyProjection(value: JsonObject, threadId: String? = state.value.selectedThreadId) {
         projection = value
+        val current = state.value
+        val environmentId = current.environment?.id
+        if (environmentId != null && threadId != null) {
+            val key = environmentId to threadId
+            threadProjections.remove(key)
+            threadProjections[key] = value
+            while (threadProjections.size > 12) threadProjections.remove(threadProjections.keys.first())
+        }
         val items = presentationItems(value)
         val requests = value.objects("runtimeRequests").filter { it.string("status") == "pending" }.map { request ->
             val item = items.firstOrNull { it.string("requestId") == request.string("id") } ?: JsonObject(emptyMap())
@@ -241,7 +292,7 @@ class T3Client(
             RuntimeRequest(request.string("id"), item.string("prompt").ifBlank { kind }, if (supported) item.string("reason") else "Respond using another T3 client: unsupported or non-resumable request", questions, supported)
         }
         val active = value.objects("runs").lastOrNull { it.string("status") in setOf("preparing", "running", "starting", "waiting") }?.string("id")
-        update { it.copy(messages = conversationMessages(value),
+        update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, messages = conversationMessages(value),
             activities = toolActivities(value), requests = requests, activeRunId = active) }
     }
     private fun requireWrite() { check(state.value.canWrite) { "Wait for a fresh connection before writing" } }
@@ -290,14 +341,20 @@ class T3Client(
         catch (error: Exception) { fail(epoch, "Thread creation outcome is uncertain or rejected; reconnect to reconcile before retrying"); throw error }
     }
     override suspend fun reconnect() {
-        val current = state.value
-        val environment = current.environment ?: error("Pair an environment first")
+        val environment = state.value.environment ?: error("Pair an environment first")
         connect(environment)
-        current.selectedThreadId?.let { selectThread(it) }
     }
     /** Remove in-memory credentials as well as the local connection; no remote revoke. */
-    fun forgetEnvironment() { disconnectNow(); mutable.value = ClientState() }
-    override fun close() { disconnectNow(); http.connectionPool.evictAll() }
+    fun forgetEnvironment(environmentId: String? = state.value.environment?.id) = synchronized(lifecycleLock) {
+        if (environmentId == state.value.environment?.id) {
+            disconnectNow()
+            projection = JsonObject(emptyMap())
+            mutable.value = ClientState()
+        }
+        environmentStates.remove(environmentId)
+        threadProjections.keys.removeAll { it.first == environmentId }
+    }
+    override fun close() { disconnectNow(); environmentStates.clear(); threadProjections.clear(); http.connectionPool.evictAll() }
 }
 
 /** Policy applies before every environment request; redirects remain disabled on the HTTP client. */
