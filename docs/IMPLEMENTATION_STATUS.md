@@ -113,3 +113,25 @@ details stay out of UI/logs. Adds a synthetic H.264/SEMU device fixture and repe
 Native codec failure and background/screen-off cleanup were exercised: sockets close and app CPU
 returns idle. Signed upgrade/launch verified. Successful native H.264 playback endurance and
 physical-phone thermals remain unverified; see the CPU validation reference for exact evidence.
+
+## 0.7.0
+
+Fixes sending messages: `message.dispatch` omitted the required `createdBy`/`creationSource`, so T3
+rejected sends. New conversations now follow T3 mobile. The dialog has no title and picks project, model
+and runtime mode, with full-row targets. It opens a local draft, and the first send calls `launchThread`
+with `initialMessage`, `generateTitle` and draft-scoped client thread/command IDs. An uncertain launch
+keeps the draft and reconciles by thread ID after reconnect. An explicit resend reuses the IDs, so the
+server resumes instead of duplicating. Composer chips switch mode (`thread.runtime-mode.set`) and model
+(`thread.model-selection.set`). Modes are filtered by provider support and default to the server's
+`defaultRuntimeMode`. Provider switching is locked once a thread has started, and model options are
+kept. Definite T3 rejections show an error without dropping the session; uncertain outcomes still
+disable writes. Request timeouts and cancelled connects now surface messages instead of a silent
+Disconnected state. Sends to preparing threads queue.
+
+244 Gradle tests, the disposable-server wire check, debug/release lint and both APK builds pass. The
+signed APK upgraded 0.6.3 in place on the isolated Android 17 tablet with the original certificate. Against
+an isolated T3 server (devReplay provider, no real providers or user data), the app created a Supervised
+thread from its first message, approved a request, switched mode, reconnected and sent a follow-up,
+staying connected throughout. The user's exact "Disconnected without error" banner wasn't reproduced
+directly; the likely silent paths are fixed. Plan mode, worktree launch, attachments and persisted drafts
+across process death remain follow-ups.

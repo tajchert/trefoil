@@ -81,3 +81,9 @@ Release `0.6.3` (`versionCode = 11`) stops decoder restart storms during device-
 Run the synthetic H.264 device fixture and Python wire tests; debug streaming accepts `mode=device`.
 The checked-in H.264 asset is generated test-pattern video; its regeneration command is in the
 fixture script. It is never bundled into the release APK.
+
+Release `0.7.0` (`versionCode = 12`) creates new conversations with their first message
+(`orchestration.launchThread` + `initialMessage`) and adds runtime mode/model switching. Run
+`node scripts/validate-t3-wire.mjs` against the disposable server: it checks client thread/command IDs,
+commandId resume and typed rejections. For an emulator smoke test, use an isolated T3 server with no
+provider CLIs on `PATH` and its `devReplay` models, reached through `adb reverse` on loopback.
