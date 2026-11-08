@@ -79,7 +79,8 @@ data class ProviderInstance(
 )
 data class Question(val id: String, val title: String, val options: List<String> = emptyList(), val multiple: Boolean = false, val required: Boolean = true)
 data class RuntimeRequest(val id: String, val title: String, val detail: String = "", val questions: List<Question> = emptyList(), val canApprove: Boolean = true)
-data class ModelOption(val instanceId: String, val model: String, val label: String = model)
+/** [supportedRuntimeModes] empty means the provider reports none: every mode is allowed. */
+data class ModelOption(val instanceId: String, val model: String, val label: String = model, val supportedRuntimeModes: List<RuntimeMode> = emptyList())
 /** T3 `RuntimeMode` literals; labels mirror T3 web `runtimeModeConfig`. */
 enum class RuntimeMode(val wire: String, val label: String, val description: String) {
     ApprovalRequired("approval-required", "Supervised", "Ask before commands and file changes."),
@@ -89,7 +90,16 @@ enum class RuntimeMode(val wire: String, val label: String, val description: Str
     companion object { fun fromWire(value: String?): RuntimeMode? = entries.firstOrNull { it.wire == value } }
 }
 /** A local, unsent conversation. The server thread is created by the first message. */
-data class ThreadDraft(val projectId: String, val model: ModelOption, val runtimeMode: RuntimeMode = RuntimeMode.ApprovalRequired)
+/**
+ * [threadId] and [commandId] are allocated once per draft and sent with `launchThread`, so an
+ * uncertain launch can be reconciled by finding [threadId] in the shell, and an explicit user
+ * resend is deduplicated by the server instead of creating a second thread.
+ */
+data class ThreadDraft(
+    val projectId: String, val model: ModelOption, val runtimeMode: RuntimeMode = RuntimeMode.ApprovalRequired,
+    val threadId: String = java.util.UUID.randomUUID().toString(),
+    val commandId: String = java.util.UUID.randomUUID().toString(),
+)
 enum class ConnectionStatus { Disconnected, Connecting, Connected, Reconnecting, Error }
 data class ClientState(
     val environment: SavedEnvironment? = null,
@@ -114,6 +124,10 @@ data class ClientState(
     val selectedRuntimeMode: RuntimeMode? = null,
     /** Selected thread's current model selection, from its projection; null when unknown. */
     val selectedModel: ModelOption? = null,
+    /** True when the selected thread has started and the server cannot hand it to another provider instance. */
+    val selectedProviderLocked: Boolean = false,
+    /** Server `settings.defaultRuntimeMode`; null when not reported. */
+    val defaultRuntimeMode: RuntimeMode? = null,
 )
 
 /** A mutation may or may not have been applied; reconcile from server state, never resend it. */

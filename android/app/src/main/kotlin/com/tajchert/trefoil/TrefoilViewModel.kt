@@ -37,6 +37,9 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     private val _draft = MutableStateFlow<ThreadDraft?>(null)
     /** Unsent new conversation; while non-null the UI shows the draft instead of the selected thread. */
     val draft = _draft.asStateFlow()
+    private val _sendFailed = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    /** Emits once for every send (draft or thread) that did not deliver; the composer must leave its pending state. */
+    val sendFailed = _sendFailed.asSharedFlow()
     /** Environment the draft belongs to; a draft never follows the user to another environment. */
     private var draftEnvironmentId: String? = null
     /** One launch at a time: a second tap must not create a duplicate thread. */
