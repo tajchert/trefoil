@@ -116,6 +116,9 @@ data class ClientState(
     val selectedModel: ModelOption? = null,
 )
 
+/** A mutation may or may not have been applied; reconcile from server state, never resend it. */
+class UncertainOutcomeException(message: String) : IllegalStateException(message)
+
 /** All commands fail explicitly; implementations must never replay uncertain mutations. */
 interface TrefoilClient {
     val state: StateFlow<ClientState>
@@ -133,10 +136,10 @@ interface TrefoilClient {
     suspend fun sendMessage(text: String)
     suspend fun interruptRun()
     suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>> = emptyMap())
-    suspend fun createThread(projectId: String, title: String, model: ModelOption): String
     /**
      * Creates a thread together with its first message (`orchestration.launchThread` with
-     * `initialMessage`, `generateTitle`), like T3 web. Returns the new thread ID. Never replayed.
+     * `initialMessage`, `generateTitle`), like T3 web. Returns the new thread ID. Never replayed:
+     * a request that may have reached the server fails with [UncertainOutcomeException].
      */
     suspend fun launchThread(draft: ThreadDraft, firstMessage: String): String { error("Thread launch is unavailable") }
     /** Dispatches `thread.runtime-mode.set` for the selected thread. */

@@ -77,6 +77,10 @@ class T3Client(
         }
     }
     private class HttpFailure(val status: Int) : IllegalStateException(if (status == 401 || status == 403) "Authorization expired or denied; pair again" else "Server HTTP error $status")
+    /** The server answered with a failure Exit: a definite answer, not a lost reply. */
+    private class ServerRejected : IllegalStateException("Server rejected request; refresh before trying again")
+    /** No reply in time. Deliberately not a CancellationException, so callers cannot swallow it as cancellation. */
+    private class RequestTimedOut : IllegalStateException("Server did not answer in time; the outcome is uncertain")
     private suspend fun descriptor(base: HttpUrl): JsonObject = fetch(Request.Builder().url(base.resolve("/.well-known/t3/environment")!!).build()).also {
         if (it["orchestrationProtocolVersion"]?.jsonPrimitive?.intOrNull != 2) throw PairingException("This environment does not support orchestration protocol 2")
     }
@@ -140,7 +144,10 @@ class T3Client(
             heartbeat = scope.launch { while (isActive && epoch == generation) {
                 delay(15_000)
                 if (System.currentTimeMillis() - pongAt > 45_000) { fail(epoch, "Connection timed out; reconnect to refresh"); break }
-                send(EffectRpc.signal("Ping"))
+                // A socket torn down between the delay and the ping must not crash the app scope.
+                synchronized(lifecycleLock) {
+                    if (epoch == generation && socket?.send(EffectRpc.signal("Ping").toString()) != true) fail(epoch, "Connection lost; reconnect to refresh")
+                }
             } }
             val config = rpc("server.getConfig", buildJsonObject {}).jsonObject
             check(epoch == generation) { "Connection was cancelled" }
@@ -150,7 +157,8 @@ class T3Client(
             val models = config.objects("providers").filter { it["enabled"]?.jsonPrimitive?.booleanOrNull != false }.flatMap { provider ->
                 provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name")) }
             }
-            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config)) }
+            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config),
+                selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
             subscribe("orchestration.subscribeShell", buildJsonObject {
                 put("requestCompletionMarker", true)
                 // Native grouping needs complete lineage and all settled rows for exact counts.
@@ -163,13 +171,15 @@ class T3Client(
                 fail(epoch, message)
                 throw PairingException(message)
             }
-            synchronized(lifecycleLock) { if (epoch == generation) disconnectNow() }
+            // Superseded, paused or cancelled by the user: close, but never silently.
+            synchronized(lifecycleLock) { if (epoch == generation) disconnectNow("Connection attempt was cancelled. Reconnect to continue.") }
             throw error
         }
         catch (error: Exception) {
             val message = when (error) {
                 is PairingException -> error.message ?: "Connection failed"
                 is HttpFailure -> error.message ?: "Connection failed"
+                is RequestTimedOut -> "T3 connection timed out. Check the server and network, then try again."
                 else -> "Connection failed. Check the network and server, or pair again."
             }
             fail(epoch, message)
@@ -187,7 +197,7 @@ class T3Client(
             context.ensureActive()
             check(epoch == generation && guard()) { "Session changed; command was not sent" }
             send(EffectRpc.request(id, tag, payload)); sent = true
-        }; return withTimeout(requestTimeoutMillis) { result.await() } }
+        }; return withTimeoutOrNull(requestTimeoutMillis) { result.await() } ?: throw RequestTimedOut() }
         finally { if (pending.remove(id) != null && sent) runCatching { send(EffectRpc.signal("Interrupt", id)) } }
     }
     private fun subscribe(tag: String, payload: JsonObject, handler: (JsonObject) -> Unit): String {
@@ -204,7 +214,7 @@ class T3Client(
                 val exit = frame.obj("exit")
                 val result = pending.remove(id)
                 if (exit.string("_tag") == "Success") result?.complete(exit["value"] ?: JsonNull)
-                else result?.completeExceptionally(IllegalStateException("Server rejected request; refresh before trying again"))
+                else result?.completeExceptionally(ServerRejected())
                 if (streams.remove(id) != null) {
                     if (optionalScreenStreams.remove(id)) {
                         if (id == previewScreenSubscription) { previewScreenSubscription = null; browserScreensFresh = false }
@@ -228,7 +238,8 @@ class T3Client(
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
     }
     override suspend fun disconnect() = disconnectNow()
-    private fun disconnectNow() = synchronized(lifecycleLock) {
+    /** [reason] replaces any stale error when the disconnect was not requested by the user. */
+    private fun disconnectNow(reason: String? = null) = synchronized(lifecycleLock) {
         cacheState()
         fileDownloads.forEach { it.cancel() }; fileDownloads.clear()
         generation++; threadGeneration++; refreshSignals?.close(); refreshJob?.cancel(); heartbeat?.cancel(); heartbeat = null
@@ -236,7 +247,7 @@ class T3Client(
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Disconnected; pending command outcome may be uncertain")) }
         pending.clear(); streams.clear(); threadSubscription = null; shellReady = false; threadReady = false; authorized = false; previewAuthorized = false
         resetScreens()
-        update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, canRead = false, busy = false) }
+        update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, canRead = false, busy = false, error = reason ?: it.error) }
     }
     override suspend fun selectThread(threadId: String) = synchronized(lifecycleLock) {
         if (state.value.selectedThreadId != threadId) { fileDownloads.forEach { it.cancel() }; fileDownloads.clear(); resetScreens(interrupt = true) }
@@ -255,7 +266,7 @@ class T3Client(
         val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
         if (cached != null) applyProjection(cached, threadId)
         else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false, canRead = false) }
-        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), activeRunId = null, canWrite = false) }
+        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null) }
         val epoch = generation
         refreshSignals?.close(); refreshJob?.cancel()
         val signals = Channel<Unit>(Channel.CONFLATED)
@@ -335,9 +346,18 @@ class T3Client(
             RuntimeRequest(request.string("id"), item.string("prompt").ifBlank { kind }, if (supported) item.string("reason") else "Respond using another T3 client: unsupported or non-resumable request", questions, supported)
         }
         val active = value.objects("runs").lastOrNull { it.string("status") in setOf("preparing", "running", "starting", "waiting") }?.string("id")
+        val thread = value.obj("thread")
         update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, canRead = it.canRead && threadReady, messages = conversationMessages(value),
             activities = toolActivities(value), requests = requests, activeRunId = active,
-            runs = conversationRuns(value), attempts = runAttempts(value)) }
+            runs = conversationRuns(value), attempts = runAttempts(value),
+            selectedRuntimeMode = RuntimeMode.fromWire(thread.string("runtimeMode")),
+            selectedModel = selectedModel(thread["modelSelection"] as? JsonObject, it.models)) }
+    }
+    /** T3 `thread.modelSelection {instanceId, model}`; prefers the server catalog entry for its label. */
+    private fun selectedModel(selection: JsonObject?, models: List<ModelOption>): ModelOption? {
+        val instanceId = selection?.string("instanceId").orEmpty(); val model = selection?.string("model").orEmpty()
+        if (instanceId.isBlank() || model.isBlank()) return null
+        return models.firstOrNull { it.instanceId == instanceId && it.model == model } ?: ModelOption(instanceId, model)
     }
     override suspend fun loadActivity(itemId: String) {
         val captured = synchronized(lifecycleLock) {
@@ -530,17 +550,79 @@ class T3Client(
     private fun command(type: String, extra: JsonObject): JsonObject = buildJsonObject {
         put("type", type); put("commandId", UUID.randomUUID().toString()); put("threadId", state.value.selectedThreadId ?: error("Select a thread")); extra.forEach { (key, value) -> put(key, value) }
     }
+    /**
+     * Sends one mutation once. Any failure after the send leaves server state unknown to this
+     * projection, so the session fails (writes disabled) and the caller gets a clear error.
+     */
     private suspend fun dispatch(type: String, extra: JsonObject) {
         val (epoch, payload) = synchronized(lifecycleLock) { requireWrite(); generation to command(type, extra) }
-        try { rpc("orchestration.dispatchCommand", payload, epoch) }
-        catch (error: Exception) {
-            synchronized(lifecycleLock) { if (epoch == generation) fail(epoch, "Command outcome is uncertain or rejected; reconnect to reconcile before retrying") }
-            throw error
-        }
+        mutation(epoch, "Command") { rpc("orchestration.dispatchCommand", payload, epoch) }
     }
+    private suspend fun <T> mutation(epoch: Long, subject: String, block: suspend () -> T): T = try { block() }
+    catch (error: Exception) {
+        val rejected = error is ServerRejected
+        val message = if (rejected) "T3 rejected the ${subject.lowercase()}. Reconnect to refresh before trying again."
+            else "$subject outcome is uncertain. Reconnect and check the conversation before trying again."
+        synchronized(lifecycleLock) { if (epoch == generation) fail(epoch, message) }
+        // Caller cancellation still propagates; the session already records the uncertainty.
+        if (error is CancellationException) throw error
+        throw if (rejected) IllegalStateException(message, error) else UncertainOutcomeException(message)
+    }
+    /** T3 requires creation provenance on every `message.dispatch`; the server stamps `createdBy` itself. */
+    private fun JsonObjectBuilder.provenance() { put("createdBy", "user"); put("creationSource", CREATION_SOURCE) }
     override suspend fun sendMessage(text: String) {
         require(text.isNotBlank()) { "Message is empty" }
-        dispatch("message.dispatch", buildJsonObject { put("messageId", UUID.randomUUID().toString()); put("text", text); put("attachments", JsonArray(emptyList())); put("dispatchMode", buildJsonObject { put("type", if (state.value.activeRunId == null) "start_immediately" else "queue_after_active") }) })
+        dispatch("message.dispatch", buildJsonObject {
+            provenance()
+            put("messageId", UUID.randomUUID().toString()); put("text", text); put("attachments", JsonArray(emptyList()))
+            put("dispatchMode", buildJsonObject { put("type", if (state.value.activeRunId == null) "start_immediately" else "queue_after_active") })
+        })
+    }
+    override suspend fun launchThread(draft: ThreadDraft, firstMessage: String): String {
+        require(firstMessage.isNotBlank()) { "Message is empty" }
+        val (epoch, payload) = synchronized(lifecycleLock) {
+            requireWrite()
+            check(state.value.projects.any { it.id == draft.projectId }) { "Choose a project from this environment" }
+            val model = state.value.models.firstOrNull { it.instanceId == draft.model.instanceId && it.model == draft.model.model } ?: error("Choose a server-provided model")
+            generation to buildJsonObject {
+                put("commandId", UUID.randomUUID().toString()); put("creationSource", CREATION_SOURCE)
+                put("projectId", draft.projectId); put("title", threadTitleSeed(firstMessage)); put("generateTitle", true)
+                put("modelSelection", buildJsonObject { put("instanceId", model.instanceId); put("model", model.model) })
+                put("runtimeMode", draft.runtimeMode.wire); put("interactionMode", "default")
+                put("workspaceStrategy", buildJsonObject { put("type", "root") })
+                put("initialMessage", buildJsonObject {
+                    put("messageId", UUID.randomUUID().toString()); put("text", firstMessage); put("attachments", JsonArray(emptyList()))
+                })
+            }
+        }
+        val result = mutation(epoch, "New conversation") { rpc("orchestration.launchThread", payload, epoch).jsonObject }
+        val threadId = result.string("threadId")
+        val projection = result["projection"] as? JsonObject
+        synchronized(lifecycleLock) {
+            val projectedId = projection?.obj("thread")?.string("id").orEmpty()
+            if (threadId.isBlank() || (projectedId.isNotEmpty() && projectedId != threadId)) {
+                val message = "New conversation outcome is uncertain. Reconnect and check the thread list before trying again."
+                if (epoch == generation) fail(epoch, message)
+                throw UncertainOutcomeException(message)
+            }
+            // Seed the cache so selecting the new thread shows the first message before its stream syncs.
+            val environmentId = state.value.environment?.id
+            if (epoch == generation && environmentId != null && projection != null) {
+                val key = environmentId to threadId
+                threadProjections.remove(key); threadProjections[key] = projection
+                while (threadProjections.size > 12) threadProjections.remove(threadProjections.keys.first())
+            }
+        }
+        return threadId
+    }
+    override suspend fun setRuntimeMode(mode: RuntimeMode) {
+        dispatch("thread.runtime-mode.set", buildJsonObject { put("runtimeMode", mode.wire) })
+    }
+    override suspend fun setModel(model: ModelOption) {
+        val selected = state.value.models.firstOrNull { it.instanceId == model.instanceId && it.model == model.model } ?: error("Choose a server-provided model")
+        dispatch("thread.model-selection.set", buildJsonObject {
+            put("modelSelection", buildJsonObject { put("instanceId", selected.instanceId); put("model", selected.model) })
+        })
     }
     override suspend fun interruptRun() { dispatch("run.interrupt", buildJsonObject { put("runId", state.value.activeRunId ?: error("No active run")) }) }
     override suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>>) {
@@ -561,16 +643,6 @@ class T3Client(
             } else { val offered = item.objects("options").map { it.string("decision") }; require(offered.isEmpty() || decision in offered) { "This response is not offered by the provider" }; require(decision in setOf("accept", "acceptForSession", "acceptAlways", "decline", "cancel")) { "Invalid approval decision" }; put("decision", decision) }
         })
     }
-    override suspend fun createThread(projectId: String, title: String, model: ModelOption): String {
-        requireWrite(); require(title.isNotBlank()); require(model in state.value.models) { "Choose a server-provided model" }
-        val epoch = generation
-        return try { rpc("orchestration.launchThread", buildJsonObject {
-            put("commandId", UUID.randomUUID().toString()); put("projectId", projectId); put("title", title)
-            put("modelSelection", buildJsonObject { put("instanceId", model.instanceId); put("model", model.model) })
-            put("runtimeMode", "approval-required"); put("interactionMode", "default"); put("workspaceStrategy", buildJsonObject { put("type", "root") })
-        }, epoch).jsonObject.string("threadId").also { require(it.isNotBlank()) { "Server returned no thread ID" } } }
-        catch (error: Exception) { fail(epoch, "Thread creation outcome is uncertain or rejected; reconnect to reconcile before retrying"); throw error }
-    }
     override suspend fun reconnect() {
         val environment = state.value.environment ?: error("Pair an environment first")
         connect(environment)
@@ -586,6 +658,17 @@ class T3Client(
         threadProjections.keys.removeAll { it.first == environmentId }
     }
     override fun close() { disconnectNow(); environmentStates.clear(); threadProjections.clear(); http.connectionPool.evictAll() }
+}
+
+private const val CREATION_SOURCE = "mobile"
+
+/** T3 client-runtime `deriveThreadTitleSeed`: whitespace-normalized, at most 50 code points plus "...". */
+internal fun threadTitleSeed(text: String, maxLength: Int = 50): String {
+    val normalized = text.trim().replace(Regex("\\s+"), " ")
+    if (normalized.isEmpty()) return "New thread"
+    val count = normalized.codePointCount(0, normalized.length)
+    if (count <= maxLength) return normalized
+    return normalized.substring(0, normalized.offsetByCodePoints(0, maxLength)) + "..."
 }
 
 /** Policy applies before every environment request; redirects remain disabled on the HTTP client. */
