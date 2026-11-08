@@ -23,6 +23,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,8 +36,14 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
 @Composable
-internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt: () -> Unit, respond: (String, String, Map<String, List<String>>) -> Unit, onLoadActivity: (String) -> Unit = {}, fileDownloadUi: FileDownloadUi = FileDownloadUi()) {
-    if (state.selectedThreadId == null) {
+internal fun Conversation(
+    rawState: ClientState, send: (String) -> Unit, interrupt: () -> Unit, respond: (String, String, Map<String, List<String>>) -> Unit,
+    onLoadActivity: (String) -> Unit = {}, fileDownloadUi: FileDownloadUi = FileDownloadUi(),
+    draft: ThreadDraft? = null, onSetRuntimeMode: (RuntimeMode) -> Unit = {}, onSetModel: (ModelOption) -> Unit = {},
+) {
+    // A draft hides whatever thread was previously selected; its first message creates the real thread.
+    val state = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())
+    if (state.selectedThreadId == null && draft == null) {
         Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Default.Forum, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
@@ -45,13 +53,14 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
         }
         return
     }
-    var draft by rememberSaveable(state.environment?.id, state.selectedThreadId) { mutableStateOf("") }
-    var submitted by rememberSaveable(state.environment?.id, state.selectedThreadId) { mutableStateOf<String?>(null) }
-    var messageIdsAtSend by rememberSaveable(state.environment?.id, state.selectedThreadId) { mutableStateOf(arrayListOf<String>()) }
+    val composerKey = if (draft != null) "draft" else state.selectedThreadId
+    var text by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf("") }
+    var submitted by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf<String?>(null) }
+    var messageIdsAtSend by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf(arrayListOf<String>()) }
     LaunchedEffect(state.messages) {
         val pending = submitted
         if (pending != null && state.messages.any { it.role == "user" && it.text == pending && it.id !in messageIdsAtSend }) {
-            if (draft == pending) draft = ""
+            if (text == pending) text = ""
             submitted = null
         }
     }
@@ -73,8 +82,8 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
             if (list.layoutInfo.totalItemsCount > 0) list.scrollToItem(list.layoutInfo.totalItemsCount - 1)
         }
     }
-    val thread = state.threads.find { it.id == state.selectedThreadId }
-    val project = state.projects.find { it.id == thread?.projectId }
+    val thread = if (draft != null) null else state.threads.find { it.id == state.selectedThreadId }
+    val project = state.projects.find { it.id == (draft?.projectId ?: thread?.projectId) }
     val canLoadActivity = state.connection == ConnectionStatus.Connected && !state.busy
     val providerStack = thread?.let { threadProviders(it, state.providers) }.orEmpty()
     val workStartedAt = thread?.let(::threadWorkStartedAt)?.let(::validThreadInstant)
@@ -88,7 +97,7 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
                 Spacer(Modifier.width(10.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(thread?.title?.ifBlank { "Untitled conversation" } ?: "Conversation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(if (draft != null) "New conversation" else thread?.title?.ifBlank { "Untitled conversation" } ?: "Conversation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (project != null) Text(project.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp))
             }
             if (state.activeRunId != null) Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
@@ -102,8 +111,8 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
                 if (!state.busy && entries.isEmpty()) item {
                     Column(Modifier.fillMaxWidth().padding(vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Default.AutoAwesome, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
-                        Text("What would you like to build?", Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
-                        Text("Send a message to get started.", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (draft != null) "New conversation in ${project?.title ?: "this project"}" else "What would you like to build?", Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
+                        Text(if (draft != null) "Your first message starts the thread." else "Send a message to get started.", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 items(entries, key = { it.key }) { entry ->
@@ -138,12 +147,13 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
                 }
                 if (!state.canWrite) Text("Read only · reconnect to continue", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
                 if (submitted != null) Text("Waiting for server confirmation…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+                ComposerPickers(state, draft, onSetRuntimeMode, onSetModel)
                 OutlinedTextField(
-                    value = draft, onValueChange = { draft = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Message T3…") }, maxLines = 6,
+                    value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Message T3…") }, maxLines = 6,
                     shape = RoundedCornerShape(20.dp),
                     colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
                     trailingIcon = {
-                        FilledIconButton(onClick = { if (draft.isNotBlank() && submitted == null && state.canWrite && !state.busy) { messageIdsAtSend = ArrayList(state.messages.map { it.id }); submitted = draft; send(draft) } }, enabled = state.canWrite && !state.busy && draft.isNotBlank() && submitted == null, modifier = Modifier.padding(end = 6.dp)) {
+                        FilledIconButton(onClick = { if (text.isNotBlank() && submitted == null && state.canWrite && !state.busy) { messageIdsAtSend = ArrayList(state.messages.map { it.id }); submitted = text; send(text) } }, enabled = state.canWrite && !state.busy && text.isNotBlank() && submitted == null, modifier = Modifier.padding(end = 6.dp)) {
                             Icon(Icons.AutoMirrored.Filled.Send, if (state.activeRunId != null) "Queue message" else "Send message", Modifier.size(20.dp))
                         }
                     }
@@ -151,6 +161,39 @@ internal fun Conversation(state: ClientState, send: (String) -> Unit, interrupt:
             }
         }
     }
+    }
+}
+
+@Composable
+private fun ComposerPickers(state: ClientState, draft: ThreadDraft?, onSetRuntimeMode: (RuntimeMode) -> Unit, onSetModel: (ModelOption) -> Unit) {
+    val mode = if (draft != null) draft.runtimeMode else state.selectedRuntimeMode
+    val model = if (draft != null) draft.model else state.selectedModel
+    val enabled = state.canWrite && !state.busy
+    var modeOpen by remember { mutableStateOf(false) }
+    var modelOpen by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box {
+            AssistChip(onClick = { modeOpen = true }, enabled = enabled, label = { Text(mode?.label ?: "Mode", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.Shield, null, Modifier.size(18.dp)) }, modifier = Modifier.semantics { contentDescription = "Runtime mode: ${mode?.label ?: "not set"}" })
+            DropdownMenu(modeOpen, { modeOpen = false }) {
+                RuntimeMode.entries.forEach { option ->
+                    DropdownMenuItem(text = { Column { Text(option.label); Text(option.description, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+                        onClick = { modeOpen = false; onSetRuntimeMode(option) },
+                        trailingIcon = { if (option == mode) Icon(Icons.Default.Check, "Selected") })
+                }
+            }
+        }
+        Box {
+            AssistChip(onClick = { modelOpen = true }, enabled = enabled && state.models.isNotEmpty(), label = { Text(model?.label ?: "Model", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.AutoAwesome, null, Modifier.size(18.dp)) }, modifier = Modifier.semantics { contentDescription = "Model: ${model?.label ?: "not set"}" })
+            DropdownMenu(modelOpen, { modelOpen = false }) {
+                state.models.forEach { option ->
+                    DropdownMenuItem(text = { Column { Text(option.label); Text(option.instanceId, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+                        onClick = { modelOpen = false; onSetModel(option) },
+                        trailingIcon = { if (option == model) Icon(Icons.Default.Check, "Selected") })
+                }
+            }
+        }
     }
 }
 
