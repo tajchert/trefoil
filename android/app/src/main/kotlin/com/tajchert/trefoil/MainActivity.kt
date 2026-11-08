@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
             val screenViewer by model.screenSessions.state.collectAsStateWithLifecycle()
             val downloads by model.fileDownloads.state.collectAsStateWithLifecycle()
             val environments by model.environments.collectAsStateWithLifecycle()
+            val draft by model.draft.collectAsStateWithLifecycle()
             val notice by model.notice.collectAsStateWithLifecycle()
             val working by model.working.collectAsStateWithLifecycle()
             val sshHostKey by model.sshHostKey.collectAsStateWithLifecycle()
@@ -59,7 +60,11 @@ class MainActivity : ComponentActivity() {
                     { environmentId, threadId, reference -> model.fileDownloads.cancel(reference, environmentId, threadId) },
                     { openDownloaded(it) }, { openDownloaded(it, share = true) }, { openDownloaded(it, install = true) }),
                 onRespond = model::respond,
-                onCreateThread = model::createThread,
+                draft = draft,
+                onStartDraft = model::startDraft,
+                onCancelDraft = model::cancelDraft,
+                onSetRuntimeMode = model::setRuntimeMode,
+                onSetModel = model::setModel,
                 onReconnect = model::reconnect,
                 onDisconnect = model::disconnect,
                 onForget = model::forget,

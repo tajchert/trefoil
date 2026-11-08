@@ -46,7 +46,7 @@ class ThreadListUiTest {
     @Test fun returningFromConversationRetainsCollapsedShelvesAndSearch() {
         val state = androidx.compose.runtime.mutableStateOf(fixture.copy(environment = SavedEnvironment("fixture", "Fixture", "https://fixture.invalid", "fixture-token")))
         compose.setContent { TrefoilApp(state.value, emptyList(), { _, _, _ -> }, {},
-            { id -> state.value = state.value.copy(selectedThreadId = id) }, {}, {}, { _, _, _ -> }, { _, _, _ -> }, {}, {}, {}) }
+            { id -> state.value = state.value.copy(selectedThreadId = id) }, {}, {}, { _, _, _ -> }, null, {}, {}, {}, {}, {}, {}, {}) }
         compose.onNodeWithContentDescription("Working shelf").performClick()
         compose.onNodeWithText("Keep activity in the right order").assertDoesNotExist()
         compose.onNodeWithText("Polish the Android thread list").performClick()

@@ -42,7 +42,7 @@ class ConnectionDialogTest {
         compose.setContent { TrefoilApp(
             state = ClientState(), savedEnvironments = emptyList(), onPair = { _, _, _ -> }, onConnect = {},
             onSelectThread = {}, onSend = {}, onInterrupt = {}, onRespond = { _, _, _ -> },
-            onCreateThread = { _, _, _ -> }, onReconnect = {}, onDisconnect = {}, onForget = {},
+            draft = null, onStartDraft = {}, onCancelDraft = {}, onSetRuntimeMode = {}, onSetModel = {}, onReconnect = {}, onDisconnect = {}, onForget = {},
             onSshConnect = { attempt.value = ConnectionAttempt(1, ConnectionKind.Ssh, ConnectionPhase.Testing) },
             sshHostKey = hostKey.value, onTrustSsh = { hostKey.value = null }, connectionAttempt = attempt.value,
         ) }

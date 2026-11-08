@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -36,7 +38,8 @@ fun TrefoilApp(
     onPair: (String, String, Boolean) -> Unit, onConnect: (SavedEnvironment) -> Unit,
     onSelectThread: (String) -> Unit, onSend: (String) -> Unit, onInterrupt: () -> Unit,
     onRespond: (String, String, Map<String, List<String>>) -> Unit,
-    onCreateThread: (String, String, ModelOption) -> Unit,
+    draft: ThreadDraft?, onStartDraft: (ThreadDraft) -> Unit, onCancelDraft: () -> Unit,
+    onSetRuntimeMode: (RuntimeMode) -> Unit, onSetModel: (ModelOption) -> Unit,
     onReconnect: () -> Unit, onDisconnect: () -> Unit, onForget: (SavedEnvironment) -> Unit,
     onSshConnect: (SshConnectionInput) -> Unit = {},
     sshHostKey: SshHostKey? = null,
@@ -72,11 +75,12 @@ fun TrefoilApp(
                 if (connectionAttempt.kind == ConnectionKind.Pairing && submittedPair) { pairing = false; submittedPair = false; choosingEnvironment = false }
             }
         }
-        val select: (String) -> Unit = { onSelectThread(it); showThread = true }
+        val cancelDraft: () -> Unit = { if (draft != null) onCancelDraft() }
+        val select: (String) -> Unit = { cancelDraft(); onSelectThread(it); showThread = true }
         Surface(Modifier.fillMaxSize()) {
             BoxWithConstraints {
                 val wide = maxWidth >= 840.dp
-                BackHandler(!showScreens && (showThread || choosingEnvironment) && !wide) { showThread = false; choosingEnvironment = false }
+                BackHandler(!showScreens && (showThread || choosingEnvironment) && !wide) { cancelDraft(); showThread = false; choosingEnvironment = false }
                 Scaffold(topBar = {
                     if (!showScreens) TopAppBar(title = {
                         Column {
@@ -85,7 +89,7 @@ fun TrefoilApp(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }, navigationIcon = {
-                        if (showThread && !wide) IconButton(onClick = { showThread = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to threads") }
+                        if (showThread && !wide) IconButton(onClick = { cancelDraft(); showThread = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to threads") }
                         else Icon(Icons.Default.Spa, null, Modifier.padding(start = 20.dp, end = 8.dp), tint = MaterialTheme.colorScheme.primary)
                     }, actions = {
                         if (state.environment != null) IconButton(onClick = { showScreens = true }, enabled = !state.busy) { Icon(Icons.Default.Devices, "Screen sessions") }
@@ -112,8 +116,9 @@ fun TrefoilApp(
                             }
                             if (wide) VerticalDivider()
                             if (wide || showThread) Box(Modifier.weight(1f).fillMaxHeight()) {
-                                conversationState.SaveableStateProvider("${state.environment?.id}:${state.selectedThreadId}") {
-                                    Conversation(state, onSend, onInterrupt, onRespond, onLoadActivity = onLoadActivity, fileDownloadUi = fileDownloadUi)
+                                conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) "draft" else state.selectedThreadId}") {
+                                    Conversation(state, onSend, onInterrupt, onRespond, onLoadActivity = onLoadActivity, fileDownloadUi = fileDownloadUi,
+                                        draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel)
                                 }
                             }
                         }
@@ -137,8 +142,8 @@ fun TrefoilApp(
         }
         if (sshHostKey != null) SshHostKeyDialog(sshHostKey, onTrustSsh, onCancelSsh)
         if (pairing) PairDialog(state.busy, { pairing = false; submittedPair = false; onCancelSsh() }, connectionAttempt.takeIf { it.kind == ConnectionKind.Pairing } ?: ConnectionAttempt()) { url, name, insecure -> submittedPair = true; onPair(url, name, insecure) }
-        if (creating) NewThreadDialog(state, { creating = false }) { project, title, model ->
-            onCreateThread(project, title, model); creating = false; showThread = true
+        if (creating) NewThreadDialog(state, { creating = false }) { newDraft ->
+            onStartDraft(newDraft); creating = false; showThread = true
         }
     }
 }
@@ -222,32 +227,40 @@ internal fun PairDialog(busy: Boolean, dismiss: () -> Unit, attempt: ConnectionA
 }
 
 @Composable
-private fun NewThreadDialog(state: ClientState, dismiss: () -> Unit, create: (String, String, ModelOption) -> Unit) {
+internal fun NewThreadDialog(state: ClientState, dismiss: () -> Unit, start: (ThreadDraft) -> Unit) {
     var projectId by rememberSaveable { mutableStateOf(state.projects.firstOrNull()?.id.orEmpty()) }
     var modelIndex by rememberSaveable { mutableIntStateOf(0) }
-    var title by rememberSaveable { mutableStateOf("") }
+    var modeIndex by rememberSaveable { mutableIntStateOf(RuntimeMode.entries.indexOf(RuntimeMode.ApprovalRequired)) }
+    val model = state.models.getOrNull(modelIndex)
     AlertDialog(onDismissRequest = dismiss, title = { Text("New conversation") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(title, { title = it }, label = { Text("Conversation title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("PROJECT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             state.projects.forEach { project ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(projectId == project.id, onClick = { projectId = project.id })
-                    Text(project.title, Modifier.weight(1f))
-                }
+                ChoiceRow(projectId == project.id, { projectId = project.id }) { Text(project.title) }
             }
-            Text("PROVIDER / MODEL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Text("PROVIDER / MODEL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
             if (state.models.isEmpty()) Text("No models reported by this environment. Reconnect to refresh configuration.")
-            state.models.forEachIndexed { index, model ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(modelIndex == index, onClick = { modelIndex = index })
-                    Column(Modifier.weight(1f)) { Text(model.label); Text(model.instanceId, style = MaterialTheme.typography.labelSmall) }
-                }
+            state.models.forEachIndexed { index, option ->
+                ChoiceRow(modelIndex == index, { modelIndex = index }) { Column { Text(option.label); Text(option.instanceId, style = MaterialTheme.typography.labelSmall) } }
             }
-            Text("Starts with approvals required. Workspace uses the server default.", style = MaterialTheme.typography.bodySmall)
+            Text("MODE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
+            RuntimeMode.entries.forEachIndexed { index, mode ->
+                ChoiceRow(modeIndex == index, { modeIndex = index }) { Column { Text(mode.label); Text(mode.description, style = MaterialTheme.typography.labelSmall) } }
+            }
+            Text("Workspace uses the server default.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
         }
     }, confirmButton = {
-        Button(onClick = { state.models.getOrNull(modelIndex)?.let { create(projectId, title.trim(), it) } },
-            enabled = state.canWrite && !state.busy && title.isNotBlank() && projectId.isNotBlank() && state.models.getOrNull(modelIndex) != null) { Text("Create") }
+        Button(onClick = { model?.let { start(ThreadDraft(projectId, it, RuntimeMode.entries[modeIndex])) } },
+            enabled = state.canWrite && !state.busy && projectId.isNotBlank() && model != null) { Text("Start") }
     }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
+}
+
+@Composable
+private fun ChoiceRow(selected: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected, onClick = onClick, role = Role.RadioButton).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(selected, onClick = null)
+        Spacer(Modifier.width(12.dp))
+        Box(Modifier.weight(1f)) { content() }
+    }
 }
