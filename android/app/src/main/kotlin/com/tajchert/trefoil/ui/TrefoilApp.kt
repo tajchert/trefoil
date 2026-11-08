@@ -28,6 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.core.model.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import com.tajchert.trefoil.ui.screens.ScreenViewerState
 import com.tajchert.trefoil.ui.screens.ScreenSessionsScreen
 
@@ -55,6 +57,7 @@ fun TrefoilApp(
     onCloseScreen: () -> Unit = {},
     isScreenAccessCurrent: (ScreenAccess) -> Boolean = { false },
     fileDownloadUi: FileDownloadUi = FileDownloadUi(),
+    sendFailed: Flow<Unit> = emptyFlow(),
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -118,7 +121,7 @@ fun TrefoilApp(
                             if (wide || showThread) Box(Modifier.weight(1f).fillMaxHeight()) {
                                 conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) "draft" else state.selectedThreadId}") {
                                     Conversation(state, onSend, onInterrupt, onRespond, onLoadActivity = onLoadActivity, fileDownloadUi = fileDownloadUi,
-                                        draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel)
+                                        draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, sendFailed = sendFailed)
                                 }
                             }
                         }
@@ -226,12 +229,22 @@ internal fun PairDialog(busy: Boolean, dismiss: () -> Unit, attempt: ConnectionA
         dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
 }
 
+/** Modes the model supports; an empty or missing list means every mode is allowed. */
+internal fun allowedRuntimeModes(model: ModelOption?): List<RuntimeMode> =
+    model?.supportedRuntimeModes?.takeIf { it.isNotEmpty() }?.let { supported -> RuntimeMode.entries.filter { it in supported } }?.takeIf { it.isNotEmpty() } ?: RuntimeMode.entries.toList()
+
+/** Keeps [preferred] when allowed, otherwise falls back to the first allowed mode. */
+internal fun resolveRuntimeMode(preferred: RuntimeMode?, allowed: List<RuntimeMode>): RuntimeMode =
+    preferred?.takeIf { it in allowed } ?: allowed.first()
+
 @Composable
 internal fun NewThreadDialog(state: ClientState, dismiss: () -> Unit, start: (ThreadDraft) -> Unit) {
     var projectId by rememberSaveable { mutableStateOf(state.projects.firstOrNull()?.id.orEmpty()) }
     var modelIndex by rememberSaveable { mutableIntStateOf(0) }
-    var modeIndex by rememberSaveable { mutableIntStateOf(RuntimeMode.entries.indexOf(RuntimeMode.ApprovalRequired)) }
+    var chosenMode by rememberSaveable { mutableStateOf((state.defaultRuntimeMode ?: RuntimeMode.ApprovalRequired).wire) }
     val model = state.models.getOrNull(modelIndex)
+    val allowedModes = allowedRuntimeModes(model)
+    val mode = resolveRuntimeMode(RuntimeMode.fromWire(chosenMode), allowedModes)
     AlertDialog(onDismissRequest = dismiss, title = { Text("New conversation") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("PROJECT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -244,13 +257,13 @@ internal fun NewThreadDialog(state: ClientState, dismiss: () -> Unit, start: (Th
                 ChoiceRow(modelIndex == index, { modelIndex = index }) { Column { Text(option.label); Text(option.instanceId, style = MaterialTheme.typography.labelSmall) } }
             }
             Text("MODE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
-            RuntimeMode.entries.forEachIndexed { index, mode ->
-                ChoiceRow(modeIndex == index, { modeIndex = index }) { Column { Text(mode.label); Text(mode.description, style = MaterialTheme.typography.labelSmall) } }
+            allowedModes.forEach { option ->
+                ChoiceRow(mode == option, { chosenMode = option.wire }) { Column { Text(option.label); Text(option.description, style = MaterialTheme.typography.labelSmall) } }
             }
             Text("Workspace uses the server default.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
         }
     }, confirmButton = {
-        Button(onClick = { model?.let { start(ThreadDraft(projectId, it, RuntimeMode.entries[modeIndex])) } },
+        Button(onClick = { model?.let { start(ThreadDraft(projectId, it, mode)) } },
             enabled = state.canWrite && !state.busy && projectId.isNotBlank() && model != null) { Text("Start") }
     }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
 }

@@ -31,7 +31,7 @@ class NewThreadFlowTest {
         compose.onNodeWithText("Model B").performClick()
         compose.onNodeWithText("Auto-accept edits").performScrollTo().performClick()
         compose.onNodeWithText("Start").performClick()
-        compose.runOnIdle { assertEquals(ThreadDraft("p2", models[1], RuntimeMode.AutoAcceptEdits), started) }
+        compose.runOnIdle { assertEquals(Triple("p2", models[1], RuntimeMode.AutoAcceptEdits), started?.let { Triple(it.projectId, it.model, it.runtimeMode) }) }
     }
 
     @Test fun defaultModeIsApprovalRequired() {
@@ -73,5 +73,69 @@ class NewThreadFlowTest {
         compose.setContent { MaterialTheme { Conversation(state.copy(selectedThreadId = "t", models = emptyList()), {}, {}, { _, _, _ -> }) } }
         compose.onNodeWithContentDescription("Runtime mode: not set").assertIsEnabled()
         compose.onNodeWithContentDescription("Model: not set").assertIsNotEnabled()
+    }
+
+    private val restricted = listOf(
+        ModelOption("codex", "gpt-a", "Model A", listOf(RuntimeMode.ApprovalRequired, RuntimeMode.FullAccess)),
+        ModelOption("claude", "sonnet", "Model B", listOf(RuntimeMode.AutoAcceptEdits)),
+    )
+
+    @Test fun dialogDefaultsToServerDefaultMode() {
+        var started: ThreadDraft? = null
+        compose.setContent { MaterialTheme { NewThreadDialog(state.copy(defaultRuntimeMode = RuntimeMode.FullAccess), {}) { started = it } } }
+        compose.onNodeWithText("Start").performClick()
+        compose.runOnIdle { assertEquals(RuntimeMode.FullAccess, started?.runtimeMode) }
+    }
+
+    @Test fun dialogShowsOnlySupportedModesAndFallsBackAfterModelChange() {
+        var started: ThreadDraft? = null
+        compose.setContent { MaterialTheme { NewThreadDialog(state.copy(models = restricted), {}) { started = it } } }
+        compose.onNodeWithText("Auto-accept edits").assertDoesNotExist()
+        compose.onNodeWithText("Auto", substring = false).assertDoesNotExist()
+        compose.onNodeWithText("Full access").assertExists()
+        compose.onNodeWithText("Model B").performClick()
+        compose.onNodeWithText("Full access").assertDoesNotExist()
+        compose.onNodeWithText("Supervised").assertDoesNotExist()
+        compose.onNodeWithText("Start").performClick()
+        compose.runOnIdle { assertEquals(RuntimeMode.AutoAcceptEdits, started?.runtimeMode) }
+    }
+
+    @Test fun composerModeMenuFiltersByModel() {
+        val draft = ThreadDraft("p1", restricted[0])
+        compose.setContent { MaterialTheme { Conversation(state.copy(models = restricted), {}, {}, { _, _, _ -> }, draft = draft) } }
+        compose.onNodeWithContentDescription("Runtime mode: Supervised").performClick()
+        compose.onNodeWithText("Full access").assertExists()
+        compose.onNodeWithText("Auto-accept edits").assertDoesNotExist()
+    }
+
+    @Test fun lockedProviderListsOnlySameInstanceModels() {
+        val more = models + ModelOption("codex", "gpt-b", "Model C")
+        val locked = state.copy(models = more, selectedThreadId = "t", selectedModel = more[0], selectedRuntimeMode = RuntimeMode.Auto, selectedProviderLocked = true)
+        compose.setContent { MaterialTheme { Conversation(locked, {}, {}, { _, _, _ -> }) } }
+        compose.onNodeWithContentDescription("Model: Model A").performClick()
+        compose.onNodeWithText("Model C").assertExists()
+        compose.onNodeWithText("Model B").assertDoesNotExist()
+    }
+
+    @Test fun unlockedProviderListsAllModels() {
+        val unlocked = state.copy(selectedThreadId = "t", selectedModel = models[0], selectedRuntimeMode = RuntimeMode.Auto)
+        compose.setContent { MaterialTheme { Conversation(unlocked, {}, {}, { _, _, _ -> }) } }
+        compose.onNodeWithContentDescription("Model: Model A").performClick()
+        compose.onNodeWithText("Model B").assertExists()
+    }
+
+    @Test fun sendFailedClearsPendingAndKeepsTextEvenWithIdenticalError() {
+        val failed = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+        val errored = state.copy(selectedThreadId = "t", error = "boom")
+        compose.setContent { MaterialTheme { Conversation(errored, {}, {}, { _, _, _ -> }, sendFailed = failed) } }
+        repeat(2) {
+            if (it == 0) compose.onNodeWithText("Message T3…").performTextInput("hello")
+            compose.onNodeWithContentDescription("Send message").performClick()
+            compose.onNodeWithText("Waiting for server confirmation…").assertIsDisplayed()
+            compose.runOnIdle { failed.tryEmit(Unit) }
+            compose.waitForIdle()
+            compose.onNodeWithText("Waiting for server confirmation…").assertDoesNotExist()
+            compose.onNodeWithText("hello").assertExists()
+        }
     }
 }

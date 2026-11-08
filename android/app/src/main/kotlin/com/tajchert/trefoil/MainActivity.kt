@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
                     { openDownloaded(it) }, { openDownloaded(it, share = true) }, { openDownloaded(it, install = true) }),
                 onRespond = model::respond,
                 draft = draft,
+                sendFailed = model.sendFailed,
                 onStartDraft = model::startDraft,
                 onCancelDraft = model::cancelDraft,
                 onSetRuntimeMode = model::setRuntimeMode,
