@@ -80,6 +80,16 @@ data class ProviderInstance(
 data class Question(val id: String, val title: String, val options: List<String> = emptyList(), val multiple: Boolean = false, val required: Boolean = true)
 data class RuntimeRequest(val id: String, val title: String, val detail: String = "", val questions: List<Question> = emptyList(), val canApprove: Boolean = true)
 data class ModelOption(val instanceId: String, val model: String, val label: String = model)
+/** T3 `RuntimeMode` literals; labels mirror T3 web `runtimeModeConfig`. */
+enum class RuntimeMode(val wire: String, val label: String, val description: String) {
+    ApprovalRequired("approval-required", "Supervised", "Ask before commands and file changes."),
+    AutoAcceptEdits("auto-accept-edits", "Auto-accept edits", "Auto-approve edits, ask before other actions."),
+    Auto("auto", "Auto", "Supported providers approve routine actions; others still ask."),
+    FullAccess("full-access", "Full access", "Allow commands and edits without prompts.");
+    companion object { fun fromWire(value: String?): RuntimeMode? = entries.firstOrNull { it.wire == value } }
+}
+/** A local, unsent conversation. The server thread is created by the first message. */
+data class ThreadDraft(val projectId: String, val model: ModelOption, val runtimeMode: RuntimeMode = RuntimeMode.ApprovalRequired)
 enum class ConnectionStatus { Disconnected, Connecting, Connected, Reconnecting, Error }
 data class ClientState(
     val environment: SavedEnvironment? = null,
@@ -100,6 +110,10 @@ data class ClientState(
     val runs: List<ConversationRun> = emptyList(),
     val attempts: List<RunAttempt> = emptyList(),
     val screens: ScreenCatalog = ScreenCatalog(),
+    /** Selected thread's current runtime mode, from its projection; null when unknown. */
+    val selectedRuntimeMode: RuntimeMode? = null,
+    /** Selected thread's current model selection, from its projection; null when unknown. */
+    val selectedModel: ModelOption? = null,
 )
 
 /** All commands fail explicitly; implementations must never replay uncertain mutations. */
@@ -120,6 +134,15 @@ interface TrefoilClient {
     suspend fun interruptRun()
     suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>> = emptyMap())
     suspend fun createThread(projectId: String, title: String, model: ModelOption): String
+    /**
+     * Creates a thread together with its first message (`orchestration.launchThread` with
+     * `initialMessage`, `generateTitle`), like T3 web. Returns the new thread ID. Never replayed.
+     */
+    suspend fun launchThread(draft: ThreadDraft, firstMessage: String): String { error("Thread launch is unavailable") }
+    /** Dispatches `thread.runtime-mode.set` for the selected thread. */
+    suspend fun setRuntimeMode(mode: RuntimeMode) { error("Runtime mode changes are unavailable") }
+    /** Dispatches `thread.model-selection.set` for the selected thread. */
+    suspend fun setModel(model: ModelOption) { error("Model changes are unavailable") }
     suspend fun reconnect()
     fun close()
 }

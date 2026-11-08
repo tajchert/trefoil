@@ -34,6 +34,9 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     val working = _working.asStateFlow()
     private val _connectionAttempt = MutableStateFlow(ConnectionAttempt())
     val connectionAttempt = _connectionAttempt.asStateFlow()
+    private val _draft = MutableStateFlow<ThreadDraft?>(null)
+    /** Unsent new conversation; while non-null the UI shows the draft instead of the selected thread. */
+    val draft = _draft.asStateFlow()
     private val _sshHostKey = MutableStateFlow<SshHostKey?>(null)
     val sshHostKey = _sshHostKey.asStateFlow()
     private val _sshLogin = MutableStateFlow<SshConnectionInput?>(null)
@@ -230,6 +233,15 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     fun createThread(projectId: String, title: String, model: ModelOption) = action("Thread creation outcome is uncertain. Check the thread list before retrying.") {
         val id = client.createThread(projectId, title, model); client.selectThread(id)
     }
+
+    // CONTRACT STUBS (wave 1 core agent implements):
+    /** Opens a local draft; no server mutation until the first send. */
+    fun startDraft(draft: ThreadDraft) { _draft.value = draft }
+    fun cancelDraft() { _draft.value = null }
+    /** Draft: updates locally. Selected thread: dispatches `thread.runtime-mode.set`. */
+    fun setRuntimeMode(mode: RuntimeMode) { _draft.value?.let { _draft.value = it.copy(runtimeMode = mode) } }
+    /** Draft: updates locally. Selected thread: dispatches `thread.model-selection.set`. */
+    fun setModel(model: ModelOption) { _draft.value?.let { _draft.value = it.copy(model = model) } }
 
     fun reconnect() {
         val environment = selectedEnvironment ?: state.value.environment?.forStorage() ?: return
