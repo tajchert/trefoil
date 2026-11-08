@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tajchert.trefoil.core.model.*
 import com.tajchert.trefoil.core.session.T3Client
+import com.tajchert.trefoil.core.session.ThreadDraftController
 import com.tajchert.trefoil.core.ssh.SshHostKeyException
 import com.tajchert.trefoil.core.ssh.SshConnectionException
 import com.tajchert.trefoil.core.ssh.SshTunnel
@@ -34,16 +35,11 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     val working = _working.asStateFlow()
     private val _connectionAttempt = MutableStateFlow(ConnectionAttempt())
     val connectionAttempt = _connectionAttempt.asStateFlow()
-    private val _draft = MutableStateFlow<ThreadDraft?>(null)
+    private val drafts = ThreadDraftController(viewModelScope, client) { _notice.value = it }
     /** Unsent new conversation; while non-null the UI shows the draft instead of the selected thread. */
-    val draft = _draft.asStateFlow()
-    private val _sendFailed = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    val draft: StateFlow<ThreadDraft?> = drafts.draft
     /** Emits once for every send (draft or thread) that did not deliver; the composer must leave its pending state. */
-    val sendFailed = _sendFailed.asSharedFlow()
-    /** Environment the draft belongs to; a draft never follows the user to another environment. */
-    private var draftEnvironmentId: String? = null
-    /** One launch at a time: a second tap must not create a duplicate thread. */
-    private var launching = false
+    val sendFailed: SharedFlow<Unit> = drafts.sendFailed
     private val _sshHostKey = MutableStateFlow<SshHostKey?>(null)
     val sshHostKey = _sshHostKey.asStateFlow()
     private val _sshLogin = MutableStateFlow<SshConnectionInput?>(null)
@@ -159,7 +155,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun connect(environment: SavedEnvironment) {
-        if (_draft.value != null && environment.id != draftEnvironmentId) clearDraft()
+        if (draft.value != null && environment.id != drafts.environmentId) clearDraft()
         if (environment.ssh != null) {
             val input = environment.sshInput()
             if ((input.authMethod == SshAuthMethod.Password && input.password.isEmpty()) ||
@@ -243,54 +239,26 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         clearDraft()
         action("Could not open the thread. Reconnect and try again.") { client.selectThread(id) }
     }
-    /** With a draft, the first message creates the thread (`launchThread`); otherwise it goes to the selected thread. */
-    fun send(text: String) {
-        val pending = _draft.value
-        if (pending == null) { action("Message outcome is uncertain. Check the conversation before sending again.") { client.sendMessage(text) }; return }
-        if (launching) return
-        launching = true
-        viewModelScope.launch {
-            _notice.value = null
-            val id = try { client.launchThread(pending, text) }
-            catch (e: CancellationException) {
-                coroutineContext.ensureActive(); clearDraftIf(pending)
-                _notice.value = "New conversation outcome is uncertain. Check the thread list before sending again."; return@launch
-            } catch (e: UncertainOutcomeException) {
-                // May exist on the server: drop the draft so a retry cannot create a duplicate thread.
-                clearDraftIf(pending); _notice.value = e.message; return@launch
-            } catch (e: Exception) {
-                // Not sent or rejected: keep the draft so the user can adjust and retry.
-                _notice.value = e.message ?: "Could not start the conversation. Reconnect and try again."; return@launch
-            } finally { launching = false }
-            clearDraftIf(pending)
-            try { client.selectThread(id) }
-            catch (e: CancellationException) { coroutineContext.ensureActive(); _notice.value = "Conversation started. Reconnect to open it." }
-            catch (_: Exception) { _notice.value = "Conversation started. Reconnect to open it." }
-        }
-    }
+    /**
+     * With a draft, the first message creates the thread (`launchThread`); otherwise it goes to the
+     * selected thread. Every failed or uncertain send emits [sendFailed]. An uncertain launch keeps
+     * the draft and its ids so it can be reconciled or explicitly resent without a duplicate.
+     */
+    fun send(text: String) = drafts.send(text)
     fun loadActivity(id: String) = action("Could not load activity output. Reconnect and try again.") { client.loadActivity(id) }
     fun interrupt() = action("Interrupt outcome is uncertain. Check the run status.") { client.interruptRun() }
     fun respond(id: String, decision: String, answers: Map<String,List<String>>) = action("Response outcome is uncertain. Check the request status before responding again.") { client.respond(id, decision, answers) }
     /** Opens a local draft; no server mutation until the first send. */
-    fun startDraft(draft: ThreadDraft) { _notice.value = null; draftEnvironmentId = state.value.environment?.id; _draft.value = draft }
+    fun startDraft(draft: ThreadDraft) = drafts.start(draft)
     fun cancelDraft() = clearDraft()
-    private fun clearDraft() { _draft.value = null; draftEnvironmentId = null }
-    private fun clearDraftIf(expected: ThreadDraft) { if (_draft.value?.projectId == expected.projectId) clearDraft() }
+    private fun clearDraft() = drafts.clear()
     /** Draft: updates locally. Selected thread: dispatches `thread.runtime-mode.set`. */
-    fun setRuntimeMode(mode: RuntimeMode) {
-        val current = _draft.value
-        if (current != null) _draft.value = current.copy(runtimeMode = mode)
-        else action("Mode change outcome is uncertain. Reconnect and check the thread.") { client.setRuntimeMode(mode) }
-    }
+    fun setRuntimeMode(mode: RuntimeMode) = drafts.setRuntimeMode(mode)
     /** Draft: updates locally. Selected thread: dispatches `thread.model-selection.set`. */
-    fun setModel(model: ModelOption) {
-        val current = _draft.value
-        if (current != null) _draft.value = current.copy(model = model)
-        else action("Model change outcome is uncertain. Reconnect and check the thread.") { client.setModel(model) }
-    }
+    fun setModel(model: ModelOption) = drafts.setModel(model)
 
+    /** Keeps the draft: reconnecting is the same environment, and an uncertain launch is reconciled after it. */
     fun reconnect() {
-        clearDraft()
         val environment = selectedEnvironment ?: state.value.environment?.forStorage() ?: return
         if (environment.ssh != null) connect(environment)
         else connectionAction("Could not reconnect. Check the server or pair again.") {
@@ -305,7 +273,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         action("Could not disconnect.") { connectionMutex.withLock { disconnectCurrent() } }
     }
     fun forget(environment: SavedEnvironment) = action("Could not remove saved credentials.") {
-        if (draftEnvironmentId == environment.id || state.value.environment?.id == environment.id) clearDraft()
+        if (drafts.environmentId == environment.id || state.value.environment?.id == environment.id) clearDraft()
         if (selectedEnvironment?.id == environment.id || state.value.environment?.id == environment.id) cancelSsh()
         if (resumeEnvironment?.id == environment.id) resumeEnvironment = null
         connectionMutex.withLock {

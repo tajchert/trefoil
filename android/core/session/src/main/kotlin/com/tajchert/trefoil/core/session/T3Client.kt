@@ -79,6 +79,8 @@ class T3Client(
     private class HttpFailure(val status: Int) : IllegalStateException(if (status == 401 || status == 403) "Authorization expired or denied; pair again" else "Server HTTP error $status")
     /** The server answered with a failure Exit: a definite answer, not a lost reply. */
     private class ServerRejected : IllegalStateException("Server rejected request; refresh before trying again")
+    /** The server answered with an interrupted Exit: it stopped handling the request, so the outcome is unknown. */
+    private class RequestInterrupted : IllegalStateException("Server interrupted the request; the outcome is uncertain")
     /** No reply in time. Deliberately not a CancellationException, so callers cannot swallow it as cancellation. */
     private class RequestTimedOut : IllegalStateException("Server did not answer in time; the outcome is uncertain")
     private suspend fun descriptor(base: HttpUrl): JsonObject = fetch(Request.Builder().url(base.resolve("/.well-known/t3/environment")!!).build()).also {
@@ -155,9 +157,11 @@ class T3Client(
             previewAuthorized = permissions?.any { it.jsonPrimitive.content == "preview:operate" } == true
             serverBrowser = config.obj("environment").obj("capabilities")["serverBrowser"]?.jsonPrimitive?.booleanOrNull == true
             val models = config.objects("providers").filter { it["enabled"]?.jsonPrimitive?.booleanOrNull != false }.flatMap { provider ->
-                provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name")) }
+                val modes = supportedRuntimeModes(provider)
+                provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name"), modes) }
             }
-            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config),
+            val defaultMode = RuntimeMode.fromWire(config.obj("settings").string("defaultRuntimeMode"))
+            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config), defaultRuntimeMode = defaultMode,
                 selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
             subscribe("orchestration.subscribeShell", buildJsonObject {
                 put("requestCompletionMarker", true)
@@ -214,7 +218,7 @@ class T3Client(
                 val exit = frame.obj("exit")
                 val result = pending.remove(id)
                 if (exit.string("_tag") == "Success") result?.complete(exit["value"] ?: JsonNull)
-                else result?.completeExceptionally(ServerRejected())
+                else result?.completeExceptionally(if (exitInterruptedOnly(exit)) RequestInterrupted() else ServerRejected())
                 if (streams.remove(id) != null) {
                     if (optionalScreenStreams.remove(id)) {
                         if (id == previewScreenSubscription) { previewScreenSubscription = null; browserScreensFresh = false }
@@ -266,7 +270,7 @@ class T3Client(
         val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
         if (cached != null) applyProjection(cached, threadId)
         else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false, canRead = false) }
-        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null) }
+        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null, selectedProviderLocked = false) }
         val epoch = generation
         refreshSignals?.close(); refreshJob?.cancel()
         val signals = Channel<Unit>(Channel.CONFLATED)
@@ -351,13 +355,15 @@ class T3Client(
             activities = toolActivities(value), requests = requests, activeRunId = active,
             runs = conversationRuns(value), attempts = runAttempts(value),
             selectedRuntimeMode = RuntimeMode.fromWire(thread.string("runtimeMode")),
-            selectedModel = selectedModel(thread["modelSelection"] as? JsonObject, it.models)) }
+            selectedModel = selectedModel(thread["modelSelection"] as? JsonObject, it.models),
+            selectedProviderLocked = providerLocked(value)) }
     }
     /** T3 `thread.modelSelection {instanceId, model}`; prefers the server catalog entry for its label. */
     private fun selectedModel(selection: JsonObject?, models: List<ModelOption>): ModelOption? {
         val instanceId = selection?.string("instanceId").orEmpty(); val model = selection?.string("model").orEmpty()
         if (instanceId.isBlank() || model.isBlank()) return null
-        return models.firstOrNull { it.instanceId == instanceId && it.model == model } ?: ModelOption(instanceId, model)
+        return models.firstOrNull { it.instanceId == instanceId && it.model == model }
+            ?: ModelOption(instanceId, model, supportedRuntimeModes = models.firstOrNull { it.instanceId == instanceId }?.supportedRuntimeModes.orEmpty())
     }
     override suspend fun loadActivity(itemId: String) {
         val captured = synchronized(lifecycleLock) {
@@ -551,56 +557,68 @@ class T3Client(
         put("type", type); put("commandId", UUID.randomUUID().toString()); put("threadId", state.value.selectedThreadId ?: error("Select a thread")); extra.forEach { (key, value) -> put(key, value) }
     }
     /**
-     * Sends one mutation once. Any failure after the send leaves server state unknown to this
-     * projection, so the session fails (writes disabled) and the caller gets a clear error.
+     * Sends one mutation once. [extra] runs under the lifecycle lock after the write check, so
+     * local validation fails before anything is sent. See [mutation] for failure handling.
      */
-    private suspend fun dispatch(type: String, extra: JsonObject) {
-        val (epoch, payload) = synchronized(lifecycleLock) { requireWrite(); generation to command(type, extra) }
-        mutation(epoch, "Command") { rpc("orchestration.dispatchCommand", payload, epoch) }
+    private suspend fun dispatch(type: String, subject: String, extra: () -> JsonObject) {
+        val (epoch, payload) = synchronized(lifecycleLock) { requireWrite(); generation to command(type, extra()) }
+        mutation(epoch, subject) { rpc("orchestration.dispatchCommand", payload, epoch) }
     }
+    /**
+     * A definite server rejection (a failed Exit with a typed `Fail` or a `Die` defect) changed
+     * nothing, so the session stays usable and the caller gets a clear error. Anything else after
+     * the send (timeout, disconnect, interrupted Exit) leaves server state unknown to this
+     * projection: the session fails (writes disabled) until a reconnect reconciles it.
+     */
     private suspend fun <T> mutation(epoch: Long, subject: String, block: suspend () -> T): T = try { block() }
     catch (error: Exception) {
-        val rejected = error is ServerRejected
-        val message = if (rejected) "T3 rejected the ${subject.lowercase()}. Reconnect to refresh before trying again."
-            else "$subject outcome is uncertain. Reconnect and check the conversation before trying again."
+        if (error is ServerRejected) throw IllegalStateException("T3 rejected the $subject. Check the conversation and try again.", error)
+        val message = "${subject.replaceFirstChar { it.uppercase() }} outcome is uncertain. Reconnect and check the conversation before trying again."
         synchronized(lifecycleLock) { if (epoch == generation) fail(epoch, message) }
         // Caller cancellation still propagates; the session already records the uncertainty.
         if (error is CancellationException) throw error
-        throw if (rejected) IllegalStateException(message, error) else UncertainOutcomeException(message)
+        throw UncertainOutcomeException(message)
     }
     /** T3 requires creation provenance on every `message.dispatch`; the server stamps `createdBy` itself. */
     private fun JsonObjectBuilder.provenance() { put("createdBy", "user"); put("creationSource", CREATION_SOURCE) }
     override suspend fun sendMessage(text: String) {
         require(text.isNotBlank()) { "Message is empty" }
-        dispatch("message.dispatch", buildJsonObject {
+        dispatch("message.dispatch", "message") { buildJsonObject {
             provenance()
             put("messageId", UUID.randomUUID().toString()); put("text", text); put("attachments", JsonArray(emptyList()))
-            put("dispatchMode", buildJsonObject { put("type", if (state.value.activeRunId == null) "start_immediately" else "queue_after_active") })
-        })
+            put("dispatchMode", buildJsonObject { put("type", messageDispatchMode(state.value)) })
+        } }
     }
+    /**
+     * Sends the draft's own `threadId` and `commandId`, so an explicit resend after an uncertain
+     * outcome is deduplicated by the server (`resumed`) instead of creating a second thread. The
+     * initial `messageId` is derived from the command so a resend carries the same one.
+     */
     override suspend fun launchThread(draft: ThreadDraft, firstMessage: String): String {
         require(firstMessage.isNotBlank()) { "Message is empty" }
+        require(draft.threadId.isNotBlank() && draft.commandId.isNotBlank()) { "Invalid draft identity" }
         val (epoch, payload) = synchronized(lifecycleLock) {
             requireWrite()
             check(state.value.projects.any { it.id == draft.projectId }) { "Choose a project from this environment" }
             val model = state.value.models.firstOrNull { it.instanceId == draft.model.instanceId && it.model == draft.model.model } ?: error("Choose a server-provided model")
+            check(model.supportedRuntimeModes.isEmpty() || draft.runtimeMode in model.supportedRuntimeModes) { "${model.label} does not support ${draft.runtimeMode.label}" }
             generation to buildJsonObject {
-                put("commandId", UUID.randomUUID().toString()); put("creationSource", CREATION_SOURCE)
+                put("commandId", draft.commandId); put("threadId", draft.threadId); put("creationSource", CREATION_SOURCE)
                 put("projectId", draft.projectId); put("title", threadTitleSeed(firstMessage)); put("generateTitle", true)
                 put("modelSelection", buildJsonObject { put("instanceId", model.instanceId); put("model", model.model) })
                 put("runtimeMode", draft.runtimeMode.wire); put("interactionMode", "default")
                 put("workspaceStrategy", buildJsonObject { put("type", "root") })
                 put("initialMessage", buildJsonObject {
-                    put("messageId", UUID.randomUUID().toString()); put("text", firstMessage); put("attachments", JsonArray(emptyList()))
+                    put("messageId", initialMessageId(draft.commandId)); put("text", firstMessage); put("attachments", JsonArray(emptyList()))
                 })
             }
         }
-        val result = mutation(epoch, "New conversation") { rpc("orchestration.launchThread", payload, epoch).jsonObject }
+        val result = mutation(epoch, "new conversation") { rpc("orchestration.launchThread", payload, epoch).jsonObject }
         val threadId = result.string("threadId")
         val projection = result["projection"] as? JsonObject
         synchronized(lifecycleLock) {
             val projectedId = projection?.obj("thread")?.string("id").orEmpty()
-            if (threadId.isBlank() || (projectedId.isNotEmpty() && projectedId != threadId)) {
+            if (threadId != draft.threadId || (projectedId.isNotEmpty() && projectedId != threadId)) {
                 val message = "New conversation outcome is uncertain. Reconnect and check the thread list before trying again."
                 if (epoch == generation) fail(epoch, message)
                 throw UncertainOutcomeException(message)
@@ -616,21 +634,35 @@ class T3Client(
         return threadId
     }
     override suspend fun setRuntimeMode(mode: RuntimeMode) {
-        dispatch("thread.runtime-mode.set", buildJsonObject { put("runtimeMode", mode.wire) })
+        dispatch("thread.runtime-mode.set", "mode change") { buildJsonObject { put("runtimeMode", mode.wire) } }
     }
+    /**
+     * Keeps the thread's provider `options` (e.g. reasoning effort) when the model is unchanged and
+     * drops them for another model. A started thread whose provider cannot hand off stays on its
+     * provider instance ([ClientState.selectedProviderLocked]).
+     */
     override suspend fun setModel(model: ModelOption) {
-        val selected = state.value.models.firstOrNull { it.instanceId == model.instanceId && it.model == model.model } ?: error("Choose a server-provided model")
-        dispatch("thread.model-selection.set", buildJsonObject {
-            put("modelSelection", buildJsonObject { put("instanceId", selected.instanceId); put("model", selected.model) })
-        })
+        dispatch("thread.model-selection.set", "model change") {
+            val current = state.value
+            val selected = current.models.firstOrNull { it.instanceId == model.instanceId && it.model == model.model } ?: error("Choose a server-provided model")
+            val selection = projection.obj("thread").obj("modelSelection")
+            val currentInstance = selection.string("instanceId").ifBlank { current.selectedModel?.instanceId.orEmpty() }
+            check(!current.selectedProviderLocked || currentInstance.isBlank() || currentInstance == selected.instanceId) {
+                "This conversation has started and its provider cannot change. Choose a model from the same provider."
+            }
+            val options = (selection["options"] as? JsonObject)?.takeIf { selection.string("instanceId") == selected.instanceId && selection.string("model") == selected.model }
+            buildJsonObject { put("modelSelection", buildJsonObject {
+                put("instanceId", selected.instanceId); put("model", selected.model); options?.let { put("options", it) }
+            }) }
+        }
     }
-    override suspend fun interruptRun() { dispatch("run.interrupt", buildJsonObject { put("runId", state.value.activeRunId ?: error("No active run")) }) }
+    override suspend fun interruptRun() { dispatch("run.interrupt", "interrupt") { buildJsonObject { put("runId", state.value.activeRunId ?: error("No active run")) } } }
     override suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>>) {
         requireWrite()
         val request = state.value.requests.firstOrNull { it.id == requestId } ?: error("Request is no longer pending")
         check(request.canApprove) { "Use another T3 client to respond to this request" }
         val item = presentationItems(projection).firstOrNull { it.string("requestId") == requestId } ?: error("Missing request detail")
-        dispatch("runtime-request.respond", buildJsonObject {
+        dispatch("runtime-request.respond", "response") { buildJsonObject {
             put("requestId", requestId)
             if (item.string("type") == "user_input_request") {
                 val questions = item.objects("questions")
@@ -641,7 +673,7 @@ class T3Client(
                     put(q.string("id"), if (q["multiSelect"]?.jsonPrimitive?.booleanOrNull == true) JsonArray(values.map(::JsonPrimitive)) else JsonPrimitive(values.firstOrNull().orEmpty()))
                 } })
             } else { val offered = item.objects("options").map { it.string("decision") }; require(offered.isEmpty() || decision in offered) { "This response is not offered by the provider" }; require(decision in setOf("accept", "acceptForSession", "acceptAlways", "decline", "cancel")) { "Invalid approval decision" }; put("decision", decision) }
-        })
+        } }
     }
     override suspend fun reconnect() {
         val environment = state.value.environment ?: error("Pair an environment first")
@@ -661,6 +693,9 @@ class T3Client(
 }
 
 private const val CREATION_SOURCE = "mobile"
+
+/** Stable per launch command, so an explicit resend of the same draft names the same first message. */
+internal fun initialMessageId(commandId: String): String = UUID.nameUUIDFromBytes("$commandId:initial-message".toByteArray()).toString()
 
 /** T3 client-runtime `deriveThreadTitleSeed`: whitespace-normalized, at most 50 code points plus "...". */
 internal fun threadTitleSeed(text: String, maxLength: Int = 50): String {
