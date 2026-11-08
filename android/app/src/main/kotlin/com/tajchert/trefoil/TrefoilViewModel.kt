@@ -268,10 +268,6 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     fun loadActivity(id: String) = action("Could not load activity output. Reconnect and try again.") { client.loadActivity(id) }
     fun interrupt() = action("Interrupt outcome is uncertain. Check the run status.") { client.interruptRun() }
     fun respond(id: String, decision: String, answers: Map<String,List<String>>) = action("Response outcome is uncertain. Check the request status before responding again.") { client.respond(id, decision, answers) }
-    @Deprecated("Threads are created by their first message", ReplaceWith("startDraft(ThreadDraft(projectId, model))"))
-    @Suppress("UNUSED_PARAMETER")
-    fun createThread(projectId: String, title: String, model: ModelOption) = startDraft(ThreadDraft(projectId, model))
-
     /** Opens a local draft; no server mutation until the first send. */
     fun startDraft(draft: ThreadDraft) { _notice.value = null; draftEnvironmentId = state.value.environment?.id; _draft.value = draft }
     fun cancelDraft() = clearDraft()
