@@ -30,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.core.model.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -40,6 +42,7 @@ internal fun Conversation(
     rawState: ClientState, send: (String) -> Unit, interrupt: () -> Unit, respond: (String, String, Map<String, List<String>>) -> Unit,
     onLoadActivity: (String) -> Unit = {}, fileDownloadUi: FileDownloadUi = FileDownloadUi(),
     draft: ThreadDraft? = null, onSetRuntimeMode: (RuntimeMode) -> Unit = {}, onSetModel: (ModelOption) -> Unit = {},
+    sendFailed: Flow<Unit> = emptyFlow(),
 ) {
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
     val state = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())
@@ -65,6 +68,8 @@ internal fun Conversation(
         }
     }
     LaunchedEffect(state.error) { if (state.error != null) submitted = null }
+    // Identical consecutive errors do not retrigger the effect above, so every failed send also emits here.
+    LaunchedEffect(sendFailed) { sendFailed.collect { submitted = null } }
     val entries = remember(state.messages, state.activities, state.activeRunId, state.runs) {
         foldConversationTimeline(conversationTimeline(state.messages, state.activities), state.activeRunId, state.runs)
     }
@@ -176,7 +181,7 @@ private fun ComposerPickers(state: ClientState, draft: ThreadDraft?, onSetRuntim
             AssistChip(onClick = { modeOpen = true }, enabled = enabled, label = { Text(mode?.label ?: "Mode", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { Icon(Icons.Default.Shield, null, Modifier.size(18.dp)) }, modifier = Modifier.semantics { contentDescription = "Runtime mode: ${mode?.label ?: "not set"}" })
             DropdownMenu(modeOpen, { modeOpen = false }) {
-                RuntimeMode.entries.forEach { option ->
+                allowedRuntimeModes(model).forEach { option ->
                     DropdownMenuItem(text = { Column { Text(option.label); Text(option.description, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
                         onClick = { modeOpen = false; onSetRuntimeMode(option) },
                         trailingIcon = { if (option == mode) Icon(Icons.Default.Check, "Selected") })
@@ -187,7 +192,8 @@ private fun ComposerPickers(state: ClientState, draft: ThreadDraft?, onSetRuntim
             AssistChip(onClick = { modelOpen = true }, enabled = enabled && state.models.isNotEmpty(), label = { Text(model?.label ?: "Model", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { Icon(Icons.Default.AutoAwesome, null, Modifier.size(18.dp)) }, modifier = Modifier.semantics { contentDescription = "Model: ${model?.label ?: "not set"}" })
             DropdownMenu(modelOpen, { modelOpen = false }) {
-                state.models.forEach { option ->
+                val choices = if (state.selectedProviderLocked && draft == null && model != null) state.models.filter { it.instanceId == model.instanceId } else state.models
+                choices.forEach { option ->
                     DropdownMenuItem(text = { Column { Text(option.label); Text(option.instanceId, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
                         onClick = { modelOpen = false; onSetModel(option) },
                         trailingIcon = { if (option == model) Icon(Icons.Default.Check, "Selected") })
