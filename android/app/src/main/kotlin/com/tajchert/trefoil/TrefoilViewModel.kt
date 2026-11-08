@@ -37,6 +37,10 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     private val _draft = MutableStateFlow<ThreadDraft?>(null)
     /** Unsent new conversation; while non-null the UI shows the draft instead of the selected thread. */
     val draft = _draft.asStateFlow()
+    /** Environment the draft belongs to; a draft never follows the user to another environment. */
+    private var draftEnvironmentId: String? = null
+    /** One launch at a time: a second tap must not create a duplicate thread. */
+    private var launching = false
     private val _sshHostKey = MutableStateFlow<SshHostKey?>(null)
     val sshHostKey = _sshHostKey.asStateFlow()
     private val _sshLogin = MutableStateFlow<SshConnectionInput?>(null)
@@ -66,7 +70,10 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _notice.value = null
             try { block() }
-            catch (e: CancellationException) { throw e }
+            catch (e: CancellationException) {
+                // A stray cancellation (e.g. an inner timeout) while this job is alive is a failure, never silence.
+                coroutineContext.ensureActive(); _notice.value = failure
+            }
             catch (_: Exception) { _notice.value = failure }
         }
     }
@@ -90,8 +97,10 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
                             _connectionAttempt.value = ConnectionAttempt(epoch, kind, ConnectionPhase.Succeeded, "Connected")
                             _sshLogin.value = null
                         }
-                    } catch (e: CancellationException) { throw e }
-                    catch (e: SshHostKeyException) {
+                    } catch (e: CancellationException) {
+                        coroutineContext.ensureActive()
+                        if (epoch == connectionEpoch) { pendingInput = null; connectionFailed(epoch, kind, failure) }
+                    } catch (e: SshHostKeyException) {
                         if (epoch == connectionEpoch) {
                             if (e.changed) {
                                 pendingInput = null
@@ -136,6 +145,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun pair(url: String, name: String, allowInsecureHttp: Boolean) = connectionAction("Pairing failed. Check the link, server address and certificate, then try again.", ConnectionKind.Pairing) {
+        clearDraft()
         disconnectCurrent()
         connectionStage("Testing pairing link and exchanging credentials…")
         val environment = client.pair(url, name, allowInsecureHttp)
@@ -146,6 +156,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun connect(environment: SavedEnvironment) {
+        if (_draft.value != null && environment.id != draftEnvironmentId) clearDraft()
         if (environment.ssh != null) {
             val input = environment.sshInput()
             if ((input.authMethod == SshAuthMethod.Password && input.password.isEmpty()) ||
@@ -225,25 +236,62 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         _connectionAttempt.value = ConnectionAttempt()
     }
 
-    fun selectThread(id: String) = action("Could not open the thread. Reconnect and try again.") { client.selectThread(id) }
-    fun send(text: String) = action("Message outcome is uncertain. Check the conversation before sending again.") { client.sendMessage(text) }
+    fun selectThread(id: String) {
+        clearDraft()
+        action("Could not open the thread. Reconnect and try again.") { client.selectThread(id) }
+    }
+    /** With a draft, the first message creates the thread (`launchThread`); otherwise it goes to the selected thread. */
+    fun send(text: String) {
+        val pending = _draft.value
+        if (pending == null) { action("Message outcome is uncertain. Check the conversation before sending again.") { client.sendMessage(text) }; return }
+        if (launching) return
+        launching = true
+        viewModelScope.launch {
+            _notice.value = null
+            val id = try { client.launchThread(pending, text) }
+            catch (e: CancellationException) {
+                coroutineContext.ensureActive(); clearDraftIf(pending)
+                _notice.value = "New conversation outcome is uncertain. Check the thread list before sending again."; return@launch
+            } catch (e: UncertainOutcomeException) {
+                // May exist on the server: drop the draft so a retry cannot create a duplicate thread.
+                clearDraftIf(pending); _notice.value = e.message; return@launch
+            } catch (e: Exception) {
+                // Not sent or rejected: keep the draft so the user can adjust and retry.
+                _notice.value = e.message ?: "Could not start the conversation. Reconnect and try again."; return@launch
+            } finally { launching = false }
+            clearDraftIf(pending)
+            try { client.selectThread(id) }
+            catch (e: CancellationException) { coroutineContext.ensureActive(); _notice.value = "Conversation started. Reconnect to open it." }
+            catch (_: Exception) { _notice.value = "Conversation started. Reconnect to open it." }
+        }
+    }
     fun loadActivity(id: String) = action("Could not load activity output. Reconnect and try again.") { client.loadActivity(id) }
     fun interrupt() = action("Interrupt outcome is uncertain. Check the run status.") { client.interruptRun() }
     fun respond(id: String, decision: String, answers: Map<String,List<String>>) = action("Response outcome is uncertain. Check the request status before responding again.") { client.respond(id, decision, answers) }
-    fun createThread(projectId: String, title: String, model: ModelOption) = action("Thread creation outcome is uncertain. Check the thread list before retrying.") {
-        val id = client.createThread(projectId, title, model); client.selectThread(id)
+    @Deprecated("Threads are created by their first message", ReplaceWith("startDraft(ThreadDraft(projectId, model))"))
+    @Suppress("UNUSED_PARAMETER")
+    fun createThread(projectId: String, title: String, model: ModelOption) = startDraft(ThreadDraft(projectId, model))
+
+    /** Opens a local draft; no server mutation until the first send. */
+    fun startDraft(draft: ThreadDraft) { _notice.value = null; draftEnvironmentId = state.value.environment?.id; _draft.value = draft }
+    fun cancelDraft() = clearDraft()
+    private fun clearDraft() { _draft.value = null; draftEnvironmentId = null }
+    private fun clearDraftIf(expected: ThreadDraft) { if (_draft.value?.projectId == expected.projectId) clearDraft() }
+    /** Draft: updates locally. Selected thread: dispatches `thread.runtime-mode.set`. */
+    fun setRuntimeMode(mode: RuntimeMode) {
+        val current = _draft.value
+        if (current != null) _draft.value = current.copy(runtimeMode = mode)
+        else action("Mode change outcome is uncertain. Reconnect and check the thread.") { client.setRuntimeMode(mode) }
+    }
+    /** Draft: updates locally. Selected thread: dispatches `thread.model-selection.set`. */
+    fun setModel(model: ModelOption) {
+        val current = _draft.value
+        if (current != null) _draft.value = current.copy(model = model)
+        else action("Model change outcome is uncertain. Reconnect and check the thread.") { client.setModel(model) }
     }
 
-    // CONTRACT STUBS (wave 1 core agent implements):
-    /** Opens a local draft; no server mutation until the first send. */
-    fun startDraft(draft: ThreadDraft) { _draft.value = draft }
-    fun cancelDraft() { _draft.value = null }
-    /** Draft: updates locally. Selected thread: dispatches `thread.runtime-mode.set`. */
-    fun setRuntimeMode(mode: RuntimeMode) { _draft.value?.let { _draft.value = it.copy(runtimeMode = mode) } }
-    /** Draft: updates locally. Selected thread: dispatches `thread.model-selection.set`. */
-    fun setModel(model: ModelOption) { _draft.value?.let { _draft.value = it.copy(model = model) } }
-
     fun reconnect() {
+        clearDraft()
         val environment = selectedEnvironment ?: state.value.environment?.forStorage() ?: return
         if (environment.ssh != null) connect(environment)
         else connectionAction("Could not reconnect. Check the server or pair again.") {
@@ -252,11 +300,13 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun disconnect() {
+        clearDraft()
         screenSessions.close()
         resumeEnvironment = null; cancelSsh()
         action("Could not disconnect.") { connectionMutex.withLock { disconnectCurrent() } }
     }
     fun forget(environment: SavedEnvironment) = action("Could not remove saved credentials.") {
+        if (draftEnvironmentId == environment.id || state.value.environment?.id == environment.id) clearDraft()
         if (selectedEnvironment?.id == environment.id || state.value.environment?.id == environment.id) cancelSsh()
         if (resumeEnvironment?.id == environment.id) resumeEnvironment = null
         connectionMutex.withLock {

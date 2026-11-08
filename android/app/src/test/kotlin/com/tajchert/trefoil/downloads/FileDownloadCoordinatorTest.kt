@@ -161,7 +161,6 @@ class FileDownloadCoordinatorTest {
         override suspend fun sendMessage(text: String) = error("No writes expected")
         override suspend fun interruptRun() = error("No writes expected")
         override suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>>) = error("No writes expected")
-        override suspend fun createThread(projectId: String, title: String, model: ModelOption): String = error("No writes expected")
         override suspend fun reconnect() {}
         override fun close() {}
     }
