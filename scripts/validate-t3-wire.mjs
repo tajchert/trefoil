@@ -130,7 +130,7 @@ try {
       modelCount++;
     }
   }
-  // Exact envelopes emitted by core/protocol/EffectRpc.kt. No product mutations.
+  // Exact envelopes emitted by core/protocol/EffectRpc.kt.
   socket.send(JSON.stringify({ _tag: 'Request', id: 'shell', tag: 'orchestration.subscribeShell', payload: { requestCompletionMarker: true }, headers: [] }));
   const chunk = await waitFor(event => event._tag === 'Chunk' && event.requestId === 'shell');
   assert.ok(Array.isArray(chunk.values));
@@ -142,7 +142,39 @@ try {
   socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: 'shell' }));
   const exit = await waitFor(event => event._tag === 'Exit' && event.requestId === 'shell');
   assert.equal(exit.exit._tag, 'Failure', 'interrupt terminates stream');
-  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models); empty shell + synchronized marker; Ack/Interrupt/Exit.`);
+  assert.equal(typeof config.settings?.defaultRuntimeMode, 'string', 'settings.defaultRuntimeMode');
+  for (const provider of config.providers) {
+    if (provider.supportedRuntimeModes !== undefined) assert.ok(Array.isArray(provider.supportedRuntimeModes), 'provider-level supportedRuntimeModes');
+  }
+  // Launch identity, mutating only this disposable environment. No initialMessage, so no provider run starts.
+  let rpcCount = 0;
+  const rpc = async (tag, payload) => {
+    const id = `launch-check-${rpcCount++}`;
+    socket.send(JSON.stringify({ _tag: 'Request', id, tag, payload, headers: [] }));
+    return (await waitFor(event => event._tag === 'Exit' && event.requestId === id)).exit;
+  };
+  const workspaceRoot = resolve(root, 'workspace');
+  await mkdir(workspaceRoot);
+  const project = await rpc('projects.mutate', { type: 'project.create', commandId: 'wire-project', projectId: 'wire-project', title: 'Wire check', workspaceRoot });
+  assert.equal(project._tag, 'Success', 'disposable project creation');
+  const provider = config.providers.find(candidate => candidate.models.length > 0);
+  assert.ok(provider, 'a provider lists a model');
+  const launch = { commandId: 'wire-launch', threadId: 'wire-thread', projectId: 'wire-project', title: 'Wire check',
+    modelSelection: { instanceId: provider.instanceId, model: provider.models[0].slug },
+    runtimeMode: 'full-access', interactionMode: 'default', workspaceStrategy: { type: 'root' } };
+  const launched = await rpc('orchestration.launchThread', launch);
+  assert.equal(launched._tag, 'Success', 'launchThread');
+  assert.equal(launched.value.threadId, 'wire-thread', 'client threadId is honoured');
+  assert.equal(launched.value.resumed, false);
+  const replayed = await rpc('orchestration.launchThread', launch);
+  assert.equal(replayed._tag, 'Success', 'replayed launchThread');
+  assert.deepEqual([replayed.value.threadId, replayed.value.resumed], ['wire-thread', true], 'same commandId resumes, no duplicate');
+  const rejected = await rpc('orchestration.launchThread', { ...launch, commandId: 'wire-launch-2', threadId: 'wire-thread-2', projectId: 'missing' });
+  assert.equal(rejected._tag, 'Failure', 'launch into a missing project is rejected');
+  assert.ok(Array.isArray(rejected.cause) && rejected.cause.every(reason => reason._tag === 'Fail'), 'typed rejection is a Fail cause array');
+  const resent = await rpc('orchestration.launchThread', { ...launch, commandId: 'wire-launch-2', threadId: 'wire-thread-2' });
+  assert.equal(resent._tag, 'Success', 'a corrected resend may reuse the rejected ids');
+  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection.`);
 } finally {
   socket?.close();
   child.kill('SIGTERM');
