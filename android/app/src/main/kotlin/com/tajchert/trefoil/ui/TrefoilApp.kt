@@ -58,10 +58,13 @@ fun TrefoilApp(
     isScreenAccessCurrent: (ScreenAccess) -> Boolean = { false },
     fileDownloadUi: FileDownloadUi = FileDownloadUi(),
     sendFailed: Flow<Unit> = emptyFlow(),
+    onSettleThread: () -> Unit = {},
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
         var adding by remember { mutableStateOf(false) }
+        var actionsOpen by remember { mutableStateOf(false) }
+        var machinesOpen by remember { mutableStateOf(false) }
         var sshConnecting by remember { mutableStateOf(false) }
         var pairing by rememberSaveable { mutableStateOf(false) }
         var choosingEnvironment by rememberSaveable { mutableStateOf(false) }
@@ -96,9 +99,21 @@ fun TrefoilApp(
                         else Icon(Icons.Default.Spa, null, Modifier.padding(start = 20.dp, end = 8.dp), tint = MaterialTheme.colorScheme.primary)
                     }, actions = {
                         if (state.environment != null) IconButton(onClick = { showScreens = true }, enabled = !state.busy) { Icon(Icons.Default.Devices, "Screen sessions") }
-                        if (savedEnvironments.isNotEmpty()) IconButton(onClick = { choosingEnvironment = true; showThread = false }) { Icon(Icons.Default.Dns, "Saved environments") }
-                        IconButton(onClick = { adding = true }, enabled = !state.busy) { Icon(Icons.Default.AddLink, "Add environment") }
-                        if (state.environment != null) IconButton(onClick = { onDisconnect(); choosingEnvironment = true; showThread = false }) { Icon(Icons.Default.LinkOff, "Disconnect environment") }
+                        if (showThread && draft == null && state.selectedThreadId != null) Box {
+                            IconButton(onClick = { actionsOpen = true }) { Icon(Icons.Default.MoreVert, "Thread actions") }
+                            DropdownMenu(actionsOpen, { actionsOpen = false }) {
+                                DropdownMenuItem(text = { Text("Mark as settled") }, enabled = state.canWrite && !state.busy && state.threads.firstOrNull { it.id == state.selectedThreadId }?.settledOverride != "settled",
+                                    onClick = { actionsOpen = false; onSettleThread() })
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { machinesOpen = true }) { Icon(Icons.Default.Dns, "Machine actions") }
+                            DropdownMenu(machinesOpen, { machinesOpen = false }) {
+                                DropdownMenuItem(text = { Text("Machines") }, onClick = { machinesOpen = false; choosingEnvironment = true; showThread = false })
+                                DropdownMenuItem(text = { Text("Connect machine") }, enabled = !state.busy, onClick = { machinesOpen = false; adding = true })
+                                if (state.environment != null) DropdownMenuItem(text = { Text("Disconnect machine") }, onClick = { machinesOpen = false; onDisconnect(); choosingEnvironment = true; showThread = false })
+                            }
+                        }
                     })
                 }) { padding ->
                     Column(Modifier.padding(padding).imePadding()) {

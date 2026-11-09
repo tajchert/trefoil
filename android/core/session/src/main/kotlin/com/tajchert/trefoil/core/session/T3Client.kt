@@ -656,6 +656,7 @@ class T3Client(
             }) }
         }
     }
+    suspend fun settleThread() { dispatch("thread.settle", "settlement") { buildJsonObject {} } }
     override suspend fun interruptRun() { dispatch("run.interrupt", "interrupt") { buildJsonObject { put("runId", state.value.activeRunId ?: error("No active run")) } } }
     override suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>>) {
         requireWrite()

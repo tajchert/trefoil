@@ -247,6 +247,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     fun send(text: String) = drafts.send(text)
     fun loadActivity(id: String) = action("Could not load activity output. Reconnect and try again.") { client.loadActivity(id) }
     fun interrupt() = action("Interrupt outcome is uncertain. Check the run status.") { client.interruptRun() }
+    fun settleThread() = action("Settlement outcome is uncertain. Check the thread status.") { client.settleThread() }
     fun respond(id: String, decision: String, answers: Map<String,List<String>>) = action("Response outcome is uncertain. Check the request status before responding again.") { client.respond(id, decision, answers) }
     /** Opens a local draft; no server mutation until the first send. */
     fun startDraft(draft: ThreadDraft) = drafts.start(draft)

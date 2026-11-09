@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
                 onSelectThread = model::selectThread,
                 onSend = model::send,
                 onInterrupt = model::interrupt,
+                onSettleThread = model::settleThread,
                 onLoadActivity = model::loadActivity,
                 screenViewer = screenViewer,
                 onRefreshScreens = model.screenSessions::refresh,
