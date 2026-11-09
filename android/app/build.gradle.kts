@@ -19,7 +19,7 @@ val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKe
 android {
     namespace = "com.tajchert.trefoil"
     compileSdk = 37
-    defaultConfig { applicationId = "com.tajchert.trefoil"; minSdk = 29; targetSdk = 37; versionCode = 12; versionName = "0.7.0" }
+    defaultConfig { applicationId = "com.tajchert.trefoil"; minSdk = 29; targetSdk = 37; versionCode = 13; versionName = "0.8.0" }
     buildFeatures { compose = true }
     testOptions { unitTests.isIncludeAndroidResources = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }

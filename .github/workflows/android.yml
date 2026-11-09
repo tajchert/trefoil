@@ -1,5 +1,5 @@
 name: Android
-on: [push, pull_request]
+on: [workflow_dispatch]
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -10,6 +10,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.1.0'
       - working-directory: android

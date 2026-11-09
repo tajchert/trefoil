@@ -1,5 +1,13 @@
 # Android releases
 
+GitHub Actions verification is manual (`workflow_dispatch`) while hosted Actions
+usage is exhausted. Pushes, tags and pull requests do not launch paid runners.
+Run the verification commands below locally before publishing; this is not an
+automatic CI pass. Restore push/pull-request triggers when quota is available.
+
+Release `0.8.0` (`versionCode = 13`) adds scoped thread and row actions,
+settlement Undo, project filtering and app-level machine navigation.
+
 Version values live in `android/app/build.gradle.kts`. The first release is
 `0.1.0` (`versionCode = 1`), application ID `com.tajchert.trefoil`, minimum Android 10.
 Increment both version values for subsequent published APKs.
