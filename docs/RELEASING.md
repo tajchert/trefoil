@@ -1,5 +1,8 @@
 # Android releases
 
+Release `0.8.1` (`versionCode = 14`) fixes settlement Undo during conversation
+refresh, pin ordering, snooze restoration, stale project filters and date pickers.
+
 GitHub Actions verification is manual (`workflow_dispatch`) while hosted Actions
 usage is exhausted. Pushes, tags and pull requests do not launch paid runners.
 Run the verification commands below locally before publishing; this is not an
