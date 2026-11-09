@@ -20,7 +20,7 @@ class ThreadActionsUiTest {
         var selected: String? = null
         var action: Pair<ThreadTarget, ThreadAction>? = null
         val row = ThreadSummary("row", "p", "Row")
-        val state = ClientState(environment = environment, canWrite = true, threadActionsConfigured = true,
+        val state = ClientState(environment = environment, connection = ConnectionStatus.Connected, canWriteThreads = true, threadActionsConfigured = true,
             selectedThreadId = "different", projects = listOf(Project("p", "P")), threads = listOf(row))
         compose.setContent { MaterialTheme { ThreadList(state, { selected = it }, {}, { target, operation, _ -> action = target to operation }) } }
         compose.onNodeWithContentDescription("Thread actions for Row").performClick()
@@ -41,14 +41,14 @@ class ThreadActionsUiTest {
         assertEquals("https://app.t3.codes/threads/env%20a/row%2F1", threadCopyReference(ThreadTarget("env a", "row/1")))
     }
     @Test fun snoozePresetsArePresented() {
-        val state = ClientState(environment = environment, canWrite = true, threadActionsConfigured = true)
+        val state = ClientState(environment = environment, connection = ConnectionStatus.Connected, canWriteThreads = true, threadActionsConfigured = true)
         compose.setContent { MaterialTheme { ThreadActionsMenu(state, ThreadSummary("row", "p", "Row")) { _, _, _ -> } } }
         compose.onNodeWithContentDescription("Thread actions for Row").performClick()
         compose.onNodeWithText("Snooze…").performClick()
         listOf("For one hour", "Tomorrow at 9 AM", "In one week", "Custom date and time…").forEach { compose.onNodeWithText(it).assertExists() }
     }
     @Test fun missingServerConfigurationDisablesPinAndSnooze() {
-        compose.setContent { MaterialTheme { ThreadActionsMenu(ClientState(environment = environment, canWrite = true), ThreadSummary("row", "p", "Row")) { _, _, _ -> } } }
+        compose.setContent { MaterialTheme { ThreadActionsMenu(ClientState(environment = environment, connection = ConnectionStatus.Connected, canWriteThreads = true), ThreadSummary("row", "p", "Row")) { _, _, _ -> } } }
         compose.onNodeWithContentDescription("Thread actions for Row").performClick()
         compose.onNodeWithText("Settle").assertIsEnabled()
         compose.onNodeWithText("Pin").assertIsNotEnabled()

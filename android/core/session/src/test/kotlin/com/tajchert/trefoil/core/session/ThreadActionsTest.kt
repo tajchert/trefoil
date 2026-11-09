@@ -7,6 +7,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ThreadActionsTest {
+    @Test fun newPinSortsBeforeExistingPins() {
+        assertEquals("n", pinOrderKeyBefore(null))
+        for (key in listOf("n", "b", "ab", "aaab", "abc", "z")) {
+            val before = pinOrderKeyBefore(key)!!
+            assertTrue("$before before $key", before < key)
+        }
+        assertNull(pinOrderKeyBefore("a0"))
+    }
     @Test fun commandsUseCapturedTargetAndExactFields() {
         val target = ThreadTarget("env", "row")
         assertEquals("row", threadActionCommand(target, ThreadAction.Unsettle, null, "c").string("threadId"))

@@ -39,7 +39,7 @@ internal fun ThreadActionsMenu(state: ClientState, thread: ThreadSummary, onActi
         var snooze by remember { mutableStateOf(false) }
         val clipboard = LocalClipboardManager.current
         val context = LocalContext.current
-        val writable = state.canWrite && !state.busy && thread.deletedAt == null && !thread.archived && thread.archivedAt == null
+        val writable = state.canWriteThreads && state.connection == ConnectionStatus.Connected && !state.busy && thread.deletedAt == null && !thread.archived && thread.archivedAt == null
         val configured = writable && state.threadActionsConfigured
         fun act(action: ThreadAction, value: String? = null) { open = false; onAction(target, action, value) }
         Box {
@@ -74,8 +74,8 @@ internal fun ThreadActionsMenu(state: ClientState, thread: ThreadSummary, onActi
                         TimePickerDialog(context, { _, hour, minute ->
                             val time = LocalDate.of(year, month + 1, day).atTime(hour, minute).atZone(ZoneId.systemDefault()).toInstant()
                             act(ThreadAction.Snooze, time.toString())
-                        }, now.hour, now.minute, true).show()
-                    }, now.year, now.monthValue - 1, now.dayOfMonth).show()
+                        }, now.hour, now.minute, android.text.format.DateFormat.is24HourFormat(context)).show()
+                    }, now.year, now.monthValue - 1, now.dayOfMonth).apply { datePicker.minDate = System.currentTimeMillis() }.show()
                 }) { Text("Custom date and time…") }
             }
         }, confirmButton = {}, dismissButton = { TextButton(onClick = { snooze = false }) { Text("Cancel") } })

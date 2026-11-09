@@ -7,6 +7,21 @@ import com.tajchert.trefoil.core.model.*
 import kotlinx.serialization.json.*
 import java.time.Instant
 
+/** Top-bound midpoint from T3 threadSort; malformed keys retain the server fallback. */
+internal fun pinOrderKeyBefore(after: String?): String? {
+    val digits = "abcdefghijklmnopqrstuvwxyz"
+    if (after == null) return "n"
+    if (after.isEmpty() || after.last() == 'a' || after.any { it !in digits }) return null
+    val prefix = after.takeWhile { it == 'a' }
+    val rest = after.drop(prefix.length)
+    val upper = digits.indexOf(rest.first())
+    return prefix + when {
+        upper > 1 -> digits[(upper + 1) / 2].toString()
+        rest.length > 1 -> rest.first().toString()
+        else -> "an"
+    }
+}
+
 internal fun threadActionCommand(target: ThreadTarget, action: ThreadAction, value: String?, commandId: String): JsonObject = buildJsonObject {
     put("commandId", commandId)
     put("threadId", target.threadId)

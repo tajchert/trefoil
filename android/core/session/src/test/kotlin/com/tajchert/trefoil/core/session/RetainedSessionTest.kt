@@ -94,6 +94,10 @@ class RetainedSessionTest {
             val undo = f.client.state.value.settlementUndo!!
             f.client.selectThread("open-1")
             val stream = withTimeout(5000) { f.threads.receive() }; f.threadSnapshot(stream, "Fixture")
+            f.chunk(stream, """{"kind":"event","event":{"type":"thread.unsettled"}}""")
+            assertFalse(f.client.state.value.canWrite)
+            assertTrue(f.client.state.value.canWriteThreads)
+            f.chunk(shell, """{"kind":"thread.updated","thread":{"id":"open-0","projectId":"p","pendingRequestKind":"approval"}}""")
             f.client.undoSettlement(undo)
             val command = withTimeout(5000) { f.commands.receive() }
             assertEquals("open-0", command.string("threadId"))

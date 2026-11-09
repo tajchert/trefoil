@@ -311,7 +311,8 @@ class T3Client(
     }
     private fun writable() = update {
         val fresh = shellReady && (it.selectedThreadId == null || threadReady) && it.connection == ConnectionStatus.Connected
-        it.copy(canRead = fresh, canWrite = authorized && fresh)
+        it.copy(canRead = fresh, canWrite = authorized && fresh,
+            canWriteThreads = authorized && shellReady && it.connection == ConnectionStatus.Connected)
     }
     private fun shellItem(item: JsonObject) {
         when (item.string("kind")) {
@@ -667,23 +668,27 @@ class T3Client(
     private val threadActionMutex = Mutex()
 
     suspend fun threadAction(target: ThreadTarget, action: ThreadAction, value: String? = null) {
-        val requestedEpoch = synchronized(lifecycleLock) { requireWrite(); generation }
+        val requestedEpoch = synchronized(lifecycleLock) { requireThreadWrite(); generation }
         threadActionMutex.withLock {
             performThreadAction(target, action, value, requestedEpoch)
         }
     }
 
-    private suspend fun performThreadAction(target: ThreadTarget, action: ThreadAction, value: String?, expectedEpoch: Long) {
+    private fun requireThreadWrite() { check(authorized && shellReady && state.value.connection == ConnectionStatus.Connected) { "Wait for a fresh connection before writing" } }
+
+    private suspend fun performThreadAction(target: ThreadTarget, action: ThreadAction, value: String?, expectedEpoch: Long, restoring: Boolean = false) {
         val (epoch, row, payload) = synchronized(lifecycleLock) {
             check(generation == expectedEpoch) { "Connection changed; action cancelled" }
-            requireWrite()
+            requireThreadWrite()
             check(state.value.environment?.id == target.environmentId) { "Machine changed; reopen the action" }
             val row = state.value.threads.firstOrNull { it.id == target.threadId && it.deletedAt == null && !it.archived && it.archivedAt == null } ?: error("Thread is unavailable")
             if (action in setOf(ThreadAction.Pin, ThreadAction.Unpin, ThreadAction.Snooze, ThreadAction.Wake)) check(state.value.threadActionsConfigured) { "Server configuration is unavailable" }
-            if (action == ThreadAction.Snooze) check(canSnoozeThread(row)) { "Respond to pending requests or wait for the turn to start before snoozing" }
+            if (action == ThreadAction.Snooze && !restoring) check(canSnoozeThread(row)) { "Respond to pending requests or wait for the turn to start before snoozing" }
+            val actionValue = if (action == ThreadAction.Pin && !restoring && value == null) pinOrderKeyBefore(state.value.threads.filter { it.pinnedAt != null }.mapNotNull { it.pinOrderKey }.minOrNull()) else value
+            val command = threadActionCommand(target, action, actionValue, UUID.randomUUID().toString())
             undoPlan = null
             update { it.copy(settlementUndo = null) }
-            Triple(generation, row, threadActionCommand(target, action, value, UUID.randomUUID().toString()))
+            Triple(generation, row, command)
         }
         mutation(epoch, "thread action") { rpc("orchestration.dispatchCommand", payload, epoch) }
         synchronized(lifecycleLock) {
@@ -697,7 +702,7 @@ class T3Client(
 
     suspend fun undoSettlement(undo: SettlementUndo) = threadActionMutex.withLock {
         val plan = synchronized(lifecycleLock) {
-            requireWrite()
+            requireThreadWrite()
             val plan = undoPlan ?: error("Undo expired")
             check(plan.first == undo && plan.second == generation && state.value.environment?.id == undo.target.environmentId) { "Undo expired after connection changed" }
             undoPlan = null
@@ -706,7 +711,7 @@ class T3Client(
         }
         for ((action, value) in plan.third) {
             if (action == ThreadAction.Snooze && !Instant.parse(value).isAfter(Instant.now())) continue
-            performThreadAction(undo.target, action, value, plan.second)
+            performThreadAction(undo.target, action, value, plan.second, restoring = true)
         }
     }
     override suspend fun interruptRun() { dispatch("run.interrupt", "interrupt") { buildJsonObject { put("runId", state.value.activeRunId ?: error("No active run")) } } }

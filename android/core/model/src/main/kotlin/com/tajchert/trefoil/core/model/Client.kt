@@ -118,6 +118,7 @@ data class ClientState(
     val error: String? = null,
     val busy: Boolean = false,
     val canWrite: Boolean = false,
+    val canWriteThreads: Boolean = false,
     val canRead: Boolean = false,
     val threadActionsConfigured: Boolean = false,
     val settlementUndo: SettlementUndo? = null,

@@ -149,6 +149,7 @@ internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: ()
     var projectId by rememberSaveable(state.environment?.id) { mutableStateOf<String?>(null) }
     var projectsOpen by remember { mutableStateOf(false) }
     val projects = remember(state.projects) { state.projects.associateBy { it.id } }
+    LaunchedEffect(projects, projectId) { if (projectId != null && projectId !in projects) projectId = null }
     val listed = remember(state.threads) { threadListRows(state.threads) }
     val filtered = remember(query, listed, projects, projectId) {
         listed.filter { thread -> (projectId == null || thread.projectId == projectId) && (query.isBlank() || listOf(thread.title, thread.latestMessage, projects[thread.projectId]?.title.orEmpty(), thread.branch.orEmpty()).any { it.contains(query.trim(), ignoreCase = true) }) }
