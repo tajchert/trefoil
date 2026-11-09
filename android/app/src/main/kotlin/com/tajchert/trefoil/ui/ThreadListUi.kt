@@ -144,12 +144,14 @@ internal fun threadShelves(threads: List<ThreadSummary>, now: Long = System.curr
 }
 
 @Composable
-internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: () -> Unit) {
+internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: () -> Unit, onAction: (ThreadTarget, ThreadAction, String?) -> Unit = { _, _, _ -> }) {
     var query by rememberSaveable(state.environment?.id) { mutableStateOf("") }
+    var projectId by rememberSaveable(state.environment?.id) { mutableStateOf<String?>(null) }
+    var projectsOpen by remember { mutableStateOf(false) }
     val projects = remember(state.projects) { state.projects.associateBy { it.id } }
     val listed = remember(state.threads) { threadListRows(state.threads) }
-    val filtered = remember(query, listed, projects) {
-        listed.filter { thread -> query.isBlank() || listOf(thread.title, thread.latestMessage, projects[thread.projectId]?.title.orEmpty(), thread.branch.orEmpty()).any { it.contains(query.trim(), ignoreCase = true) } }
+    val filtered = remember(query, listed, projects, projectId) {
+        listed.filter { thread -> (projectId == null || thread.projectId == projectId) && (query.isBlank() || listOf(thread.title, thread.latestMessage, projects[thread.projectId]?.title.orEmpty(), thread.branch.orEmpty()).any { it.contains(query.trim(), ignoreCase = true) }) }
     }
     var expanded by rememberSaveable(state.environment?.id) { mutableStateOf(listOf("Pinned", "Threads", "Working")) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -182,6 +184,13 @@ internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: ()
             trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Clear search") } },
             singleLine = true, shape = RoundedCornerShape(16.dp))
         if (state.busy && state.threads.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+        Box(Modifier.padding(horizontal = 16.dp)) {
+            TextButton(onClick = { projectsOpen = true }) { Text(projects[projectId]?.title ?: "All projects") }
+            DropdownMenu(projectsOpen, { projectsOpen = false }) {
+                DropdownMenuItem(text = { Text("All projects") }, onClick = { projectId = null; projectsOpen = false })
+                state.projects.forEach { project -> DropdownMenuItem(text = { Text(project.title) }, onClick = { projectId = project.id; projectsOpen = false }) }
+            }
+        }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
             if (shelves.isEmpty() && !state.busy) item {
                 Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -197,7 +206,7 @@ internal fun ThreadList(state: ClientState, select: (String) -> Unit, create: ()
                     }
                 }
                 items(shelf.threads.filter { query.isNotBlank() || shelf.title in expanded }, key = { "thread:${it.id}" }) { thread ->
-                    ThreadRow(thread, projects[thread.projectId], state.providers, now) { select(thread.id) }
+                    ThreadRow(thread, projects[thread.projectId], state.providers, now, { ThreadActionsMenu(state, thread, onAction) }) { select(thread.id) }
                 }
             }
         }
@@ -215,7 +224,7 @@ private fun ShelfHeading(title: String, count: Int, open: Boolean, toggle: () ->
     }
 }
 @Composable
-private fun ThreadRow(thread: ThreadSummary, project: Project?, providers: List<ProviderInstance>, now: Long, select: () -> Unit) {
+private fun ThreadRow(thread: ThreadSummary, project: Project?, providers: List<ProviderInstance>, now: Long, actions: @Composable () -> Unit, select: () -> Unit) {
     val indicator = threadIndicator(thread)
     val tint = when (indicator.kind) {
         "attention" -> Color(0xFFB7791F)
@@ -231,7 +240,10 @@ private fun ThreadRow(thread: ThreadSummary, project: Project?, providers: List<
             Column(Modifier.weight(1f)) {
                 val providerStack = threadProviders(thread, providers)
                 val hasContext = !thread.branch.isNullOrBlank() || !thread.model.isNullOrBlank()
-                Text(thread.title.ifBlank { "Untitled conversation" }, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, fontWeight = if (indicator.kind in setOf("working", "waiting")) FontWeight.Normal else FontWeight.Medium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(thread.title.ifBlank { "Untitled conversation" }, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, fontWeight = if (indicator.kind in setOf("working", "waiting")) FontWeight.Normal else FontWeight.Medium)
+                    actions()
+                }
                 Row(Modifier.padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Folder, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(project?.title ?: "Project", Modifier.padding(start = 4.dp).weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

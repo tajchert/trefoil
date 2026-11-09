@@ -8,6 +8,9 @@ data class SavedEnvironment(val id: String, val name: String, val baseUrl: Strin
     override fun toString() = "SavedEnvironment(credentials=***)"
 }
 data class Project(val id: String, val title: String, val path: String = "")
+data class ThreadTarget(val environmentId: String, val threadId: String)
+enum class ThreadAction { Settle, Unsettle, Pin, Unpin, Rename, Snooze, Wake }
+data class SettlementUndo(val token: String, val target: ThreadTarget)
 data class ThreadSummary(
     val id: String, val projectId: String, val title: String, val status: String = "idle",
     val createdAt: String? = null, val updatedAt: String? = null,
@@ -116,6 +119,8 @@ data class ClientState(
     val busy: Boolean = false,
     val canWrite: Boolean = false,
     val canRead: Boolean = false,
+    val threadActionsConfigured: Boolean = false,
+    val settlementUndo: SettlementUndo? = null,
     val providers: List<ProviderInstance> = emptyList(),
     val runs: List<ConversationRun> = emptyList(),
     val attempts: List<RunAttempt> = emptyList(),

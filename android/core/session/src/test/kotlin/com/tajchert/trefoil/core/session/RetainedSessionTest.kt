@@ -28,6 +28,8 @@ class RetainedSessionTest {
         val configurations = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
         val itemReads = Channel<Pair<WebSocket, JsonObject>>(Channel.UNLIMITED)
         val otherCalls = Channel<String>(Channel.UNLIMITED)
+        val commands = Channel<JsonObject>(Channel.UNLIMITED)
+        @Volatile var holdCommands = false
         init {
             server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse = when {
@@ -46,6 +48,11 @@ class RetainedSessionTest {
                                 "orchestration.subscribeShell" -> { shellPayload = frame.obj("payload"); shells.trySend(webSocket to id) }
                                 "orchestration.subscribeThread" -> { subscriptions.incrementAndGet(); threads.trySend(webSocket to id) }
                                 "orchestration.getTurnItem" -> itemReads.trySend(webSocket to frame)
+                                "orchestration.dispatchCommand" -> {
+                                    commands.trySend(frame.obj("payload"))
+                                    if (!holdCommands) webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{}}}""")
+                                    Unit
+                                }
                                 else -> otherCalls.trySend(frame.string("tag"))
                             }
                         }
@@ -77,6 +84,62 @@ class RetainedSessionTest {
             }
         }
     }
+    @Test fun rowActionsAndUndoKeepTheirTargetAcrossSelectionAndRejectStaleLifecycle() = runBlocking {
+        Fixture().use { f ->
+            val shell = f.connect(); f.shell(shell)
+            f.chunk(shell, """{"kind":"thread.updated","thread":{"id":"open-0","projectId":"p","title":"Fixture","pinnedAt":"2026-11-09T08:00:00Z","pinOrderKey":"a0","snoozedUntil":"2099-01-01T00:00:00Z"}}""")
+            val target = ThreadTarget("env", "open-0")
+            f.client.threadAction(target, ThreadAction.Settle)
+            assertEquals("open-0", withTimeout(5000) { f.commands.receive() }.string("threadId"))
+            val undo = f.client.state.value.settlementUndo!!
+            f.client.selectThread("open-1")
+            val stream = withTimeout(5000) { f.threads.receive() }; f.threadSnapshot(stream, "Fixture")
+            f.client.undoSettlement(undo)
+            val command = withTimeout(5000) { f.commands.receive() }
+            assertEquals("open-0", command.string("threadId"))
+            assertEquals("thread.unsettle", command.string("type"))
+            assertEquals("user", command.string("reason"))
+            val pin = withTimeout(5000) { f.commands.receive() }
+            val snooze = withTimeout(5000) { f.commands.receive() }
+            assertEquals("thread.pin", pin.string("type"))
+            assertEquals("a0", pin.string("orderKey"))
+            assertEquals("open-0", pin.string("threadId"))
+            assertEquals("thread.snooze", snooze.string("type"))
+            assertEquals("2099-01-01T00:00:00Z", snooze.string("snoozedUntil"))
+            assertEquals("open-0", snooze.string("threadId"))
+            assertEquals("open-1", f.client.state.value.selectedThreadId)
+            for ((operation, value) in listOf(ThreadAction.Pin to null, ThreadAction.Unpin to null,
+                ThreadAction.Rename to "Fixture renamed", ThreadAction.Snooze to "2099-01-01T00:00:00Z", ThreadAction.Wake to null)) {
+                f.client.threadAction(target, operation, value)
+                val sent = withTimeout(5000) { f.commands.receive() }
+                assertEquals("open-0", sent.string("threadId"))
+                assertEquals("open-1", f.client.state.value.selectedThreadId)
+                assertTrue(sent.string("commandId").isNotBlank())
+            }
+            try { f.client.threadAction(target.copy(environmentId = "other"), ThreadAction.Pin); fail("Wrong environment") } catch (_: IllegalStateException) { }
+            f.client.disconnect()
+            assertNull(f.client.state.value.settlementUndo)
+            try { f.client.undoSettlement(undo); fail("Stale Undo") } catch (_: IllegalStateException) { }
+            assertTrue(f.commands.tryReceive().isFailure)
+        }
+    }
+
+    @Test fun disconnectDuringRowMutationDisablesWritesAndNeverReplays() = runBlocking {
+        Fixture().use { f ->
+            val shell = f.connect(); f.shell(shell); f.holdCommands = true
+            val result = async { runCatching { f.client.threadAction(ThreadTarget("env", "open-0"), ThreadAction.Settle) } }
+            withTimeout(5000) { f.commands.receive() }
+            val queued = async(start = CoroutineStart.UNDISPATCHED) { runCatching { f.client.threadAction(ThreadTarget("env", "open-1"), ThreadAction.Pin) } }
+            f.client.disconnect()
+            assertTrue(result.await().exceptionOrNull() is UncertainOutcomeException)
+            assertTrue(queued.await().isFailure)
+            assertNull(f.client.state.value.settlementUndo)
+            assertFalse(f.client.state.value.canWrite)
+            val next = f.connect(); f.shell(next)
+            assertTrue(f.commands.tryReceive().isFailure)
+        }
+    }
+
     @Test fun fullSubscriptionRetainsEverySettledRowAndChildLineageAcrossEnrichment() = runBlocking {
         Fixture().use { f ->
             val shell = f.connect()

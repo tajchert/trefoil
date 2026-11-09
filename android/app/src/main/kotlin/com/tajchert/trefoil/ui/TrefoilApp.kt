@@ -58,13 +58,19 @@ fun TrefoilApp(
     isScreenAccessCurrent: (ScreenAccess) -> Boolean = { false },
     fileDownloadUi: FileDownloadUi = FileDownloadUi(),
     sendFailed: Flow<Unit> = emptyFlow(),
-    onSettleThread: () -> Unit = {},
+    onThreadAction: (ThreadTarget, ThreadAction, String?) -> Unit = { _, _, _ -> },
+    onUndoSettlement: (SettlementUndo) -> Unit = {},
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
         var adding by remember { mutableStateOf(false) }
-        var actionsOpen by remember { mutableStateOf(false) }
         var machinesOpen by remember { mutableStateOf(false) }
+        val snackbar = remember { SnackbarHostState() }
+        LaunchedEffect(state.settlementUndo) {
+            state.settlementUndo?.let { undo ->
+                if (snackbar.showSnackbar("Thread settled", "Undo", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) onUndoSettlement(undo)
+            }
+        }
         var sshConnecting by remember { mutableStateOf(false) }
         var pairing by rememberSaveable { mutableStateOf(false) }
         var choosingEnvironment by rememberSaveable { mutableStateOf(false) }
@@ -87,7 +93,7 @@ fun TrefoilApp(
             BoxWithConstraints {
                 val wide = maxWidth >= 840.dp
                 BackHandler(!showScreens && (showThread || choosingEnvironment) && !wide) { cancelDraft(); showThread = false; choosingEnvironment = false }
-                Scaffold(topBar = {
+                Scaffold(snackbarHost = { SnackbarHost(snackbar) }, topBar = {
                     if (!showScreens) TopAppBar(title = {
                         Column {
                             Text("Trefoil", fontWeight = FontWeight.Bold)
@@ -95,24 +101,21 @@ fun TrefoilApp(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }, navigationIcon = {
-                        if (showThread && !wide) IconButton(onClick = { cancelDraft(); showThread = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to threads") }
-                        else Icon(Icons.Default.Spa, null, Modifier.padding(start = 20.dp, end = 8.dp), tint = MaterialTheme.colorScheme.primary)
-                    }, actions = {
-                        if (state.environment != null) IconButton(onClick = { showScreens = true }, enabled = !state.busy) { Icon(Icons.Default.Devices, "Screen sessions") }
-                        if (showThread && draft == null && state.selectedThreadId != null) Box {
-                            IconButton(onClick = { actionsOpen = true }) { Icon(Icons.Default.MoreVert, "Thread actions") }
-                            DropdownMenu(actionsOpen, { actionsOpen = false }) {
-                                DropdownMenuItem(text = { Text("Mark as settled") }, enabled = state.canWrite && !state.busy && state.threads.firstOrNull { it.id == state.selectedThreadId }?.settledOverride != "settled",
-                                    onClick = { actionsOpen = false; onSettleThread() })
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (showThread && !wide) IconButton(onClick = { cancelDraft(); showThread = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to threads") }
+                            Box {
+                                IconButton(onClick = { machinesOpen = true }) { Icon(Icons.Default.Menu, "App navigation") }
+                                DropdownMenu(machinesOpen, { machinesOpen = false }) {
+                                    DropdownMenuItem(text = { Text("Machines") }, onClick = { machinesOpen = false; choosingEnvironment = true; showThread = false })
+                                    DropdownMenuItem(text = { Text("Connect machine") }, enabled = !state.busy, onClick = { machinesOpen = false; adding = true })
+                                    if (state.environment != null) DropdownMenuItem(text = { Text("Disconnect machine") }, onClick = { machinesOpen = false; onDisconnect(); choosingEnvironment = true; showThread = false })
+                                }
                             }
                         }
-                        Box {
-                            IconButton(onClick = { machinesOpen = true }) { Icon(Icons.Default.Dns, "Machine actions") }
-                            DropdownMenu(machinesOpen, { machinesOpen = false }) {
-                                DropdownMenuItem(text = { Text("Machines") }, onClick = { machinesOpen = false; choosingEnvironment = true; showThread = false })
-                                DropdownMenuItem(text = { Text("Connect machine") }, enabled = !state.busy, onClick = { machinesOpen = false; adding = true })
-                                if (state.environment != null) DropdownMenuItem(text = { Text("Disconnect machine") }, onClick = { machinesOpen = false; onDisconnect(); choosingEnvironment = true; showThread = false })
-                            }
+                    }, actions = {
+                        if (state.environment != null) IconButton(onClick = { showScreens = true }, enabled = !state.busy) { Icon(Icons.Default.Devices, "Screen sessions") }
+                        if (!choosingEnvironment && selectedThreadActionsVisible(wide, showThread, draft, state.selectedThreadId)) {
+                            state.threads.firstOrNull { it.id == state.selectedThreadId }?.let { ThreadActionsMenu(state, it, onThreadAction) }
                         }
                     })
                 }) { padding ->
@@ -128,7 +131,7 @@ fun TrefoilApp(
                             if (wide || !showThread) {
                                 Box(if (wide) Modifier.width(320.dp).fillMaxHeight() else Modifier.fillMaxSize()) {
                                     conversationState.SaveableStateProvider("thread-list:${state.environment?.id}") {
-                                        ThreadList(state, select, { creating = true })
+                                        ThreadList(state, select, { creating = true }, onThreadAction)
                                     }
                                 }
                             }
