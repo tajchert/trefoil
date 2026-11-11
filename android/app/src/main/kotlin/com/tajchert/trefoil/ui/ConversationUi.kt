@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tajchert.trefoil.core.model.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -48,7 +49,11 @@ internal fun Conversation(
 ) {
     val c = Tf.colors
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
-    val state = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())
+    val base = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())
+    // A draft launches a new thread, which needs only the shell; an open thread rides out its refresh gaps.
+    val steadyWrite = rememberSteadyCanWrite(base)
+    val writable = if (draft != null) base.canLaunchThreads else steadyWrite
+    val state = if (writable == base.canWrite) base else base.copy(canWrite = writable)
     if (state.selectedThreadId == null && draft == null) {
         Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -280,3 +285,27 @@ private fun ComposerPickers(state: ClientState, draft: ThreadDraft?, onSetRuntim
         }
     }
 }
+
+/**
+ * While an agent works, every server event briefly marks the thread stale until its refetch lands, so the raw
+ * `canWrite` blinks. Keep thread controls enabled through gaps shorter than [STALE_GRACE_MS] while the
+ * connection itself is healthy; the client waits for freshness if one is tapped mid-gap. Any real outage
+ * (disconnected, shell not ready) disables them immediately.
+ */
+@Composable
+internal fun rememberSteadyCanWrite(state: ClientState): Boolean {
+    val live = state.canWrite
+    val healthy = state.canLaunchThreads
+    var held by remember(state.environment?.id, state.selectedThreadId) { mutableStateOf(live) }
+    LaunchedEffect(live, healthy) {
+        if (live) held = true
+        else if (!healthy) held = false
+        else { delay(STALE_GRACE_MS); held = false }
+    }
+    return live || (held && healthy)
+}
+
+private const val STALE_GRACE_MS = 1_500L
+
+/** Launching a thread needs the shell (projects, models), not a fresh projection of whichever thread is open. `canWrite` implies it. */
+internal val ClientState.canLaunchThreads: Boolean get() = canWrite || (canWriteThreads && connection == ConnectionStatus.Connected)

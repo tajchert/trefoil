@@ -183,4 +183,28 @@ class ConversationUiTest {
         assertEquals(before, scrollRange().value())
         compose.onNodeWithText("Latest").assertIsDisplayed()
     }
+
+    @Test fun stopStaysEnabledThroughBriefRefreshGapsButNotThroughOutages() {
+        val live = ClientState(selectedThreadId = "fixture", canWrite = true, canRead = true, canWriteThreads = true, connection = ConnectionStatus.Connected,
+            activeRunId = "run", messages = listOf(ConversationMessage("m", "assistant", "Working")))
+        val state = mutableStateOf(live)
+        compose.mainClock.autoAdvance = false
+        compose.setContent { MaterialTheme { Conversation(state.value, {}, {}, { _, _, _ -> }) } }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithContentDescription("Stop").assertIsEnabled()
+        // An agent event: the projection refetches for a moment while the connection stays healthy.
+        state.value = live.copy(canWrite = false, canRead = false); compose.mainClock.advanceTimeBy(300)
+        compose.onNodeWithContentDescription("Stop").assertIsEnabled()
+        compose.onNodeWithText("Read only · reconnect to continue").assertDoesNotExist()
+        state.value = live; compose.mainClock.advanceTimeBy(300)
+        compose.onNodeWithContentDescription("Stop").assertIsEnabled()
+        // A refresh that never lands eventually reads as stale.
+        state.value = live.copy(canWrite = false, canRead = false); compose.mainClock.advanceTimeBy(2_000)
+        compose.onNodeWithContentDescription("Stop").assertIsNotEnabled()
+        // A real outage disables immediately.
+        state.value = live; compose.mainClock.advanceTimeBy(100)
+        compose.onNodeWithContentDescription("Stop").assertIsEnabled()
+        state.value = live.copy(canWrite = false, canRead = false, canWriteThreads = false, connection = ConnectionStatus.Reconnecting); compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithContentDescription("Stop").assertIsNotEnabled()
+    }
 }

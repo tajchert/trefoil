@@ -67,7 +67,7 @@ internal fun NewThreadSheetContent(state: ClientState, dismiss: () -> Unit, star
     val model = state.models.getOrNull(modelIndex)
     val allowedModes = allowedRuntimeModes(model)
     val mode = resolveRuntimeMode(RuntimeMode.fromWire(chosenMode), allowedModes)
-    val canStart = state.canWrite && !state.busy && projectId.isNotBlank() && model != null
+    val canStart = state.canLaunchThreads && !state.busy && projectId.isNotBlank() && model != null
 
     val filtered = state.projects.filter { query.isBlank() || it.title.contains(query.trim(), ignoreCase = true) }
     val limit = 8

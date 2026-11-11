@@ -41,8 +41,8 @@ class InlineImageLoader(
     }
 
     private fun isCurrent(environmentId: String, threadId: String): Boolean = client.state.value.let {
-        it.connection == ConnectionStatus.Connected && (it.canRead || it.canWrite) &&
-            it.environment?.id == environmentId && it.selectedThreadId == threadId
+        // Not canRead: that blinks off on every thread event until the projection refetch lands.
+        it.connection == ConnectionStatus.Connected && it.environment?.id == environmentId && it.selectedThreadId == threadId
     }
 
     /** Cached bitmap, if any. */

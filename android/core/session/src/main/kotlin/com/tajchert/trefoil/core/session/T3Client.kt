@@ -17,6 +17,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
+private const val FRESH_THREAD_WAIT_MS = 3_000L
+
 /** Native direct-environment client. Mutations are never retried or replayed. */
 class T3Client(
     private val scope: CoroutineScope,
@@ -524,7 +526,8 @@ class T3Client(
         currentCoroutineContext().ensureActive()
         val captured = synchronized(lifecycleLock) {
             check(state.value.environment?.id == environmentId && state.value.selectedThreadId == threadId) { "Download context changed" }
-            check(state.value.canRead && state.value.connection == ConnectionStatus.Connected) { "Connect and refresh before downloading a file" }
+            // Reading a file needs a synced session, not a fresh thread projection (that blinks on every event).
+            check(shellReady && state.value.connection == ConnectionStatus.Connected) { "Connect and refresh before downloading a file" }
             FileRead(generation, threadGeneration, state.value.environment ?: error("Connect an environment"), state.value.selectedThreadId ?: error("Select a thread"))
         }
         fun current() = synchronized(lifecycleLock) {
@@ -561,6 +564,18 @@ class T3Client(
         catch (_: Exception) { throw IllegalStateException(if (current()) "File download failed. The file may be unavailable or access may have been denied." else "Connection or selected thread changed; download cancelled") }
     }
     private fun requireWrite() { check(state.value.canWrite) { "Wait for a fresh connection before writing" } }
+    /**
+     * Every thread event marks the projection stale until its refetch lands, which is routine while an
+     * agent works. A write issued in that gap waits briefly for the refresh instead of failing. It only
+     * proceeds on the same connection and thread selection, so nothing is ever sent late into a new
+     * session or another thread; [requireWrite] still decides.
+     */
+    private suspend fun awaitFreshThread() {
+        if (state.value.canWrite) return
+        val (epoch, selection) = synchronized(lifecycleLock) { generation to threadGeneration }
+        withTimeoutOrNull(FRESH_THREAD_WAIT_MS) { state.first { it.canWrite || it.connection != ConnectionStatus.Connected } }
+        synchronized(lifecycleLock) { check(epoch == generation && selection == threadGeneration) { "The thread changed; try again" } }
+    }
     private fun command(type: String, extra: JsonObject): JsonObject = buildJsonObject {
         put("type", type); put("commandId", UUID.randomUUID().toString()); put("threadId", state.value.selectedThreadId ?: error("Select a thread")); extra.forEach { (key, value) -> put(key, value) }
     }
@@ -569,6 +584,7 @@ class T3Client(
      * local validation fails before anything is sent. See [mutation] for failure handling.
      */
     private suspend fun dispatch(type: String, subject: String, extra: () -> JsonObject) {
+        awaitFreshThread()
         val (epoch, payload) = synchronized(lifecycleLock) { requireWrite(); generation to command(type, extra()) }
         mutation(epoch, subject) { rpc("orchestration.dispatchCommand", payload, epoch) }
     }
@@ -606,7 +622,8 @@ class T3Client(
         require(firstMessage.isNotBlank()) { "Message is empty" }
         require(draft.threadId.isNotBlank() && draft.commandId.isNotBlank()) { "Invalid draft identity" }
         val (epoch, payload) = synchronized(lifecycleLock) {
-            requireWrite()
+            // A new thread depends on the shell (projects, models), not on whichever thread is open.
+            check(state.value.canWriteThreads && state.value.connection == ConnectionStatus.Connected) { "Wait for a fresh connection before writing" }
             check(state.value.projects.any { it.id == draft.projectId }) { "Choose a project from this environment" }
             val model = state.value.models.firstOrNull { it.instanceId == draft.model.instanceId && it.model == draft.model.model } ?: error("Choose a server-provided model")
             check(model.supportedRuntimeModes.isEmpty() || draft.runtimeMode in model.supportedRuntimeModes) { "${model.label} does not support ${draft.runtimeMode.label}" }
@@ -716,6 +733,7 @@ class T3Client(
     }
     override suspend fun interruptRun() { dispatch("run.interrupt", "interrupt") { buildJsonObject { put("runId", state.value.activeRunId ?: error("No active run")) } } }
     override suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>>) {
+        awaitFreshThread()
         requireWrite()
         val request = state.value.requests.firstOrNull { it.id == requestId } ?: error("Request is no longer pending")
         check(request.canApprove) { "Use another T3 client to respond to this request" }

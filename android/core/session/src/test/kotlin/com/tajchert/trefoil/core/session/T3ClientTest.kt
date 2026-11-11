@@ -147,6 +147,84 @@ class T3ClientTest {
      complete(second); withTimeout(5000) { client.state.first { it.canWrite } }; Unit
    } finally { client.disconnect(); scope.cancel(); server.shutdown() }
  }
+ @Test fun writeDuringEventRefreshWaitsForFreshProjectionAndSendsOnce() = runBlocking {
+   val server = MockWebServer(); server.start()
+   val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default); val client = T3Client(scope)
+   val websocket = CompletableDeferred<WebSocket>(); val threadStream = CompletableDeferred<String>()
+   val reads = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+   val dispatched = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+   val projection = """{"thread":{"id":"t"},"messages":[],"runs":[],"turnItems":[],"runtimeRequests":[]}"""
+   val listener = object : WebSocketListener() {
+     override fun onOpen(webSocket: WebSocket, response: Response) { websocket.complete(webSocket) }
+     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
+     override fun onMessage(webSocket: WebSocket, text: String) {
+       val frame = EffectRpc.decode(text).single(); if (frame.string("_tag") != "Request") return
+       val id = frame.string("id")
+       when (frame.string("tag")) {
+         "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+         "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
+         "orchestration.subscribeThread" -> { threadStream.complete(id); webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":$projection},{"kind":"synchronized"}]}""") }
+         "orchestration.getThreadProjection" -> reads.trySend(id)
+         "orchestration.dispatchCommand" -> { dispatched.trySend(frame.obj("payload").string("type")); webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"sequence":9}}}""") }
+       }
+     }
+   }
+   try {
+     server.enqueue(json(descriptor)); server.enqueue(json("""{"authenticated":true,"permissions":["orchestration:operate"]}""")); server.enqueue(json("""{"ticket":"ticket"}""")); server.enqueue(MockResponse().withWebSocketUpgrade(listener))
+     client.connect(SavedEnvironment("env-1", "Test", server.url("/").toString(), "secret"))
+     withTimeout(5000) { client.state.first { it.canWrite } }; client.selectThread("t")
+     val socket = websocket.await(); val stream = threadStream.await()
+     withTimeout(5000) { client.state.first { it.canWrite && it.selectedThreadId == "t" } }
+     // An agent event makes the projection stale; the shell (and so new threads) stays writable.
+     socket.send("""{"_tag":"Chunk","requestId":"$stream","values":[{"kind":"event","sequence":1,"event":{"type":"future.additive"}}]}""")
+     val read = withTimeout(5000) { reads.receive() }
+     assertFalse(client.state.value.canWrite); assertTrue(client.state.value.canWriteThreads)
+     val send = scope.async { client.sendMessage("fixture") }
+     delay(200)
+     assertTrue("nothing is sent against a stale projection", dispatched.tryReceive().isFailure)
+     socket.send("""{"_tag":"Exit","requestId":"$read","exit":{"_tag":"Success","value":$projection}}""")
+     withTimeout(5000) { send.await() }
+     assertEquals("message.dispatch", dispatched.tryReceive().getOrNull())
+     delay(100); assertTrue("sent exactly once", dispatched.tryReceive().isFailure)
+   } finally { client.disconnect(); scope.cancel(); server.shutdown() }
+ }
+ @Test fun writeWaitingForRefreshFailsWithoutSendingWhenConnectionDrops() = runBlocking {
+   val server = MockWebServer(); server.start()
+   val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default); val client = T3Client(scope)
+   val websocket = CompletableDeferred<WebSocket>(); val threadStream = CompletableDeferred<String>()
+   val reads = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+   val dispatched = java.util.concurrent.atomic.AtomicInteger()
+   val projection = """{"thread":{"id":"t"},"messages":[],"runs":[],"turnItems":[],"runtimeRequests":[]}"""
+   val listener = object : WebSocketListener() {
+     override fun onOpen(webSocket: WebSocket, response: Response) { websocket.complete(webSocket) }
+     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
+     override fun onMessage(webSocket: WebSocket, text: String) {
+       val frame = EffectRpc.decode(text).single(); if (frame.string("_tag") != "Request") return
+       val id = frame.string("id")
+       when (frame.string("tag")) {
+         "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+         "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
+         "orchestration.subscribeThread" -> { threadStream.complete(id); webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":$projection},{"kind":"synchronized"}]}""") }
+         "orchestration.getThreadProjection" -> reads.trySend(id)
+         "orchestration.dispatchCommand" -> dispatched.incrementAndGet()
+       }
+     }
+   }
+   try {
+     server.enqueue(json(descriptor)); server.enqueue(json("""{"authenticated":true,"permissions":["orchestration:operate"]}""")); server.enqueue(json("""{"ticket":"ticket"}""")); server.enqueue(MockResponse().withWebSocketUpgrade(listener))
+     client.connect(SavedEnvironment("env-1", "Test", server.url("/").toString(), "secret"))
+     withTimeout(5000) { client.state.first { it.canWrite } }; client.selectThread("t")
+     val socket = websocket.await(); val stream = threadStream.await()
+     withTimeout(5000) { client.state.first { it.canWrite && it.selectedThreadId == "t" } }
+     socket.send("""{"_tag":"Chunk","requestId":"$stream","values":[{"kind":"event","sequence":1,"event":{"type":"future.additive"}}]}""")
+     withTimeout(5000) { reads.receive() }
+     val send = scope.async { runCatching { client.sendMessage("fixture") } }
+     delay(200)
+     socket.close(1001, "fixture drop")
+     assertTrue(withTimeout(5000) { send.await() }.isFailure)
+     delay(100); assertEquals(0, dispatched.get())
+   } finally { client.disconnect(); scope.cancel(); server.shutdown() }
+ }
  @Test fun streamsFullProjectionAcknowledgesAndDoesNotReplayMutation() = runBlocking {
    val server = MockWebServer(); server.start()
    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default); val client = T3Client(scope)

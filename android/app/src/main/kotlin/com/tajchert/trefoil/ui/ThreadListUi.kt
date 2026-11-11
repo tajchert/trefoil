@@ -217,7 +217,8 @@ internal fun ThreadList(
             }
         }
     }
-    val canCreate = state.canWrite && state.projects.isNotEmpty() && state.models.isNotEmpty()
+    // Creating a thread depends on the shell, not on the open thread's refresh state.
+    val canCreate = state.canLaunchThreads && state.projects.isNotEmpty() && state.models.isNotEmpty()
     val c = Tf.colors
     Column(Modifier.fillMaxSize().background(c.bg)) {
         ThreadListHeader(state, shell, railLayout, canCreate, create, onSearch = { if (searching || query.isNotEmpty()) { searching = false; query = "" } else searching = true })
