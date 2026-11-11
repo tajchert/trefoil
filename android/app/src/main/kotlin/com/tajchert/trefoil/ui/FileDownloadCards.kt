@@ -28,6 +28,7 @@ data class FileDownloadUi(
     val onOpen: (CompletedDownload) -> Unit = {},
     val onShare: (CompletedDownload) -> Unit = {},
     val onInstall: (CompletedDownload) -> Unit = {},
+    val imageLoader: InlineImageLoader? = null,
 )
 internal val LocalFileDownloadUi = staticCompositionLocalOf { FileDownloadUi() }
 
@@ -36,7 +37,7 @@ internal fun MessageFileCards(message: ConversationMessage, modifier: Modifier =
     val files = remember(message) { if (message.streaming) emptyList() else message.remoteFiles() }
     if (files.isEmpty()) return
     Column(modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        files.forEach { reference -> key(reference.identity) { DownloadFileCard(reference) } }
+        files.forEach { reference -> key(reference.identity) { InlineOrCard(reference) } }
     }
 }
 
