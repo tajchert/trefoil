@@ -134,6 +134,10 @@ data class ClientState(
     val selectedProviderLocked: Boolean = false,
     /** Server `settings.defaultRuntimeMode`; null when not reported. */
     val defaultRuntimeMode: RuntimeMode? = null,
+    /** Selected thread's projection `subagents[]`, in wire order. */
+    val subagents: List<Subagent> = emptyList(),
+    /** Server `environment.capabilities.threadStop`; false when not reported. */
+    val threadStopSupported: Boolean = false,
 )
 
 /** A mutation may or may not have been applied; reconcile from server state, never resend it. */
@@ -155,6 +159,11 @@ interface TrefoilClient {
     suspend fun downloadFile(reference: RemoteFileReference, output: java.io.OutputStream, environmentId: String, threadId: String, onProgress: (FileDownloadProgress) -> Unit = {}): DownloadedFile { error("File downloads are unavailable") }
     suspend fun sendMessage(text: String)
     suspend fun interruptRun()
+    /**
+     * Stops one subagent of the selected (parent) thread, following T3 mobile's
+     * `resolveSubagentStopTarget` rules. Never replayed; outcomes reconcile from the projection.
+     */
+    suspend fun stopSubagent(subagentId: String) { error("Stopping subagents is unavailable") }
     suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>> = emptyMap())
     /**
      * Creates a thread together with its first message (`orchestration.launchThread` with
