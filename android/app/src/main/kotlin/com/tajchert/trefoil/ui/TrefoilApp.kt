@@ -88,7 +88,13 @@ fun TrefoilApp(
         // A subagent child goes back to its parent when that parent is loaded, otherwise to the list.
         val parentThread = if (draft != null || selectedThread?.relationshipToParent != "subagent") null
             else selectedThread.parentThreadId?.let { id -> state.threads.firstOrNull { it.id == id } }
+        // Back only targets the parent when it can load; offline, an uncached parent would fail and trap back on the child.
+        val backParent = parentThread?.takeIf { state.connection == ConnectionStatus.Connected }
         val openAgent: (String) -> Unit = { showAgents = false; select(it) }
+        // A roster that disappears (rollback, thread change) closes the sheet instead of leaving it armed to reopen.
+        LaunchedEffect(roster == null) { if (roster == null) showAgents = false }
+        // Thread events briefly clear canWrite; the steady value keeps Stop and its dialog from flickering.
+        val steadyWrite = rememberSteadyCanWrite(state)
         val connected = state.environment != null
         val shell = ShellActions(
             onMachines = { choosingEnvironment = true; showThread = false },
@@ -104,9 +110,9 @@ fun TrefoilApp(
                 val layout = shellLayout(maxWidth.value)
                 val twoPane = layout != ShellLayout.Phone
                 val machines = !connected || choosingEnvironment
-                BackHandler(!showScreens && ((choosingEnvironment && connected) || (showThread && !twoPane && !machines) || (parentThread != null && !machines && (twoPane || showThread)))) {
+                BackHandler(!showScreens && ((choosingEnvironment && connected) || (showThread && !twoPane && !machines) || (backParent != null && !machines && (twoPane || showThread)))) {
                     if (choosingEnvironment) choosingEnvironment = false
-                    else if (parentThread != null) select(parentThread.id)
+                    else if (backParent != null) select(backParent.id)
                     else { cancelDraft(); showThread = false }
                 }
                 val listWidth: Dp = if (layout == ShellLayout.Rail) 360.dp else (maxWidth * 0.5f).coerceIn(320.dp, 420.dp)
@@ -147,7 +153,7 @@ fun TrefoilApp(
                                             conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) "draft" else state.selectedThreadId}") {
                                                 Conversation(state, onSend, onInterrupt, onRespond, onLoadActivity = onLoadActivity, fileDownloadUi = fileDownloadUi,
                                                     draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, sendFailed = sendFailed,
-                                                    onBack = if (parentThread != null) ({ select(parentThread.id) }) else if (twoPane) null else ({ cancelDraft(); showThread = false }),
+                                                    onBack = if (backParent != null) ({ select(backParent.id) }) else if (twoPane) null else ({ cancelDraft(); showThread = false }),
                                                     onOpenParent = parentThread?.let { p -> { select(p.id) } },
                                                     subtitle = selectedThread?.takeIf { draft == null && it.relationshipToParent == "subagent" }?.let { t -> parentThread?.let { "Subagent of ${it.title}" } ?: "Subagent" },
                                                     actions = {
@@ -189,7 +195,7 @@ fun TrefoilApp(
         }
         if (sshHostKey != null) SshHostKeyDialog(sshHostKey, onTrustSsh, onCancelSsh)
         if (pairing) PairDialog(state.busy, { pairing = false; submittedPair = false; onCancelSsh() }, connectionAttempt.takeIf { it.kind == ConnectionKind.Pairing } ?: ConnectionAttempt()) { url, name, insecure -> submittedPair = true; onPair(url, name, insecure) }
-        if (showAgents && roster != null) ThreadAgentsSheet(roster, state.providers, state.models, state.canWrite, { showAgents = false }, openAgent, onStopSubagent)
+        if (showAgents && roster != null) ThreadAgentsSheet(roster, state.providers, state.models, steadyWrite, { showAgents = false }, openAgent, onStopSubagent)
         if (creating) NewThreadSheet(state, { creating = false }) { newDraft, prompt ->
             seedPrompt = prompt.trim().takeIf { it.isNotEmpty() }
             onStartDraft(newDraft); creating = false; showThread = true

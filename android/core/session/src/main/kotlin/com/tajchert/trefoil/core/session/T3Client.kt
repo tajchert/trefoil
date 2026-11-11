@@ -751,11 +751,13 @@ class T3Client(
             Triple(generation to threadGeneration, parentId, subagent)
         }
         val (epoch, selection) = session
-        fun requireSameSession() = synchronized(lifecycleLock) {
-            check(epoch == generation && selection == threadGeneration && state.value.selectedThreadId == parentId &&
-                authorized && state.value.connection == ConnectionStatus.Connected) { "The thread changed; stop was not completed" }
+        fun sameSession() = synchronized(lifecycleLock) {
+            epoch == generation && selection == threadGeneration && state.value.selectedThreadId == parentId &&
+                authorized && state.value.connection == ConnectionStatus.Connected
         }
-        suspend fun send(payload: JsonObject) { requireSameSession(); mutation(epoch, "agent stop") { rpc("orchestration.dispatchCommand", payload, epoch) } }
+        fun requireSameSession() = check(sameSession()) { "The thread changed; stop was not completed" }
+        // The guard re-checks under the send lock, so a selection change after requireSameSession still sends nothing.
+        suspend fun send(payload: JsonObject) { requireSameSession(); mutation(epoch, "agent stop") { rpc("orchestration.dispatchCommand", payload, epoch, ::sameSession) } }
         val parentStop = subagent.runId?.let { runId -> threadCommand("subagent.stop", parentId, buildJsonObject { put("runId", runId); put("subagentId", subagent.id) }) }
         if (!subagent.isAppOwned) { send(parentStop ?: error("This agent cannot be stopped from here")); return }
         val childId = subagent.childThreadId ?: error("This agent cannot be stopped from here")

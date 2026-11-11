@@ -53,14 +53,18 @@ internal fun ThreadAgentsSheet(
         now = System.currentTimeMillis()
         while (roster.liveCount > 0) { delay(1000); now = System.currentTimeMillis() }
     }
-    val rows = remember(roster, providers, models, now, canWrite) { agentRows(roster, providers, models, now, canWrite) }
+    // One stop per agent while the sheet is open: the row keeps its button until the projection settles it.
+    var requested by remember { mutableStateOf(emptySet<String>()) }
+    val rows = remember(roster, providers, models, now, canWrite, requested) {
+        agentRows(roster, providers, models, now, canWrite).map { if (it.id in requested) it.copy(canStop = false) else it }
+    }
     ModalBottomSheet(
         onDismissRequest = dismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
         containerColor = c.sheet, contentColor = c.text, scrimColor = c.scrim, tonalElevation = 0.dp,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         contentWindowInsets = { WindowInsets(0) },
         dragHandle = { Box(Modifier.padding(top = 12.dp, bottom = 8.dp).size(36.dp, 4.dp).background(c.s3, RoundedCornerShape(2.dp))) },
-    ) { ThreadAgentsSheetContent(rows, onOpen, onStop, Modifier.navigationBarsPadding()) }
+    ) { ThreadAgentsSheetContent(rows, onOpen, { id -> requested = requested + id; onStop(id) }, Modifier.navigationBarsPadding()) }
 }
 
 /** Sheet body, separate from the [ModalBottomSheet] chrome so it renders and tests standalone. */

@@ -268,7 +268,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     fun send(text: String) = drafts.send(text)
     fun loadActivity(id: String) = action("Could not load activity output. Reconnect and try again.") { client.loadActivity(id) }
     fun interrupt() = action("Interrupt outcome is uncertain. Check the run status.") { client.interruptRun() }
-    fun stopSubagent(id: String) = action("Could not stop agent. Check its status before trying again.") { client.stopSubagent(id) }
+    fun stopSubagent(id: String) = action("Agent stop failed or its outcome is uncertain. Check the agent before trying again.") { client.stopSubagent(id) }
     fun threadAction(target: ThreadTarget, operation: ThreadAction, value: String?) = action("Could not update thread. Check its status before trying again.") { client.threadAction(target, operation, value) }
     fun undoSettlement(undo: SettlementUndo) = action("Could not undo settlement. Check the thread status.") { client.undoSettlement(undo) }
     fun respond(id: String, decision: String, answers: Map<String,List<String>>) = action("Response outcome is uncertain. Check the request status before responding again.") { client.respond(id, decision, answers) }
