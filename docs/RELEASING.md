@@ -1,5 +1,10 @@
 # Android releases
 
+Release `0.10.0` (`versionCode = 17`) probes saved machines on open and auto-connects to a
+reachable one, shows images inline in threads, renders GitHub-flavoured Markdown (tables,
+lists, quotes, links), stops write controls flickering while agents work, and tidies thread
+rows. Check machine status dots and auto-connect against a real environment on a device.
+
 Release `0.9.1` (`versionCode = 16`) keeps the conversation pinned to the latest message
 when the keyboard opens, unless the reader had scrolled up.
 
