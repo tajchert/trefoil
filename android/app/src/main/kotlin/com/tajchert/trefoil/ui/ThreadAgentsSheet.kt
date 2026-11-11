@@ -67,21 +67,22 @@ internal fun ThreadAgentsSheet(
 @Composable
 internal fun ThreadAgentsSheetContent(rows: List<AgentRowUi>, onOpen: (String) -> Unit, onStop: (String) -> Unit, modifier: Modifier = Modifier) {
     val c = Tf.colors
-    var stopping by remember { mutableStateOf<AgentRowUi?>(null) }
+    var stoppingId by remember { mutableStateOf<String?>(null) }
+    // Re-resolve the pending stop target from live rows so a settled agent cannot be stopped from a stale dialog.
+    val stopping = stoppingId?.let { id -> rows.firstOrNull { it.id == id && it.canStop } }
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 20.dp)) {
         Text("Agents", Modifier.padding(start = 4.dp, bottom = 8.dp), style = MaterialTheme.typography.headlineSmall, color = c.text)
         if (rows.isEmpty()) Text("No agents in this turn.", Modifier.padding(start = 4.dp, top = 6.dp, bottom = 12.dp), style = TrefoilType.preview, color = c.muted)
         rows.forEach { row ->
-            // Re-resolve the pending stop target from live rows so a settled agent cannot be stopped from a stale dialog.
-            AgentRow(row, onOpen, { stopping = row })
+            AgentRow(row, onOpen, { stoppingId = row.id })
             if (row !== rows.last()) HorizontalDivider(color = c.line)
         }
     }
     stopping?.let { target ->
         AlertDialog(
-            onDismissRequest = { stopping = null }, title = { Text("Stop agent?") }, text = { Text("Stop ${target.title}?") },
-            confirmButton = { TextButton(onClick = { stopping = null; onStop(target.id) }) { Text("Stop", color = c.red) } },
-            dismissButton = { TextButton(onClick = { stopping = null }) { Text("Cancel") } },
+            onDismissRequest = { stoppingId = null }, title = { Text("Stop agent?") }, text = { Text("Stop ${target.title}?") },
+            confirmButton = { TextButton(onClick = { stoppingId = null; onStop(target.id) }) { Text("Stop", color = c.red) } },
+            dismissButton = { TextButton(onClick = { stoppingId = null }) { Text("Cancel") } },
         )
     }
 }
