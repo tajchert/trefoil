@@ -49,6 +49,16 @@ data class Subagent(
     val isActive: Boolean get() = isSubagentActiveStatus(status)
     /** Completed, failed, cancelled or interrupted. `idle` is neither active nor terminal. */
     val isTerminal: Boolean get() = isSubagentTerminalStatus(status)
+    /**
+     * Mobile `resolveSubagentStopTarget`, `kind: "subagent"` only (workflow stop is deferred):
+     * active, not a workflow, and either app-owned with a child thread, or Claude-native with a
+     * run and a strong native ref. Write gating is the caller's job.
+     */
+    val canStop: Boolean get() = isActive && workflow == null && (
+        (isAppOwned && childThreadId != null) ||
+            (isProviderNative && driver == "claudeAgent" && runId != null &&
+                nativeTaskRef?.strength == "strong" && nativeTaskRef.nativeId != null)
+        )
 }
 
 data class SubagentRemoteChild(val environmentId: String, val threadId: String, val label: String, val title: String? = null)

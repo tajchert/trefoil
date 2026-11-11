@@ -59,10 +59,3 @@ internal fun subagentWorkflowSummary(subagent: Subagent): String? = TODO("stream
  * (`remoteChild` without `childThreadId`) are never openable in v1.
  */
 internal fun subagentOpenThreadId(subagent: Subagent): String? = TODO("stream B")
-
-/**
- * Port of mobile `resolveSubagentStopTarget`, `kind: "subagent"` only (workflow stop is deferred):
- * active, not a workflow, and either app-owned with a child thread, or Claude-native with a run
- * and a strong native ref.
- */
-internal fun subagentCanStop(subagent: Subagent): Boolean = TODO("stream B")
