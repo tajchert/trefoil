@@ -46,7 +46,7 @@ class ConnectionDialogTest {
             onSshConnect = { attempt.value = ConnectionAttempt(1, ConnectionKind.Ssh, ConnectionPhase.Testing) },
             sshHostKey = hostKey.value, onTrustSsh = { hostKey.value = null }, connectionAttempt = attempt.value,
         ) }
-        compose.onNodeWithText("Connect over SSH").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Connect over SSH").performScrollTo().performClick()
         compose.onNodeWithText("Display name").performTextInput("My server")
         compose.onNodeWithText("IP address or hostname").performTextInput("host.local")
         compose.onNodeWithText("SSH username").performTextInput("alice")

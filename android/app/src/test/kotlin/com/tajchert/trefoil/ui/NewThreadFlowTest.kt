@@ -18,32 +18,55 @@ class NewThreadFlowTest {
     private val models = listOf(ModelOption("codex", "gpt-a", "Model A"), ModelOption("claude", "sonnet", "Model B"))
     private val state = ClientState(projects = listOf(Project("p1", "Alpha"), Project("p2", "Beta")), models = models, canWrite = true)
 
+    private fun sheet(s: ClientState, onStart: (ThreadDraft, String) -> Unit = { _, _ -> }) =
+        compose.setContent { TrefoilTheme { NewThreadSheetContent(s, {}, onStart) } }
+
     @Test fun noTitleFieldAndStartEnabledWithoutOne() {
-        compose.setContent { MaterialTheme { NewThreadDialog(state, {}) {} } }
+        sheet(state)
         compose.onNodeWithText("Conversation title").assertDoesNotExist()
-        compose.onNodeWithText("Start").assertIsEnabled()
+        compose.onNodeWithText("What should the agent do?").assertExists()
+        compose.onNodeWithContentDescription("Start").assertIsEnabled()
     }
 
-    @Test fun tappingTextSelectsProjectModelAndModeAndStartEmitsDraft() {
+    @Test fun tappingChipsAndMenusSelectsProjectModelAndModeAndStartEmitsDraftWithPrompt() {
         var started: ThreadDraft? = null
-        compose.setContent { MaterialTheme { NewThreadDialog(state, {}) { started = it } } }
+        var prompt: String? = null
+        sheet(state) { draft, text -> started = draft; prompt = text }
         compose.onNodeWithText("Beta").performClick()
+        compose.onNodeWithContentDescription("Model: Model A").performClick()
         compose.onNodeWithText("Model B").performClick()
-        compose.onNodeWithText("Auto-accept edits").performScrollTo().performClick()
-        compose.onNodeWithText("Start").performClick()
-        compose.runOnIdle { assertEquals(Triple("p2", models[1], RuntimeMode.AutoAcceptEdits), started?.let { Triple(it.projectId, it.model, it.runtimeMode) }) }
+        compose.onNodeWithContentDescription("Access: Supervised").performClick()
+        compose.onNodeWithText("Auto-accept edits").performClick()
+        compose.onNodeWithText("What should the agent do?").performTextInput("Fix the build")
+        compose.onNodeWithContentDescription("Start").performClick()
+        compose.runOnIdle {
+            assertEquals(Triple("p2", models[1], RuntimeMode.AutoAcceptEdits), started?.let { Triple(it.projectId, it.model, it.runtimeMode) })
+            assertEquals("Fix the build", prompt)
+        }
+    }
+
+    @Test fun manyProjectsCollapseBehindCountChipAndSearchFilters() {
+        val many = state.copy(projects = (1..12).map { Project("p$it", "Project $it") })
+        sheet(many)
+        compose.onNodeWithText("Project 9").assertDoesNotExist()
+        compose.onNodeWithText("+4").performClick()
+        compose.onNodeWithText("Project 12").assertExists()
+        compose.onNodeWithContentDescription("Search projects").performClick()
+        compose.onNodeWithText("Search projects").performTextInput("Project 11")
+        compose.onNodeWithText("Project 12").assertDoesNotExist()
+        compose.onNode(hasText("Project 11") and hasClickAction() and !isEditable()).assertExists()
     }
 
     @Test fun defaultModeIsApprovalRequired() {
         var started: ThreadDraft? = null
-        compose.setContent { MaterialTheme { NewThreadDialog(state, {}) { started = it } } }
-        compose.onNodeWithText("Start").performClick()
+        sheet(state) { draft, _ -> started = draft }
+        compose.onNodeWithContentDescription("Start").performClick()
         compose.runOnIdle { assertEquals(RuntimeMode.ApprovalRequired, started?.runtimeMode); assertEquals("p1", started?.projectId) }
     }
 
     @Test fun startDisabledWhenReadOnly() {
-        compose.setContent { MaterialTheme { NewThreadDialog(state.copy(canWrite = false), {}) {} } }
-        compose.onNodeWithText("Start").assertIsNotEnabled()
+        sheet(state.copy(canWrite = false))
+        compose.onNodeWithContentDescription("Start").assertIsNotEnabled()
     }
 
     @Test fun draftConversationShowsHintAndPickersCallBack() {
@@ -82,21 +105,26 @@ class NewThreadFlowTest {
 
     @Test fun dialogDefaultsToServerDefaultMode() {
         var started: ThreadDraft? = null
-        compose.setContent { MaterialTheme { NewThreadDialog(state.copy(defaultRuntimeMode = RuntimeMode.FullAccess), {}) { started = it } } }
-        compose.onNodeWithText("Start").performClick()
+        sheet(state.copy(defaultRuntimeMode = RuntimeMode.FullAccess)) { draft, _ -> started = draft }
+        compose.onNodeWithContentDescription("Start").performClick()
         compose.runOnIdle { assertEquals(RuntimeMode.FullAccess, started?.runtimeMode) }
     }
 
     @Test fun dialogShowsOnlySupportedModesAndFallsBackAfterModelChange() {
         var started: ThreadDraft? = null
-        compose.setContent { MaterialTheme { NewThreadDialog(state.copy(models = restricted), {}) { started = it } } }
+        sheet(state.copy(models = restricted)) { draft, _ -> started = draft }
+        compose.onNodeWithContentDescription("Access: Supervised").performClick()
         compose.onNodeWithText("Auto-accept edits").assertDoesNotExist()
         compose.onNodeWithText("Auto", substring = false).assertDoesNotExist()
         compose.onNodeWithText("Full access").assertExists()
+        compose.onNodeWithText("Full access").performClick()
+        compose.onNodeWithContentDescription("Model: Model A").performClick()
         compose.onNodeWithText("Model B").performClick()
+        compose.onNodeWithContentDescription("Access: Auto-accept edits").assertExists()
+        compose.onNodeWithContentDescription("Access: Auto-accept edits").performClick()
         compose.onNodeWithText("Full access").assertDoesNotExist()
         compose.onNodeWithText("Supervised").assertDoesNotExist()
-        compose.onNodeWithText("Start").performClick()
+        compose.onNodeWithContentDescription("Start").performClick()
         compose.runOnIdle { assertEquals(RuntimeMode.AutoAcceptEdits, started?.runtimeMode) }
     }
 
