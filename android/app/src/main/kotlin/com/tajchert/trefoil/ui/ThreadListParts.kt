@@ -111,7 +111,7 @@ internal fun ThreadFilterChips(filter: ThreadFilter, counts: Map<ThreadFilter, I
         TfChip("Needs you", { onFilter(if (filter == ThreadFilter.NeedsYou) ThreadFilter.All else ThreadFilter.NeedsYou) }, selected = filter == ThreadFilter.NeedsYou,
             count = counts[ThreadFilter.NeedsYou], leading = { StatusDot(c.amber) })
         TfChip("Working", { onFilter(if (filter == ThreadFilter.Working) ThreadFilter.All else ThreadFilter.Working) }, selected = filter == ThreadFilter.Working,
-            count = counts[ThreadFilter.Working], leading = { WorkingSpinner(size = 16.dp) })
+            count = counts[ThreadFilter.Working], leading = { WorkingSpinner(size = 16.dp, animated = false) })
         if (projects.isNotEmpty()) Box {
             TfChip(project?.title ?: "Project", { projectsOpen = true }, selected = project != null,
                 trailing = { Icon(TfIcons.ChevronDown, null, Modifier.size(14.dp)) })
@@ -207,13 +207,15 @@ internal fun ThreadRow(state: ClientState, thread: ThreadSummary, project: Proje
                     preview != null -> Text(preview, style = TrefoilType.preview, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     needs || indicator.kind == "error" -> Text(indicator.label, style = TrefoilType.preview, color = if (needs) c.amber else c.red, maxLines = 1)
                 }
-                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(project?.title ?: "Project", Modifier.weight(1f, fill = false), style = TrefoilType.meta, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    thread.branch?.takeIf { it.isNotBlank() }?.let { branch ->
-                        Icon(TfIcons.Branch, null, Modifier.size(14.dp), tint = c.muted)
-                        Text(branch, Modifier.weight(1f, fill = false), style = TrefoilType.mono, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // Project name keeps its full width; only the branch gives way. The agent mark sits in a fixed slot at the row's bottom-right.
+                Row(Modifier.padding(top = 6.dp).heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(project?.title ?: "Project", style = TrefoilType.meta, color = c.muted, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                        thread.branch?.takeIf { it.isNotBlank() }?.let { branch ->
+                            Icon(TfIcons.Branch, null, Modifier.size(14.dp), tint = c.muted)
+                            Text(branch, Modifier.weight(1f, fill = false), style = TrefoilType.mono, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
-                    Spacer(Modifier.weight(1f, fill = true).widthIn(min = 0.dp))
                     ThreadProviderStack(threadProviders(thread, state.providers), state.providers)
                 }
             }

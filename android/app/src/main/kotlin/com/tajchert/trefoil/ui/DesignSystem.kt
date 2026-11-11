@@ -169,9 +169,11 @@ fun StatusDot(color: Color, modifier: Modifier = Modifier, size: Dp = 8.dp) {
 
 /** The design's working spinner: a 216° arc rotating once per 1.1s, blue by default. */
 @Composable
-fun WorkingSpinner(modifier: Modifier = Modifier, size: Dp = 16.dp, color: Color = Tf.colors.blue) {
-    val transition = rememberInfiniteTransition(label = "spinner")
-    val angle by transition.animateFloat(0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "angle")
+fun WorkingSpinner(modifier: Modifier = Modifier, size: Dp = 16.dp, color: Color = Tf.colors.blue, animated: Boolean = true) {
+    val angle = if (animated) {
+        val transition = rememberInfiniteTransition(label = "spinner")
+        transition.animateFloat(0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "angle").value
+    } else -54f
     Canvas(modifier.size(size).rotate(angle)) {
         val stroke = this.size.minDimension * 2.6f / 24f
         val inset = this.size.minDimension * 4f / 24f
