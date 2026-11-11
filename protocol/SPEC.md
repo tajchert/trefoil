@@ -15,9 +15,15 @@ Sources: `packages/contracts/src/{environment,environmentHttp,auth,orchestration
 
 ## Current limits
 
-The client requests complete shell history (`omitIdleSubagents: false` and `omitOlderSettled: false`), so `getOlderSettledThreads` is not needed for this full-snapshot path. No bounded-history pagination UI exists yet. Domain event resnapshotting trades bandwidth for completeness; native incremental reducers can replace this later. Provider approval option restrictions are checked at dispatch; the shared UI currently exposes basic accept/decline. Unsupported requests explicitly direct users to another T3 client. Auto reconnect/backoff, access-token renewal, command receipt lookup, steer, thread.stop, attachment uploads and terminal streams are follow-up work. Explicit reconnect and [file downloads](FILES.md) are implemented.
+The client requests complete shell history (`omitIdleSubagents: false` and `omitOlderSettled: false`), so `getOlderSettledThreads` is not needed for this full-snapshot path. No bounded-history pagination UI exists yet. Domain event resnapshotting trades bandwidth for completeness; native incremental reducers can replace this later. Provider approval option restrictions are checked at dispatch; the shared UI currently exposes basic accept/decline. Unsupported requests explicitly direct users to another T3 client. Auto reconnect/backoff, access-token renewal, command receipt lookup, steer, general thread.stop, attachment uploads and terminal streams are follow-up work. Explicit reconnect and [file downloads](FILES.md) are implemented.
 
 Fixtures are synthetic examples shaped from the pinned contracts and contain no user data. The isolated server wire probe lives in `scripts/validate-t3-wire.mjs` and never touches a developer's T3 state.
+
+## Subagents
+
+The selected thread projection's `subagents[]` (`OrchestrationV2Subagent`) is parsed into client state on every projection refetch, which covers `subagent.updated` events. The Agents sheet lists this turn's agents; opening a row selects the child thread. Provider-native children (`creationSource: "provider"`) are read-only.
+
+Stop is offered only while writable, for app-owned agents and Claude-native agents with a strong native ref. Each command is sent once and never replayed. Provider-native and app-owned agents send `subagent.stop {runId, subagentId}` on the parent. For an app-owned agent, the child is then stopped with `thread.stop` only when the server advertises `environment.capabilities.threadStop`; otherwise `run.interrupt {runId, holdQueue: true}` goes to the child's active run. Older servers may reject `subagent.stop`; after that definite rejection the child is still stopped.
 
 ## SSH transport (0.2.0 source)
 

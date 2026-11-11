@@ -26,6 +26,6 @@ Studied the React Native/Expo Android app at `/Users/mtajchert/coding/priv/t3cod
 
 ## Remaining differences
 
-Trefoil does not embed React Native and does not implement every T3 route. Full terminal-style output streaming, rich diff widgets, attachment/image rendering, interactive subagent navigation, goals, voice, remote provider icons and all provider-specific request forms remain separate work. A static subagent work row does not imply native child-thread navigation. Markdown remains a supported subset, not full CommonMark.
+Trefoil does not embed React Native and does not implement every T3 route. Full terminal-style output streaming, rich diff widgets, attachment/image rendering, goals, voice, remote provider icons and all provider-specific request forms remain separate work. Subagent navigation and stop from the thread Agents sheet are implemented; workflow phase rail, remote-environment child opening and workflow stop remain deferred. Markdown remains a supported subset, not full CommonMark.
 
 Keep fixture coverage for the actual wire behavior, not only hand-built UI models. Fixtures now cover 3 open, 2 working, 1 snoozed and 25 settled rows alongside 56 child rows, enrichment and live settlement updates. Native explicitly disables both shell omission options. It does not infer unloaded counts from a desktop screenshot; live counts must be compared against the same server environment.

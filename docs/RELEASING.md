@@ -1,5 +1,10 @@
 # Android releases
 
+Release `0.11.0` (`versionCode = 18`) adds the thread Agents sheet: a header chip and menu item
+list this turn's subagents, rows open child threads, back returns to the parent, provider-native
+children are read-only, and eligible agents can be stopped. Check the sheet against a real
+environment with running subagents on a device.
+
 Release `0.10.0` (`versionCode = 17`) probes saved machines on open and auto-connects to a
 reachable one, shows images inline in threads, renders GitHub-flavoured Markdown (tables,
 lists, quotes, links), stops write controls flickering while agents work, and tidies thread

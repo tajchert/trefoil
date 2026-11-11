@@ -29,13 +29,13 @@ internal fun selectedThreadActionsVisible(wide: Boolean, showThread: Boolean, dr
 
 /** Overflow button for a thread (conversation header). List rows open [ThreadActionsDropdown] on long-press instead. */
 @Composable
-internal fun ThreadActionsMenu(state: ClientState, thread: ThreadSummary, onAction: (ThreadTarget, ThreadAction, String?) -> Unit) {
+internal fun ThreadActionsMenu(state: ClientState, thread: ThreadSummary, onOpenAgents: (() -> Unit)? = null, onAction: (ThreadTarget, ThreadAction, String?) -> Unit) {
     val environmentId = state.environment?.id ?: return
     key(environmentId, thread.id) {
         var open by remember { mutableStateOf(false) }
         Box {
             IconButton(onClick = { open = true }) { Icon(TfIcons.More, "Thread actions for ${thread.title}", Modifier.size(22.dp)) }
-            ThreadActionsDropdown(state, thread, onAction, open, { open = it })
+            ThreadActionsDropdown(state, thread, onAction, open, { open = it }, onOpenAgents = onOpenAgents)
         }
     }
 }
@@ -45,6 +45,8 @@ internal fun ThreadActionsMenu(state: ClientState, thread: ThreadSummary, onActi
 internal fun ThreadActionsDropdown(
     state: ClientState, thread: ThreadSummary, onAction: (ThreadTarget, ThreadAction, String?) -> Unit,
     expanded: Boolean, onExpandedChange: (Boolean) -> Unit, offset: DpOffset = DpOffset.Zero,
+    /** Opens the Agents sheet; null hides the item (no agents in the selected thread). */
+    onOpenAgents: (() -> Unit)? = null,
 ) {
     val environmentId = state.environment?.id ?: return
     val target = ThreadTarget(environmentId, thread.id)
@@ -59,6 +61,10 @@ internal fun ThreadActionsDropdown(
         fun close() = onExpandedChange(false)
         fun act(action: ThreadAction, value: String? = null) { close(); onAction(target, action, value) }
         DropdownMenu(expanded, { close() }, offset = offset) {
+            if (onOpenAgents != null) {
+                DropdownMenuItem(text = { Text("Agents") }, leadingIcon = { Icon(TfIcons.Agents, null, Modifier.size(18.dp)) }, onClick = { close(); onOpenAgents() })
+                HorizontalDivider()
+            }
             DropdownMenuItem(text = { Text(if (thread.settledOverride == "settled") "Un-settle" else "Settle") }, enabled = writable,
                 onClick = { act(if (thread.settledOverride == "settled") ThreadAction.Unsettle else ThreadAction.Settle) })
             DropdownMenuItem(text = { Text(if (thread.pinnedAt != null) "Unpin" else "Pin") }, enabled = configured,

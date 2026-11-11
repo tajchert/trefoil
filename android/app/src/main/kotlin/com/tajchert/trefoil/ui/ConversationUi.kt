@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,6 +47,10 @@ internal fun Conversation(
     /** First prompt from the new-thread sheet: put in the composer and submit once, then call [onSeedConsumed]. */
     seedPrompt: String? = null,
     onSeedConsumed: () -> Unit = {},
+    /** Opens the parent of a subagent child; null when the parent is not loaded. */
+    onOpenParent: (() -> Unit)? = null,
+    /** "Subagent of <parent title>" header subtitle for subagent children. */
+    subtitle: String? = null,
 ) {
     val c = Tf.colors
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
@@ -139,7 +144,7 @@ internal fun Conversation(
             ConversationHeader(
                 title = if (draft != null) "New thread" else thread?.title?.ifBlank { "Untitled conversation" } ?: "Conversation",
                 projectTitle = project?.title, branch = thread?.branch?.takeIf { it.isNotBlank() },
-                workLabel = workLabel.takeIf { state.activeRunId != null }, onBack = onBack, actions = actions)
+                workLabel = workLabel.takeIf { state.activeRunId != null }, onBack = onBack, actions = actions, subtitle = subtitle)
             HorizontalDivider(color = c.line)
             Box(Modifier.weight(1f)) {
                 LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -181,19 +186,21 @@ internal fun Conversation(
             // The composer owns its bottom insets: it rides above the keyboard, or above the navigation bar when closed.
             Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
                 QuickReplies(state.requests, canSend, respond)
-                ConversationComposer(state, draft, text, { text = it }, submitted != null, onSetRuntimeMode, onSetModel, interrupt) { submit(text) }
+                if (thread != null && thread.isProviderNativeSubagentThread()) ReadOnlySubagentBar(thread, clock, onOpenParent)
+                else ConversationComposer(state, draft, text, { text = it }, submitted != null, onSetRuntimeMode, onSetModel, interrupt) { submit(text) }
             }
         }
     }
 }
 
 @Composable
-private fun ConversationHeader(title: String, projectTitle: String?, branch: String?, workLabel: String?, onBack: (() -> Unit)?, actions: @Composable RowScope.() -> Unit) {
+private fun ConversationHeader(title: String, projectTitle: String?, branch: String?, workLabel: String?, onBack: (() -> Unit)?, actions: @Composable RowScope.() -> Unit, subtitle: String? = null) {
     val c = Tf.colors
     Row(Modifier.fillMaxWidth().heightIn(min = 68.dp).padding(start = if (onBack != null) 4.dp else 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) { Icon(TfIcons.Back, "Back to threads", Modifier.size(22.dp)) }
         Column(Modifier.weight(1f).padding(start = if (onBack != null) 2.dp else 0.dp)) {
             Text(title, style = TrefoilType.rowTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitle != null) Text(subtitle, style = TrefoilType.meta, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (projectTitle != null || workLabel != null) Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (projectTitle != null) {
                     ProjectTile(projectTitle, size = 20.dp)
@@ -241,6 +248,23 @@ private fun ConversationComposer(
                     else CircleButton(if (running) "Queue message" else "Send message", TfIcons.Send, c.accent, c.onAccent, canSend && text.isNotBlank() && !waiting, onSend)
                 }
             }
+        }
+    }
+}
+
+/** Provider-native children cannot receive messages: model, status and a way back to the parent replace the composer. */
+@Composable
+internal fun ReadOnlySubagentBar(thread: ThreadSummary, now: Long, onOpenParent: (() -> Unit)?) {
+    val c = Tf.colors
+    Surface(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 16.dp, top = 4.dp).fillMaxWidth().testTag("readonly-subagent-bar"),
+        shape = RoundedCornerShape(24.dp), color = c.s1, contentColor = c.text, border = BorderStroke(1.dp, c.line)) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("Runs on its own", style = MaterialTheme.typography.bodyMedium, color = c.text)
+                val info = listOfNotNull(thread.model?.takeIf { it.isNotBlank() }, threadStatusLabel(thread, now)).joinToString(" · ")
+                Text(info, style = TrefoilType.meta, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (onOpenParent != null) OutlinedButton(onClick = onOpenParent) { Text("Open parent") }
         }
     }
 }

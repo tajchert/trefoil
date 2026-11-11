@@ -40,6 +40,47 @@ internal fun runAttempts(projection: JsonObject): List<RunAttempt> = projection.
     )
 }
 
+/**
+ * T3 `OrchestrationV2SubagentJson` records from the parent projection, in wire order. Statuses stay
+ * raw; records without an id are dropped. Workflow member timestamps (epoch millis) are not kept.
+ */
+internal fun subagents(projection: JsonObject): List<Subagent> = projection.objects("subagents").mapNotNull { value ->
+    val id = value.optionalText("id") ?: return@mapNotNull null
+    val selection = value.obj("modelSelection")
+    val remote = value["remoteChild"] as? JsonObject
+    val nativeRef = value["nativeTaskRef"] as? JsonObject
+    val workflow = value["workflow"] as? JsonObject
+    Subagent(
+        id = id, threadId = value.string("threadId"), runId = value.optionalText("runId"),
+        origin = value.string("origin"), driver = value.string("driver"),
+        providerInstanceId = value.optionalText("providerInstanceId"), childThreadId = value.optionalText("childThreadId"),
+        remoteChild = remote?.let { child ->
+            val environmentId = child.optionalText("environmentId"); val threadId = child.optionalText("threadId")
+            if (environmentId == null || threadId == null) null
+            else SubagentRemoteChild(environmentId, threadId, child.string("label"), child.optionalText("title"))
+        },
+        nativeTaskRef = nativeRef?.let { SubagentNativeTaskRef(it.optionalText("nativeId"), it.optionalText("strength") ?: "none") },
+        prompt = value.string("prompt"), title = value.optionalText("title"), model = value.optionalText("model"),
+        selectionInstanceId = selection.optionalText("instanceId"), selectionModel = selection.optionalText("model"),
+        selectionOptions = selection.objects("options").mapNotNull { option ->
+            val optionId = option.optionalText("id") ?: return@mapNotNull null
+            val optionValue = (option["value"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            optionId to optionValue
+        }.toMap(),
+        status = value.string("status"), progress = value.optionalText("progress"), result = value.optionalText("result"),
+        startedAt = value.optionalText("startedAt"), completedAt = value.optionalText("completedAt"), updatedAt = value.optionalText("updatedAt"),
+        workflow = workflow?.let { flow ->
+            SubagentWorkflow(flow.optionalText("name"), flow.objects("agents").mapIndexed { position, agent ->
+                SubagentWorkflowAgent(
+                    index = (agent["index"] as? JsonPrimitive)?.intOrNull ?: position, label = agent.string("label"),
+                    state = agent.string("state"), childThreadId = agent.optionalText("childThreadId"),
+                    model = agent.optionalText("model"), phaseTitle = agent.optionalText("phaseTitle"),
+                )
+            })
+        },
+    )
+}
+
 internal fun threadSummary(value: JsonObject, archived: Boolean = false) = ThreadSummary(
     id = value.string("id"), projectId = value.string("projectId"), title = value.string("title"),
     status = value.optionalText("status") ?: value.obj("runSummary").optionalText("status") ?: "idle",
