@@ -16,7 +16,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.core.model.*
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasText
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -80,6 +84,46 @@ class MachinesRenderTest {
     @Test fun newThreadDark() = render("newthread", true) { Sheet() }
     @Test fun newThreadLight() = render("newthread", false) { Sheet() }
 
+    private val studio = SavedEnvironment("studio", "Studio", "https://studio.example.com", "t")
+    private val pi = SavedEnvironment("pi", "Raspberry Pi", "http://192.168.10.40:3773", "t", allowInsecureHttp = true)
+    private val oldBox = SavedEnvironment("old", "old-box", "", "t", ssh = SshProfile("old.lan", 22, "mike", "SHA256:fixture", "ssh-ed25519"))
+    private val probedSaved = saved + listOf(studio, pi, oldBox)
+    private val probes = mapOf(
+        "book" to MachineProbe.Online, "home" to MachineProbe.Checking, "studio" to MachineProbe.AuthFailed,
+        "pi" to MachineProbe.Unreachable, "old" to MachineProbe.Unknown,
+    )
+
+    @Test fun machinesProbedDark() = render("machines-probed", true) {
+        MachinesScreen(connected, probedSaved, {}, {}, {}, {}, {}, {}, Modifier.fillMaxSize(), probes = probes)
+    }
+
+    @Test fun probedStatusesAreAnnouncedPerMachine() {
+        compose.setContent { TrefoilTheme { MachinesScreen(connected, probedSaved, {}, {}, {}, {}, {}, null, probes = probes) } }
+        mapOf("Mac mini" to "Connected", "MacBook Pro" to "Online", "home-server" to "Checking", "Studio" to "Sign-in rejected",
+            "Raspberry Pi" to "Unreachable", "old-box" to "Not checked").forEach { (name, status) ->
+            compose.onNode(hasText(name) and hasStateDescription(status), useUnmergedTree = false).assertExists()
+        }
+    }
+
+    @Test fun currentMachineFollowsLiveConnectionOthersFollowProbes() {
+        val probes = mapOf("mini" to MachineProbe.Unreachable, "book" to MachineProbe.Online)
+        assertEquals(MachineStatus.Online, machineStatus(macMini, connected, probes))
+        assertEquals(MachineStatus.Connecting, machineStatus(macMini, connected.copy(connection = ConnectionStatus.Connecting), probes))
+        assertEquals(MachineStatus.Failed, machineStatus(macMini, connected.copy(connection = ConnectionStatus.Error), probes))
+        // After a disconnect the current machine shows its latest probe again.
+        assertEquals(MachineStatus.Unreachable, machineStatus(macMini, connected.copy(connection = ConnectionStatus.Disconnected), probes))
+        assertEquals(MachineStatus.Reachable, machineStatus(laptop, connected, probes))
+        assertEquals(MachineStatus.Unknown, machineStatus(server, connected, probes))
+        mapOf(MachineProbe.Unknown to MachineStatus.Unknown, MachineProbe.Checking to MachineStatus.Checking, MachineProbe.Online to MachineStatus.Reachable,
+            MachineProbe.Unreachable to MachineStatus.Unreachable, MachineProbe.AuthFailed to MachineStatus.AuthFailed,
+            MachineProbe.NeedsAttention to MachineStatus.NeedsAttention).forEach { (probe, status) -> assertEquals(status, probe.status()) }
+        val c = TrefoilDark
+        assertEquals(c.green, MachineStatus.Reachable.color(c)); assertEquals(c.amber, MachineStatus.Checking.color(c))
+        assertEquals(c.red, MachineStatus.Unreachable.color(c)); assertEquals(c.red, MachineStatus.AuthFailed.color(c))
+        assertEquals(c.red, MachineStatus.NeedsAttention.color(c)); assertEquals(c.muted, MachineStatus.Unknown.color(c))
+        assertTrue(MachineStatus.Checking.inProgress); assertFalse(MachineStatus.Reachable.inProgress)
+    }
+
     @Test fun forgetAsksForConfirmationAndDisconnectIsOfferedForCurrentOnly() {
         var forgotten: SavedEnvironment? = null
         var disconnected = false
@@ -99,3 +143,4 @@ class MachinesRenderTest {
 
 private fun androidx.compose.ui.test.SemanticsNodeInteraction.assertDoesNotExistOrFail() = assertDoesNotExist()
 private fun androidx.compose.ui.test.SemanticsNodeInteraction.assertExistsOrFail() = assertExists()
+private fun hasStateDescription(value: String) = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, value)

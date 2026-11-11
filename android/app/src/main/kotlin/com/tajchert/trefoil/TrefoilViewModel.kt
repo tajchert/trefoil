@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.core.session.EnvironmentProbe
 import com.tajchert.trefoil.core.session.T3Client
 import com.tajchert.trefoil.core.session.ThreadDraftController
 import com.tajchert.trefoil.core.ssh.SshHostKeyException
@@ -54,6 +55,21 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     private var foreground = true
     private var connectionEpoch = 0L
     var sshFilePickerActive = false
+    private val prefs = application.getSharedPreferences("trefoil.ui", android.content.Context.MODE_PRIVATE)
+    private val environmentProbe = EnvironmentProbe()
+    private val prober = MachineProber(
+        direct = { environment, baseUrl -> environmentProbe.probe(environment, baseUrl) },
+        openSsh = { input, pinned -> connector.open(input, pinned).let { opened -> object : ProbeTunnel {
+            override val baseUrl = opened.baseUrl
+            override fun close() = opened.close()
+        } } },
+    )
+    private val _machineProbes = MutableStateFlow<Map<String, MachineProbe>>(emptyMap())
+    /** Reachability of saved machines other than the active connection; never mutates a server. */
+    val machineProbes = _machineProbes.asStateFlow()
+    private var probeJob: Job? = null
+    /** Auto-connect is considered once per app launch, until a decision is made or the user acts. */
+    private var autoConnectPending = true
 
     private val initialized = viewModelScope.async {
         try {
@@ -79,6 +95,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
 
     private fun connectionAction(failure: String, kind: ConnectionKind = ConnectionKind.Saved, block: suspend () -> Unit) {
         val epoch = ++connectionEpoch
+        autoConnectPending = false
         connectionJob?.cancel()
         _sshHostKey.value = null
         if (kind != ConnectionKind.Ssh) _sshLogin.value = null
@@ -95,6 +112,10 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
                         if (epoch == connectionEpoch) {
                             _connectionAttempt.value = ConnectionAttempt(epoch, kind, ConnectionPhase.Succeeded, "Connected")
                             _sshLogin.value = null
+                            (selectedEnvironment ?: state.value.environment)?.id?.let { id ->
+                                prefs.edit().putString(LAST_ENVIRONMENT, id).apply()
+                                _machineProbes.update { it + (id to MachineProbe.Online) }
+                            }
                         }
                     } catch (e: CancellationException) {
                         coroutineContext.ensureActive()
@@ -278,6 +299,8 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         if (drafts.environmentId == environment.id || state.value.environment?.id == environment.id) clearDraft()
         if (selectedEnvironment?.id == environment.id || state.value.environment?.id == environment.id) cancelSsh()
         if (resumeEnvironment?.id == environment.id) resumeEnvironment = null
+        _machineProbes.update { it - environment.id }
+        if (prefs.getString(LAST_ENVIRONMENT, null) == environment.id) prefs.edit().remove(LAST_ENVIRONMENT).apply()
         connectionMutex.withLock {
             if (selectedEnvironment?.id == environment.id || state.value.environment?.id == environment.id) {
                 disconnectCurrent(); selectedEnvironment = null
@@ -290,6 +313,8 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     fun pause() {
         screenSessions.pause()
         foreground = false
+        probeJob?.cancel(); probeJob = null
+        _machineProbes.update { probes -> probes.mapValues { (_, probe) -> if (probe == MachineProbe.Checking) MachineProbe.Unknown else probe } }
         resumeEnvironment = if (state.value.connection in setOf(ConnectionStatus.Connected, ConnectionStatus.Connecting, ConnectionStatus.Reconnecting)) selectedEnvironment else null
         if (sshFilePickerActive) { connectionEpoch++; connectionJob?.cancel(); _working.value = false } else cancelSsh()
         viewModelScope.launch { connectionMutex.withLock { disconnectCurrent() } }
@@ -297,15 +322,66 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     fun resume() {
         foreground = true
         screenSessions.resume()
-        val environment = resumeEnvironment ?: return
+        val environment = resumeEnvironment
         resumeEnvironment = null
-        if (_sshLogin.value == null) connect(environment)
+        if (environment != null && _sshLogin.value == null) connect(environment)
+        probeMachines(skipId = environment?.id)
+    }
+
+    /**
+     * Probes every saved machine except the active or resuming one, in parallel. On the first
+     * launch it may then connect the last-used machine, or the only reachable one, through the
+     * normal [connect] path, unless the user started a connection in the meantime.
+     */
+    private fun probeMachines(skipId: String?) {
+        probeJob?.cancel()
+        probeJob = viewModelScope.launch {
+            initialized.await()
+            if (!foreground) return@launch
+            val epoch = connectionEpoch
+            val keys = hostKeys
+            val live = state.value.environment?.id?.takeIf {
+                state.value.connection in setOf(ConnectionStatus.Connected, ConnectionStatus.Connecting, ConnectionStatus.Reconnecting)
+            }
+            val targets = _environments.value.filter { it.id != skipId && it.id != live }
+            _machineProbes.update { probes ->
+                probes.filterKeys { id -> _environments.value.any { it.id == id } } + targets.associate { it.id to MachineProbe.Checking }
+            }
+            fun considerAutoConnect() {
+                if (!autoConnectPending) return
+                if (epoch != connectionEpoch || !foreground || _sshLogin.value != null ||
+                    state.value.connection in setOf(ConnectionStatus.Connected, ConnectionStatus.Connecting, ConnectionStatus.Reconnecting)) {
+                    autoConnectPending = false; return
+                }
+                when (val decision = autoConnectDecision(prefs.getString(LAST_ENVIRONMENT, null), _environments.value, _machineProbes.value)) {
+                    AutoConnectDecision.Wait -> {}
+                    AutoConnectDecision.None -> autoConnectPending = false
+                    is AutoConnectDecision.Connect -> {
+                        autoConnectPending = false
+                        _environments.value.firstOrNull { it.id == decision.environmentId }?.let(::connect)
+                    }
+                }
+            }
+            supervisorScope {
+                targets.forEach { environment ->
+                    launch {
+                        val result = prober.probe(environment, keys)
+                        _machineProbes.update { probes -> if (environment.id in probes) probes + (environment.id to result) else probes }
+                        considerAutoConnect()
+                    }
+                }
+            }
+            considerAutoConnect()
+        }
     }
     override fun onCleared() {
+        probeJob?.cancel()
         screenSessions.close()
         tunnelMonitor?.cancel()
         val closing = tunnel; tunnel = null
         if (closing != null) Thread({ closing.close() }, "trefoil-ssh-cleanup").apply { isDaemon = true; start() }
         client.close()
     }
+
+    private companion object { const val LAST_ENVIRONMENT = "lastEnvironmentId" }
 }

@@ -169,3 +169,21 @@ interface TrefoilClient {
     suspend fun reconnect()
     fun close()
 }
+
+/**
+ * Background reachability of a saved environment that is not the active connection.
+ * Probes are read-only: they never pair, mutate, or accept an SSH host key.
+ */
+enum class MachineProbe {
+    /** Not checked yet, or it cannot be checked without user input (SSH without saved credentials). */
+    Unknown,
+    Checking,
+    /** The saved credentials were accepted. */
+    Online,
+    /** No answer in time, network failure, or an unexpected server error. */
+    Unreachable,
+    /** The server answered and rejected the saved credentials. */
+    AuthFailed,
+    /** Blocked locally or needs a user decision: URL policy, untrusted or changed SSH host key, identity change. */
+    NeedsAttention,
+}
