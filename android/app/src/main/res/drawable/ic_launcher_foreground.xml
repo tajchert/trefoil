@@ -1,0 +1,8 @@
+<!-- Trefoil mark: three leaves rotated 120 degrees, sized for the adaptive icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="54" android:translateY="56.5" android:scaleX="0.369" android:scaleY="0.369">
+        <path android:fillColor="#8EDB9B" android:pathData="M0,-5 C-15,-11 -21,-27 -13,-39 C-7,-47 7,-47 13,-39 C21,-27 15,-11 0,-5 Z" />
+        <group android:rotation="240"><path android:fillColor="#5FBF74" android:pathData="M0,-5 C-15,-11 -21,-27 -13,-39 C-7,-47 7,-47 13,-39 C21,-27 15,-11 0,-5 Z" /></group>
+        <group android:rotation="120"><path android:fillColor="#BCEFC3" android:pathData="M0,-5 C-15,-11 -21,-27 -13,-39 C-7,-47 7,-47 13,-39 C21,-27 15,-11 0,-5 Z" /></group>
+    </group>
+</vector>

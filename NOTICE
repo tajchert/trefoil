@@ -17,3 +17,6 @@ test data and is not a production credential.
 The bundled T3 screen viewers include Effect 4.1.2 runtime/Schema code,
 Copyright (c) 2023 Effectful Technologies Inc., licensed under MIT.
 Effect's license and third-party notices are included with the viewer assets.
+
+The bundled Inter and JetBrains Mono typefaces are licensed under the SIL Open
+Font License 1.1. See licenses/Inter-OFL.txt and licenses/JetBrainsMono-OFL.txt.

@@ -75,6 +75,8 @@ fun TrefoilApp(
         var pairing by rememberSaveable { mutableStateOf(false) }
         var choosingEnvironment by rememberSaveable { mutableStateOf(false) }
         var creating by rememberSaveable { mutableStateOf(false) }
+        // First prompt typed in the new-thread sheet; the draft conversation sends it via its composer.
+        var seedPrompt by rememberSaveable { mutableStateOf<String?>(null) }
         var showScreens by rememberSaveable(state.environment?.id) { mutableStateOf(false) }
         var screenFullscreen by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(state.environment?.id, screenViewer.target) { if (screenViewer.target == null) screenFullscreen = false }
@@ -122,7 +124,9 @@ fun TrefoilApp(
                     Column(Modifier.padding(padding).imePadding()) {
                         if (!showScreens || !screenFullscreen) ConnectionBanner(state, onReconnect)
                         if (state.environment == null || choosingEnvironment) {
-                            EnvironmentScreen(savedEnvironments, state.busy, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true }, { sshConnecting = true })
+                            MachinesScreen(state, savedEnvironments, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true }, { sshConnecting = true },
+                                { onDisconnect(); choosingEnvironment = true; showThread = false },
+                                onBack = if (state.environment != null) ({ choosingEnvironment = false }) else null, modifier = Modifier.weight(1f))
                         } else if (showScreens) {
                             ScreenSessionsScreen(state, screenViewer, screenFullscreen, { screenFullscreen = it }, onRefreshScreens, onOpenScreen,
                                 { screenFullscreen = false; onCloseScreen() }, { screenFullscreen = false; showScreens = false; onCloseScreen() },
@@ -139,7 +143,8 @@ fun TrefoilApp(
                             if (wide || showThread) Box(Modifier.weight(1f).fillMaxHeight()) {
                                 conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) "draft" else state.selectedThreadId}") {
                                     Conversation(state, onSend, onInterrupt, onRespond, onLoadActivity = onLoadActivity, fileDownloadUi = fileDownloadUi,
-                                        draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, sendFailed = sendFailed)
+                                        draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, sendFailed = sendFailed,
+                                        seedPrompt = seedPrompt.takeIf { draft != null }, onSeedConsumed = { seedPrompt = null })
                                 }
                             }
                         }
@@ -163,7 +168,8 @@ fun TrefoilApp(
         }
         if (sshHostKey != null) SshHostKeyDialog(sshHostKey, onTrustSsh, onCancelSsh)
         if (pairing) PairDialog(state.busy, { pairing = false; submittedPair = false; onCancelSsh() }, connectionAttempt.takeIf { it.kind == ConnectionKind.Pairing } ?: ConnectionAttempt()) { url, name, insecure -> submittedPair = true; onPair(url, name, insecure) }
-        if (creating) NewThreadDialog(state, { creating = false }) { newDraft ->
+        if (creating) NewThreadSheet(state, { creating = false }) { newDraft, prompt ->
+            seedPrompt = prompt.trim().takeIf { it.isNotEmpty() }
             onStartDraft(newDraft); creating = false; showThread = true
         }
     }
@@ -185,113 +191,3 @@ private fun ConnectionBanner(state: ClientState, reconnect: () -> Unit) {
     }
 }
 
-@Composable
-private fun EnvironmentScreen(saved: List<SavedEnvironment>, busy: Boolean, connect: (SavedEnvironment) -> Unit, forget: (SavedEnvironment) -> Unit, add: () -> Unit, ssh: () -> Unit) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item {
-            Spacer(Modifier.height(32.dp))
-            Icon(Icons.Default.Spa, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(24.dp))
-            Text("A little closer\nto your next idea.", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(12.dp))
-            Text("Connect directly to T3 Code. Follow your conversations and keep remote work moving.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(24.dp))
-            Button(onClick = add, enabled = !busy) { Icon(Icons.Default.AddLink, null); Spacer(Modifier.width(8.dp)); Text("Pair with link") }
-            OutlinedButton(onClick = ssh, enabled = !busy) { Text("Connect over SSH") }
-        }
-        if (saved.isNotEmpty()) item { Text("SAVED ENVIRONMENTS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
-        items(saved, key = { it.id }) { environment ->
-            ElevatedCard(onClick = { connect(environment) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Dns, null, tint = MaterialTheme.colorScheme.primary)
-                    Column(Modifier.weight(1f).padding(horizontal = 16.dp)) { Text(environment.name, fontWeight = FontWeight.SemiBold); Text(environment.ssh?.let { "${it.username}@${it.host}:${it.port}" } ?: environment.baseUrl, style = MaterialTheme.typography.bodySmall) }
-                    IconButton(onClick = { forget(environment) }, enabled = !busy) { Icon(Icons.Default.DeleteOutline, "Forget ${environment.name}") }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun PairDialog(busy: Boolean, dismiss: () -> Unit, attempt: ConnectionAttempt = ConnectionAttempt(), pair: (String, String, Boolean) -> Unit) {
-    var url by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
-    var insecure by remember(url) { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val target = remember(url) { runCatching { parsePairingLink(url) }.getOrNull() }
-    val uri = target?.let { runCatching { java.net.URI(it.baseUrl) }.getOrNull() }
-    val privateHttp = uri?.scheme == "http" && isPrivateLanAddress(uri.host.orEmpty())
-    val shownError = error ?: attempt.message.takeIf { attempt.phase == ConnectionPhase.Failed }
-    val reveal = remember { BringIntoViewRequester() }
-    LaunchedEffect(shownError) { if (shownError != null) reveal.bringIntoView() }
-    AlertDialog(onDismissRequest = dismiss, icon = { Icon(Icons.Default.AddLink, null) }, title = { Text("Pair an environment") }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
-            Text("Paste the pairing link from your T3 server. Trefoil verifies the environment before connecting.")
-            OutlinedTextField(name, { name = it; error = null }, enabled = !busy, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(url, { url = it; error = null }, enabled = !busy, label = { Text("Pairing link") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), maxLines = 3)
-            Text("Pairing links contain credentials. Keep them private.", style = MaterialTheme.typography.bodySmall)
-            if (privateHttp) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(insecure, { insecure = it; error = null }, enabled = !busy); Text("Allow unencrypted HTTP on this private network", Modifier.weight(1f)) }
-                Text("HTTP exposes pairing credentials and conversations to others on the network. Use only a network you trust.", style = MaterialTheme.typography.bodySmall)
-            }
-            if (busy) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text(attempt.message.ifBlank { "Testing connection…" }) }
-            shownError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.bringIntoViewRequester(reveal)) }
-        }
-    }, confirmButton = { Button(onClick = {
-        error = when { name.isBlank() -> "Enter a display name."; target == null -> "Enter a valid pairing link."; privateHttp && !insecure -> "Choose whether to allow HTTP on this private network."; else -> null }
-        if (error == null) pair(url.trim(), name.trim(), privateHttp && insecure)
-    }, enabled = !busy) {
-        if (busy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
-        Text(if (busy) "Testing connection…" else "Pair")
-    } },
-        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
-}
-
-/** Modes the model supports; an empty or missing list means every mode is allowed. */
-internal fun allowedRuntimeModes(model: ModelOption?): List<RuntimeMode> =
-    model?.supportedRuntimeModes?.takeIf { it.isNotEmpty() }?.let { supported -> RuntimeMode.entries.filter { it in supported } }?.takeIf { it.isNotEmpty() } ?: RuntimeMode.entries.toList()
-
-/** Keeps [preferred] when allowed, otherwise falls back to the first allowed mode. */
-internal fun resolveRuntimeMode(preferred: RuntimeMode?, allowed: List<RuntimeMode>): RuntimeMode =
-    preferred?.takeIf { it in allowed } ?: allowed.first()
-
-@Composable
-internal fun NewThreadDialog(state: ClientState, dismiss: () -> Unit, start: (ThreadDraft) -> Unit) {
-    var projectId by rememberSaveable { mutableStateOf(state.projects.firstOrNull()?.id.orEmpty()) }
-    var modelIndex by rememberSaveable { mutableIntStateOf(0) }
-    var chosenMode by rememberSaveable { mutableStateOf((state.defaultRuntimeMode ?: RuntimeMode.ApprovalRequired).wire) }
-    val model = state.models.getOrNull(modelIndex)
-    val allowedModes = allowedRuntimeModes(model)
-    val mode = resolveRuntimeMode(RuntimeMode.fromWire(chosenMode), allowedModes)
-    AlertDialog(onDismissRequest = dismiss, title = { Text("New conversation") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("PROJECT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-            state.projects.forEach { project ->
-                ChoiceRow(projectId == project.id, { projectId = project.id }) { Text(project.title) }
-            }
-            Text("PROVIDER / MODEL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
-            if (state.models.isEmpty()) Text("No models reported by this environment. Reconnect to refresh configuration.")
-            state.models.forEachIndexed { index, option ->
-                ChoiceRow(modelIndex == index, { modelIndex = index }) { Column { Text(option.label); Text(option.instanceId, style = MaterialTheme.typography.labelSmall) } }
-            }
-            Text("MODE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
-            allowedModes.forEach { option ->
-                ChoiceRow(mode == option, { chosenMode = option.wire }) { Column { Text(option.label); Text(option.description, style = MaterialTheme.typography.labelSmall) } }
-            }
-            Text("Workspace uses the server default.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
-        }
-    }, confirmButton = {
-        Button(onClick = { model?.let { start(ThreadDraft(projectId, it, mode)) } },
-            enabled = state.canWrite && !state.busy && projectId.isNotBlank() && model != null) { Text("Start") }
-    }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
-}
-
-@Composable
-private fun ChoiceRow(selected: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected, onClick = onClick, role = Role.RadioButton).padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        RadioButton(selected, onClick = null)
-        Spacer(Modifier.width(12.dp))
-        Box(Modifier.weight(1f)) { content() }
-    }
-}

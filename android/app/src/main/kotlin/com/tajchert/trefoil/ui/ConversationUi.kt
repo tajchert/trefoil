@@ -43,6 +43,13 @@ internal fun Conversation(
     onLoadActivity: (String) -> Unit = {}, fileDownloadUi: FileDownloadUi = FileDownloadUi(),
     draft: ThreadDraft? = null, onSetRuntimeMode: (RuntimeMode) -> Unit = {}, onSetModel: (ModelOption) -> Unit = {},
     sendFailed: Flow<Unit> = emptyFlow(),
+    /** Back affordance for the conversation header; null on wide layouts where the list stays visible. */
+    onBack: (() -> Unit)? = null,
+    /** Trailing header actions supplied by the shell (thread actions menu, etc.). */
+    actions: @Composable RowScope.() -> Unit = {},
+    /** First prompt from the new-thread sheet: put in the composer and submit once, then call [onSeedConsumed]. */
+    seedPrompt: String? = null,
+    onSeedConsumed: () -> Unit = {},
 ) {
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
     val state = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())

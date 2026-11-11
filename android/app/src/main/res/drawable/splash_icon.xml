@@ -1,0 +1,8 @@
+<!-- Android 12+ splash icon: the mark on a transparent 288dp canvas (inner 192dp circle is visible). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="288dp" android:height="288dp" android:viewportWidth="288" android:viewportHeight="288">
+    <group android:translateX="144" android:translateY="150" android:scaleX="1.25" android:scaleY="1.25">
+        <path android:fillColor="#8EDB9B" android:pathData="M0,-5 C-15,-11 -21,-27 -13,-39 C-7,-47 7,-47 13,-39 C21,-27 15,-11 0,-5 Z" />
+        <group android:rotation="240"><path android:fillColor="#5FBF74" android:pathData="M0,-5 C-15,-11 -21,-27 -13,-39 C-7,-47 7,-47 13,-39 C21,-27 15,-11 0,-5 Z" /></group>
+        <group android:rotation="120"><path android:fillColor="#BCEFC3" android:pathData="M0,-5 C-15,-11 -21,-27 -13,-39 C-7,-47 7,-47 13,-39 C21,-27 15,-11 0,-5 Z" /></group>
+    </group>
+</vector>
