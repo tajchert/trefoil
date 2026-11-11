@@ -62,7 +62,7 @@ internal fun MachinesScreen(
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 24.dp)) {
             item {
-                TrefoilMark(Modifier.size(44.dp).offset(x = (-6).dp))
+                TrefoilMark(Modifier.size(44.dp).offset(x = (-6).dp), color = Tf.colors.accent)
                 Spacer(Modifier.height(12.dp))
                 Text("Machines", style = TrefoilType.display, color = c.text)
                 if (state.environment == null) {
