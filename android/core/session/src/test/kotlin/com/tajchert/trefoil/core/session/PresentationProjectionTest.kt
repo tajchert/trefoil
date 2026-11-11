@@ -1,5 +1,6 @@
 package com.tajchert.trefoil.core.session
 
+import com.tajchert.trefoil.core.model.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
@@ -313,4 +314,79 @@ class PresentationProjectionTest {
         assertEquals(false, threadSummary(fixture("""{"blockedOnThreadWait":false}""")).blockedOnThreadWait)
     }
 
+    @Test fun subagentsMapProviderNativeAppOwnedFailedAndRemoteRecords() {
+        val agents = subagents(fixture("""{"subagents":[
+          {"id":"node-claude","threadId":"parent","runId":"run-1","parentNodeId":"root","origin":"provider_native","createdBy":"agent",
+           "driver":"claudeAgent","providerInstanceId":"claude","providerThreadId":"pt","childThreadId":"child-claude",
+           "nativeTaskRef":{"driver":"claudeAgent","nativeId":"toolu_1","strength":"strong","ordinal":3},
+           "prompt":"Explore the repo","title":"Explore","model":"claude-haiku",
+           "modelSelection":{"instanceId":"claude","model":"claude-opus","options":[{"id":"effort","value":"high"},{"id":"fast","value":true},{"id":"","value":"x"}]},
+           "status":"running","progress":"Reading files","result":null,
+           "startedAt":"2026-11-12T10:00:00.000Z","completedAt":null,"updatedAt":"2026-11-12T10:01:00.000Z","futureField":{"x":1}},
+          {"id":"node-task","threadId":"parent","runId":"run-1","parentNodeId":"root","origin":"app_owned","createdBy":"agent",
+           "driver":"codex","providerInstanceId":"codex","providerThreadId":null,"childThreadId":"child-task","nativeTaskRef":null,
+           "prompt":"Write tests","title":null,"model":null,"status":"completed","result":"All green",
+           "startedAt":"2026-11-12T10:00:00.000Z","completedAt":"2026-11-12T10:05:00.000Z","updatedAt":"2026-11-12T10:05:00.000Z"},
+          {"id":"node-failed","threadId":"parent","runId":"run-1","origin":"app_owned","driver":"codex","childThreadId":"child-failed",
+           "nativeTaskRef":null,"prompt":"Deploy","title":"Deploy","model":null,"status":"failed","result":"Provider crashed","updatedAt":"2026-11-12T10:06:00.000Z"},
+          {"id":"node-remote","threadId":"parent","runId":"run-1","origin":"app_owned","driver":"codex","childThreadId":null,
+           "remoteChild":{"environmentId":"env-2","threadId":"remote-thread","label":"Build box","runId":"r","stoppedThere":false},
+           "nativeTaskRef":null,"prompt":"Build","title":"Build","model":null,"status":"running","result":null,"updatedAt":"2026-11-12T10:07:00.000Z"}
+        ]}"""))
+        assertEquals(listOf("node-claude", "node-task", "node-failed", "node-remote"), agents.map { it.id })
+        val claude = agents[0]
+        assertEquals("parent", claude.threadId); assertEquals("run-1", claude.runId)
+        assertTrue(claude.isProviderNative); assertEquals("claudeAgent", claude.driver); assertEquals("claude", claude.providerInstanceId)
+        assertEquals("child-claude", claude.childThreadId)
+        assertEquals(SubagentNativeTaskRef("toolu_1", "strong"), claude.nativeTaskRef)
+        assertEquals("Explore the repo", claude.prompt); assertEquals("Explore", claude.title); assertEquals("claude-haiku", claude.model)
+        assertEquals("claude", claude.selectionInstanceId); assertEquals("claude-opus", claude.selectionModel)
+        assertEquals(mapOf("effort" to "high", "fast" to "true"), claude.selectionOptions)
+        assertEquals("running", claude.status); assertEquals("Reading files", claude.progress); assertNull(claude.result)
+        assertEquals("2026-11-12T10:00:00.000Z", claude.startedAt); assertNull(claude.completedAt)
+        assertEquals("2026-11-12T10:01:00.000Z", claude.updatedAt)
+        assertTrue(claude.canStop); assertNull(claude.workflow); assertNull(claude.remoteChild)
+        val task = agents[1]
+        assertTrue(task.isAppOwned); assertEquals("child-task", task.childThreadId); assertNull(task.nativeTaskRef)
+        assertNull(task.title); assertNull(task.model); assertNull(task.selectionModel); assertTrue(task.selectionOptions.isEmpty())
+        assertEquals("completed", task.status); assertEquals("All green", task.result); assertTrue(task.isTerminal); assertFalse(task.canStop)
+        assertEquals("2026-11-12T10:05:00.000Z", task.completedAt)
+        val failed = agents[2]
+        assertEquals("failed", failed.status); assertEquals("Provider crashed", failed.result); assertNull(failed.startedAt)
+        val remote = agents[3]
+        assertNull(remote.childThreadId)
+        assertEquals(SubagentRemoteChild("env-2", "remote-thread", "Build box"), remote.remoteChild)
+        assertFalse("remote tasks are not stopped from the parent row", remote.canStop)
+    }
+
+    @Test fun subagentsMapWorkflowsAndTolerateMissingOrUnknownFields() {
+        val agents = subagents(fixture("""{"subagents":[
+          {"id":"node-flow","threadId":"parent","runId":null,"origin":"provider_native","driver":"claudeAgent","childThreadId":"coordinator",
+           "nativeTaskRef":{"driver":"claudeAgent","nativeId":"wf","strength":"strong"},"prompt":"","title":"Review","model":null,"status":"running","result":null,
+           "updatedAt":"2026-11-12T10:00:00.000Z",
+           "workflow":{"name":"review-flow","phases":[{"index":0,"title":"Scan"}],"agents":[
+             {"index":0,"label":"Scanner","state":"completed","childThreadId":"scan-child","model":"haiku","phaseIndex":0,"phaseTitle":"Scan","startedAt":1762941600000},
+             {"index":1,"label":"Fixer","state":"queued"}]}},
+          {"id":"","threadId":"parent","status":"running"},
+          {"threadId":"parent","status":"running"},
+          {"id":"node-minimal"},
+          {"id":"node-future","origin":"remote_native","status":"paused","nativeTaskRef":{"nativeId":null},"remoteChild":{"label":"no ids"},"workflow":{}}
+        ]}"""))
+        assertEquals(listOf("node-flow", "node-minimal", "node-future"), agents.map { it.id })
+        val flow = agents[0].workflow!!
+        assertEquals("review-flow", flow.name)
+        assertEquals(listOf(SubagentWorkflowAgent(0, "Scanner", "completed", "scan-child", "haiku", "Scan"), SubagentWorkflowAgent(1, "Fixer", "queued")), flow.agents)
+        assertNull(agents[0].runId); assertFalse("workflow stop is deferred", agents[0].canStop)
+        val minimal = agents[1]
+        assertEquals(Subagent(id = "node-minimal", threadId = ""), minimal)
+        assertFalse(minimal.isActive); assertFalse(minimal.isTerminal); assertFalse(minimal.canStop)
+        val future = agents[2]
+        assertEquals("remote_native", future.origin); assertEquals("paused", future.status)
+        assertEquals(SubagentNativeTaskRef(null, "none"), future.nativeTaskRef)
+        assertNull("a remote child without its environment and thread is ignored", future.remoteChild)
+        assertEquals(SubagentWorkflow(), future.workflow)
+        assertFalse(future.isActive); assertFalse(future.isTerminal)
+        assertTrue(subagents(fixture("""{}""")).isEmpty())
+        assertTrue(subagents(fixture("""{"subagents":null}""")).isEmpty())
+    }
 }

@@ -163,12 +163,13 @@ class T3Client(
             update { it.copy(threadActionsConfigured = true) }
             previewAuthorized = permissions?.any { it.jsonPrimitive.content == "preview:operate" } == true
             serverBrowser = config.obj("environment").obj("capabilities")["serverBrowser"]?.jsonPrimitive?.booleanOrNull == true
+            val threadStop = (config.obj("environment").obj("capabilities")["threadStop"] as? JsonPrimitive)?.booleanOrNull == true
             val models = config.objects("providers").filter { it["enabled"]?.jsonPrimitive?.booleanOrNull != false }.flatMap { provider ->
                 val modes = supportedRuntimeModes(provider)
                 provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name"), modes) }
             }
             val defaultMode = RuntimeMode.fromWire(config.obj("settings").string("defaultRuntimeMode"))
-            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config), defaultRuntimeMode = defaultMode,
+            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config), defaultRuntimeMode = defaultMode, threadStopSupported = threadStop,
                 selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
             subscribe("orchestration.subscribeShell", buildJsonObject {
                 put("requestCompletionMarker", true)
@@ -279,7 +280,7 @@ class T3Client(
         val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
         if (cached != null) applyProjection(cached, threadId)
         else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false, canRead = false) }
-        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null, selectedProviderLocked = false) }
+        else update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), subagents = emptyList(), activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null, selectedProviderLocked = false) }
         val epoch = generation
         refreshSignals?.close(); refreshJob?.cancel()
         val signals = Channel<Unit>(Channel.CONFLATED)
@@ -363,7 +364,7 @@ class T3Client(
         val thread = value.obj("thread")
         update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, canRead = it.canRead && threadReady, messages = conversationMessages(value),
             activities = toolActivities(value), requests = requests, activeRunId = active,
-            runs = conversationRuns(value), attempts = runAttempts(value),
+            runs = conversationRuns(value), attempts = runAttempts(value), subagents = subagents(value),
             selectedRuntimeMode = RuntimeMode.fromWire(thread.string("runtimeMode")),
             selectedModel = selectedModel(thread["modelSelection"] as? JsonObject, it.models),
             selectedProviderLocked = providerLocked(value)) }
@@ -576,8 +577,10 @@ class T3Client(
         withTimeoutOrNull(FRESH_THREAD_WAIT_MS) { state.first { it.canWrite || it.connection != ConnectionStatus.Connected } }
         synchronized(lifecycleLock) { check(epoch == generation && selection == threadGeneration) { "The thread changed; try again" } }
     }
-    private fun command(type: String, extra: JsonObject): JsonObject = buildJsonObject {
-        put("type", type); put("commandId", UUID.randomUUID().toString()); put("threadId", state.value.selectedThreadId ?: error("Select a thread")); extra.forEach { (key, value) -> put(key, value) }
+    private fun command(type: String, extra: JsonObject): JsonObject = threadCommand(type, state.value.selectedThreadId ?: error("Select a thread"), extra)
+    /** Like [command], for a command that targets an explicit thread (for example a subagent's child). */
+    private fun threadCommand(type: String, threadId: String, extra: JsonObject = JsonObject(emptyMap())): JsonObject = buildJsonObject {
+        put("type", type); put("commandId", UUID.randomUUID().toString()); put("threadId", threadId); extra.forEach { (key, value) -> put(key, value) }
     }
     /**
      * Sends one mutation once. [extra] runs under the lifecycle lock after the write check, so
@@ -730,6 +733,40 @@ class T3Client(
             if (action == ThreadAction.Snooze && !Instant.parse(value).isAfter(Instant.now())) continue
             performThreadAction(undo.target, action, value, plan.second, restoring = true)
         }
+    }
+    /**
+     * T3 client-runtime `interruptThreadTurn({threadId, subagentId})`. Provider-native: `subagent.stop`
+     * on the parent. App-owned: `subagent.stop` (older servers reject it, so a definite rejection is not
+     * fatal), then stop the child thread with `thread.stop`, or `run.interrupt` on its active run when
+     * the server lacks the `threadStop` capability. Each command is sent once; uncertain outcomes fail
+     * the session as for any mutation, and nothing further is sent after the session or selection changes.
+     */
+    override suspend fun stopSubagent(subagentId: String) {
+        awaitFreshThread()
+        val (session, parentId, subagent) = synchronized(lifecycleLock) {
+            requireWrite()
+            val parentId = state.value.selectedThreadId ?: error("Select a thread")
+            val subagent = state.value.subagents.firstOrNull { it.id == subagentId } ?: error("Agent is no longer listed")
+            check(subagent.canStop) { "This agent cannot be stopped from here" }
+            Triple(generation to threadGeneration, parentId, subagent)
+        }
+        val (epoch, selection) = session
+        fun requireSameSession() = synchronized(lifecycleLock) {
+            check(epoch == generation && selection == threadGeneration && state.value.selectedThreadId == parentId &&
+                authorized && state.value.connection == ConnectionStatus.Connected) { "The thread changed; stop was not completed" }
+        }
+        suspend fun send(payload: JsonObject) { requireSameSession(); mutation(epoch, "agent stop") { rpc("orchestration.dispatchCommand", payload, epoch) } }
+        val parentStop = subagent.runId?.let { runId -> threadCommand("subagent.stop", parentId, buildJsonObject { put("runId", runId); put("subagentId", subagent.id) }) }
+        if (!subagent.isAppOwned) { send(parentStop ?: error("This agent cannot be stopped from here")); return }
+        val childId = subagent.childThreadId ?: error("This agent cannot be stopped from here")
+        // The parent ends the task even when its child lost track of it; the child stop below still runs.
+        if (parentStop != null) try { send(parentStop) } catch (error: IllegalStateException) { if (error.cause !is ServerRejected) throw error }
+        requireSameSession()
+        if (state.value.threadStopSupported) { send(threadCommand("thread.stop", childId)); return }
+        val child = rpc("orchestration.getThreadProjection", buildJsonObject { put("threadId", childId) }, epoch).jsonObject
+        currentCoroutineContext().ensureActive()
+        val runId = child.objects("runs").lastOrNull { it.string("status") in setOf("preparing", "starting", "running", "waiting") }?.string("id")?.takeIf { it.isNotBlank() } ?: return
+        send(threadCommand("run.interrupt", childId, buildJsonObject { put("runId", runId); put("holdQueue", true) }))
     }
     override suspend fun interruptRun() { dispatch("run.interrupt", "interrupt") { buildJsonObject { put("runId", state.value.activeRunId ?: error("No active run")) } } }
     override suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>>) {
