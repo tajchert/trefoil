@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
                 onSelectThread = model::selectThread,
                 onSend = model::send,
                 onInterrupt = model::interrupt,
+                onStopSubagent = model::stopSubagent,
                 onThreadAction = model::threadAction,
                 onUndoSettlement = model::undoSettlement,
                 onLoadActivity = model::loadActivity,

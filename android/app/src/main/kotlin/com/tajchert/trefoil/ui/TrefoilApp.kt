@@ -6,7 +6,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.core.model.*
@@ -45,6 +50,7 @@ fun TrefoilApp(
     onThreadAction: (ThreadTarget, ThreadAction, String?) -> Unit = { _, _, _ -> },
     onUndoSettlement: (SettlementUndo) -> Unit = {},
     machineProbes: Map<String, MachineProbe> = emptyMap(),
+    onStopSubagent: (String) -> Unit = {},
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -75,6 +81,14 @@ fun TrefoilApp(
         }
         val cancelDraft: () -> Unit = { if (draft != null) onCancelDraft() }
         val select: (String) -> Unit = { cancelDraft(); onSelectThread(it); showThread = true }
+        var showAgents by rememberSaveable { mutableStateOf(false) }
+        val selectedThread = state.threads.firstOrNull { it.id == state.selectedThreadId }
+        val roster = remember(state.runs, state.subagents) { if (state.subagents.isEmpty()) null else subagentRoster(state.runs, state.subagents) }
+        val pill = remember(roster) { roster?.let { subagentPill(it) } }
+        // A subagent child goes back to its parent when that parent is loaded, otherwise to the list.
+        val parentThread = if (draft != null || selectedThread?.relationshipToParent != "subagent") null
+            else selectedThread.parentThreadId?.let { id -> state.threads.firstOrNull { it.id == id } }
+        val openAgent: (String) -> Unit = { showAgents = false; select(it) }
         val connected = state.environment != null
         val shell = ShellActions(
             onMachines = { choosingEnvironment = true; showThread = false },
@@ -90,8 +104,10 @@ fun TrefoilApp(
                 val layout = shellLayout(maxWidth.value)
                 val twoPane = layout != ShellLayout.Phone
                 val machines = !connected || choosingEnvironment
-                BackHandler(!showScreens && ((choosingEnvironment && connected) || (showThread && !twoPane && !machines))) {
-                    if (choosingEnvironment) choosingEnvironment = false else { cancelDraft(); showThread = false }
+                BackHandler(!showScreens && ((choosingEnvironment && connected) || (showThread && !twoPane && !machines) || (parentThread != null && !machines && (twoPane || showThread)))) {
+                    if (choosingEnvironment) choosingEnvironment = false
+                    else if (parentThread != null) select(parentThread.id)
+                    else { cancelDraft(); showThread = false }
                 }
                 val listWidth: Dp = if (layout == ShellLayout.Rail) 360.dp else (maxWidth * 0.5f).coerceIn(320.dp, 420.dp)
                 Row(Modifier.fillMaxSize()) {
@@ -131,10 +147,13 @@ fun TrefoilApp(
                                             conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) "draft" else state.selectedThreadId}") {
                                                 Conversation(state, onSend, onInterrupt, onRespond, onLoadActivity = onLoadActivity, fileDownloadUi = fileDownloadUi,
                                                     draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, sendFailed = sendFailed,
-                                                    onBack = if (twoPane) null else ({ cancelDraft(); showThread = false }),
+                                                    onBack = if (parentThread != null) ({ select(parentThread.id) }) else if (twoPane) null else ({ cancelDraft(); showThread = false }),
+                                                    onOpenParent = parentThread?.let { p -> { select(p.id) } },
+                                                    subtitle = selectedThread?.takeIf { draft == null && it.relationshipToParent == "subagent" }?.let { t -> parentThread?.let { "Subagent of ${it.title}" } ?: "Subagent" },
                                                     actions = {
                                                         if (selectedThreadActionsVisible(twoPane, showThread, draft, state.selectedThreadId)) {
-                                                            state.threads.firstOrNull { it.id == state.selectedThreadId }?.let { ThreadActionsMenu(state, it, onThreadAction) }
+                                                            if (pill != null) AgentsChip(pill) { showAgents = true }
+                                                            state.threads.firstOrNull { it.id == state.selectedThreadId }?.let { ThreadActionsMenu(state, it, onOpenAgents = if (roster != null) ({ showAgents = true }) else null, onAction = onThreadAction) }
                                                         }
                                                     },
                                                     seedPrompt = seedPrompt.takeIf { draft != null }, onSeedConsumed = { seedPrompt = null })
@@ -170,9 +189,23 @@ fun TrefoilApp(
         }
         if (sshHostKey != null) SshHostKeyDialog(sshHostKey, onTrustSsh, onCancelSsh)
         if (pairing) PairDialog(state.busy, { pairing = false; submittedPair = false; onCancelSsh() }, connectionAttempt.takeIf { it.kind == ConnectionKind.Pairing } ?: ConnectionAttempt()) { url, name, insecure -> submittedPair = true; onPair(url, name, insecure) }
+        if (showAgents && roster != null) ThreadAgentsSheet(roster, state.providers, state.models, state.canWrite, { showAgents = false }, openAgent, onStopSubagent)
         if (creating) NewThreadSheet(state, { creating = false }) { newDraft, prompt ->
             seedPrompt = prompt.trim().takeIf { it.isNotEmpty() }
             onStartDraft(newDraft); creating = false; showThread = true
+        }
+    }
+}
+
+/** Header entry point for the Agents sheet: people icon plus the pill label, for example "2/5". */
+@Composable
+internal fun AgentsChip(pill: SubagentPill, onClick: () -> Unit) {
+    val c = Tf.colors
+    Surface(onClick = onClick, shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp), color = c.s2, contentColor = c.text,
+        modifier = Modifier.padding(end = 2.dp).semantics { contentDescription = pill.accessibilityLabel; role = Role.Button }) {
+        Row(Modifier.height(32.dp).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(TfIcons.Agents, null, Modifier.size(16.dp))
+            Text(pill.label, style = TrefoilType.meta.copy(color = c.text), maxLines = 1)
         }
     }
 }

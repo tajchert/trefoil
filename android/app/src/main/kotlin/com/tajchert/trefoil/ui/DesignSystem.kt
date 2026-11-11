@@ -75,6 +75,8 @@ object TfIcons {
     val Mic by lazy { strokeIcon("mic", rect(9f, 3f, 6f, 11f, 3f), "M18 11a6 6 0 0 1-12 0M12 17v4") }
     /** Arrow up: send / start. */
     val Send by lazy { strokeIcon("send", "M12 19V5M6 11l6-6 6 6") }
+    /** Two people: the thread's agents. */
+    val Agents by lazy { strokeIcon("agents", circle(9f, 8f, 3f), "M3 20a6 6 0 0 1 12 0", circle(17f, 9f, 2.4f), "M16.5 14.2A5 5 0 0 1 21 19") }
     val Stop by lazy { strokeIcon("stop", filled = listOf(rect(5f, 5f, 14f, 14f, 3f))) }
     val Close by lazy { strokeIcon("close", "M6 6l12 12M18 6L6 18") }
     val Check by lazy { strokeIcon("check", "M5 12l5 5 9-10") }
