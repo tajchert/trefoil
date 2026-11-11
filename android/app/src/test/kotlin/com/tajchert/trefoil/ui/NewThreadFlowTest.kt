@@ -75,13 +75,13 @@ class NewThreadFlowTest {
         var model: ModelOption? = null
         val sent = mutableListOf<String>()
         compose.setContent { MaterialTheme { Conversation(state, { sent += it }, {}, { _, _, _ -> }, draft = draft, onSetRuntimeMode = { mode = it }, onSetModel = { model = it }) } }
-        compose.onNodeWithText("New conversation in Alpha").assertIsDisplayed()
+        compose.onNodeWithText("New thread in Alpha").assertIsDisplayed()
         compose.onNodeWithText("Your first message starts the thread.").assertIsDisplayed()
         compose.onNodeWithContentDescription("Runtime mode: Supervised").performClick()
         compose.onNodeWithText("Full access").performClick()
         compose.onNodeWithContentDescription("Model: Model A").performClick()
         compose.onNodeWithText("Model B").performClick()
-        compose.onNodeWithText("Message T3…").performTextInput("hello")
+        compose.onNodeWithText("What should the agent do?").performTextInput("hello")
         compose.onNodeWithContentDescription("Send message").performClick()
         compose.runOnIdle { assertEquals(RuntimeMode.FullAccess, mode); assertEquals(models[1], model); assertEquals(listOf("hello"), sent) }
     }
@@ -157,7 +157,7 @@ class NewThreadFlowTest {
         val errored = state.copy(selectedThreadId = "t", error = "boom")
         compose.setContent { MaterialTheme { Conversation(errored, {}, {}, { _, _, _ -> }, sendFailed = failed) } }
         repeat(2) {
-            if (it == 0) compose.onNodeWithText("Message T3…").performTextInput("hello")
+            if (it == 0) compose.onNodeWithText("Reply…").performTextInput("hello")
             compose.onNodeWithContentDescription("Send message").performClick()
             compose.onNodeWithText("Waiting for server confirmation…").assertIsDisplayed()
             compose.runOnIdle { failed.tryEmit(Unit) }
