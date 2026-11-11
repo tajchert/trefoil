@@ -27,7 +27,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.ui.SectionLabel
+import com.tajchert.trefoil.ui.Tf
+import com.tajchert.trefoil.ui.TfIcons
+import com.tajchert.trefoil.ui.TrefoilType
 import java.util.Locale
 
 @Composable
@@ -79,16 +85,18 @@ fun ScreenSessionsScreen(
     LaunchedEffect(state.environment?.id, state.selectedThreadId, state.connection, state.canRead, state.canWrite) {
         if (target == null && connectedForCatalog(state)) onRefresh()
     }
-    Column(modifier.fillMaxSize().background(if (fullscreen) Color.Black else MaterialTheme.colorScheme.surface)) {
-        if (!fullscreen) Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { if (target == null) onLeave() else onClose() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, if (target == null) "Back to conversations" else "Back to screen sessions") }
-            Column(Modifier.weight(1f)) {
-                Text(target?.title ?: "Screen sessions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(target?.subtitle ?: "Browser tabs and attached devices", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val c = Tf.colors
+    Column(modifier.fillMaxSize().background(if (fullscreen) Color.Black else c.bg)) {
+        if (!fullscreen) Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { if (target == null) onLeave() else onClose() }) { Icon(TfIcons.Back, if (target == null) "Back to conversations" else "Back to screen sessions", Modifier.size(22.dp), tint = c.text) }
+            Column(Modifier.weight(1f).padding(start = 4.dp)) {
+                Text(target?.title ?: "Screen sessions", style = TrefoilType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(target?.subtitle ?: "Browser tabs and attached devices", style = TrefoilType.meta, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (target != null) IconButton(onClick = { onFullscreen(true) }, enabled = access != null) { Icon(Icons.Default.Fullscreen, "Enter full screen") }
-            else IconButton(onClick = onRefresh, enabled = connectedForCatalog(state) && !state.screens.loading) { Icon(Icons.Default.Refresh, "Refresh screen sessions") }
+            if (target != null) IconButton(onClick = { onFullscreen(true) }, enabled = access != null) { Icon(Icons.Default.Fullscreen, "Enter full screen", tint = c.text) }
+            else IconButton(onClick = onRefresh, enabled = connectedForCatalog(state) && !state.screens.loading) { Icon(TfIcons.Refresh, "Refresh screen sessions", Modifier.size(22.dp)) }
         }
+        if (!fullscreen) HorizontalDivider(color = c.line)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (target == null) ScreenCatalogList(state.screens, viewerState.error, state.selectedThreadId != null, onOpen, Modifier.fillMaxSize())
             else {
@@ -123,7 +131,8 @@ fun ScreenSessionsScreen(
             }
         }
         if (target != null && !fullscreen) {
-            Surface(tonalElevation = 2.dp) {
+            HorizontalDivider(color = c.line)
+            Surface(color = c.s1) {
                 Column {
                     Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(6.dp).background(if (status.phase == StreamPhase.Streaming) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, androidx.compose.foundation.shape.CircleShape))
@@ -161,23 +170,26 @@ private fun ScreenCatalogList(catalog: ScreenCatalog, error: String?, hasThread:
                 Text("Open a browser or attach a device in T3 Code, then refresh here.", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (catalog.browsers.isNotEmpty()) item { Text("BROWSERS", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+        if (catalog.browsers.isNotEmpty()) item { SectionLabel("Browsers", Modifier.padding(top = 12.dp, start = 4.dp)) }
         items(catalog.browsers, key = { "browser:${it.threadId}:${it.tabId}" }) { ScreenSessionRow(it, open) }
-        if (catalog.devices.isNotEmpty()) item { Text("DEVICES", Modifier.padding(top = 18.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+        if (catalog.devices.isNotEmpty()) item { SectionLabel("Devices", Modifier.padding(top = 18.dp, start = 4.dp)) }
         items(catalog.devices, key = { "device:${it.hostId}:${it.deviceId}" }) { ScreenSessionRow(it, open) }
     }
 }
 
 @Composable
 private fun ScreenSessionRow(target: ScreenTarget, open: (ScreenTarget) -> Unit) {
-    Surface(onClick = { open(target) }, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(if (target is ScreenTarget.Browser) Icons.Default.Language else Icons.Default.Smartphone, null, tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f)) {
-                Text(target.title, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(target.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    val c = Tf.colors
+    Surface(onClick = { open(target) }, shape = RoundedCornerShape(16.dp), color = c.s1, border = BorderStroke(1.dp, c.line)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(Modifier.size(40.dp).background(c.s2, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                Icon(if (target is ScreenTarget.Browser) Icons.Default.Language else Icons.Default.Smartphone, null, Modifier.size(20.dp), tint = c.text)
             }
-            Icon(Icons.Default.ChevronRight, "View screen", Modifier.size(20.dp))
+            Column(Modifier.weight(1f)) {
+                Text(target.title, style = TrefoilType.rowTitle, color = c.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(target.subtitle, style = if (target is ScreenTarget.Browser) TrefoilType.mono else TrefoilType.meta, color = c.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(TfIcons.ChevronRight, "View screen", Modifier.size(20.dp), tint = c.muted)
         }
     }
 }

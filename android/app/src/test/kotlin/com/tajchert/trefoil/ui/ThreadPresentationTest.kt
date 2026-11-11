@@ -121,6 +121,46 @@ class ThreadPresentationTest {
         assertEquals(mapOf("Threads" to 4, "Working" to 1, "Snoozed" to 1, "Settled" to 24),
             threadShelves(threads).associate { it.title to it.threads.size })
     }
+    @Test fun sectionsPullOpenRequestsUpButLeaveSettledAndSnoozedWhereT3PutsThem() {
+        val rows = listOf(
+            ThreadSummary("ask", "p", "Ask", "running", pendingRequestKind = "approval"),
+            ThreadSummary("pinned-ask", "p", "Pinned ask", pendingRequestKind = "user_input", pinnedAt = "2026-11-06T09:00:00Z"),
+            ThreadSummary("pinned-work", "p", "Pinned work", "running", pinnedAt = "2026-11-06T09:00:00Z"),
+            ThreadSummary("work", "p", "Work", "running"),
+            ThreadSummary("open", "p", "Open", "completed"),
+            ThreadSummary("settled-ask", "p", "Settled ask", settledOverride = "settled", pendingRequestKind = "approval"),
+            ThreadSummary("snoozed", "p", "Snoozed", snoozedUntil = "2099-01-01T00:00:00Z"),
+            ThreadSummary("archive", "p", "Archive", archived = true))
+        val shelves = threadShelves(rows)
+        val sections = threadSections(shelves)
+        assertEquals(listOf("Needs you", "Pinned", "Working", "Recent", "Snoozed", "Settled", "Archived"), sections.map { it.title })
+        assertEquals(mapOf("Needs you" to setOf("ask", "pinned-ask"), "Pinned" to setOf("pinned-work"), "Working" to setOf("work"), "Recent" to setOf("open"),
+            "Snoozed" to setOf("snoozed"), "Settled" to setOf("settled-ask"), "Archived" to setOf("archive")),
+            sections.associate { it.title to it.threads.map { thread -> thread.id }.toSet() })
+        assertEquals(listOf("Settled", "Archived"), sections.filter { it.folded }.map { it.title })
+        assertEquals(sections.flatMap { it.threads }.map { it.id }.sorted(), shelves.flatMap { it.threads }.map { it.id }.sorted())
+        assertEquals(listOf("pinned-work", "work"), threadSections(shelves, ThreadFilter.Working).single().threads.map { it.id })
+        assertEquals(mapOf(ThreadFilter.All to 7, ThreadFilter.NeedsYou to 2, ThreadFilter.Working to 2), threadFilterCounts(shelves))
+    }
+    @Test fun rowMarksAndTimesFollowStatus() {
+        val now = java.time.Instant.parse("2026-11-07T12:00:00Z").toEpochMilli()
+        val working = ThreadSummary("w", "p", "W", "running", activityRunStartedAt = "2026-11-07T11:57:00Z", activityRunStartedAtPresent = true, updatedAt = "2026-11-07T11:59:00Z")
+        assertEquals(RowMark.Working, threadRowMark(working))
+        assertEquals("3m", threadRowTime(working, now))
+        val done = ThreadSummary("d", "p", "D", "completed", updatedAt = "2026-11-07T11:47:00Z")
+        assertEquals(RowMark.Done, threadRowMark(done))
+        assertEquals("13m", threadRowTime(done, now))
+        assertEquals(RowMark.Error, threadRowMark(done.copy(status = "failed")))
+        assertEquals(RowMark.None, threadRowMark(done.copy(status = "idle")))
+        assertEquals(RowMark.None, threadRowMark(done.copy(pendingRequestKind = "approval")))
+    }
+    @Test fun shellLayoutBreakpoints() {
+        assertEquals(ShellLayout.Phone, shellLayout(411f))
+        assertEquals(ShellLayout.TwoPane, shellLayout(600f))
+        assertEquals(ShellLayout.TwoPane, shellLayout(840f))
+        assertEquals(ShellLayout.Rail, shellLayout(1280f))
+        assertEquals("Mac", railLabel("Mac mini"))
+    }
     @Test fun invalidAndFutureTimesAreSafe() {
         assertEquals("", relativeThreadTime("invalid", 0))
         assertEquals("now", relativeThreadTime("2026-11-06T09:00:00Z", 0))

@@ -23,10 +23,22 @@ class ThreadActionsUiTest {
         val state = ClientState(environment = environment, connection = ConnectionStatus.Connected, canWriteThreads = true, threadActionsConfigured = true,
             selectedThreadId = "different", projects = listOf(Project("p", "P")), threads = listOf(row))
         compose.setContent { MaterialTheme { ThreadList(state, { selected = it }, {}, { target, operation, _ -> action = target to operation }) } }
-        compose.onNodeWithContentDescription("Thread actions for Row").performClick()
+        compose.onNodeWithText("Row").performTouchInput { longClick() }
         compose.onNodeWithText("Settle").performClick()
         assertEquals(ThreadTarget("env", "row") to ThreadAction.Settle, action)
         assertNull(selected)
+    }
+    @Test fun rowMenuIsReachableAsAnAccessibilityAction() {
+        var action: ThreadAction? = null
+        val state = ClientState(environment = environment, connection = ConnectionStatus.Connected, canWriteThreads = true, threadActionsConfigured = true,
+            projects = listOf(Project("p", "P")), threads = listOf(ThreadSummary("row", "p", "Row")))
+        compose.setContent { MaterialTheme { ThreadList(state, {}, {}, { _, operation, _ -> action = operation }) } }
+        val row = compose.onNode(hasText("Row") and hasClickAction())
+        val custom = row.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions]
+        assertEquals(listOf("Thread actions for Row"), custom.map { it.label })
+        compose.runOnUiThread { custom.single().action() }
+        compose.onNodeWithText("Pin").performClick()
+        assertEquals(ThreadAction.Pin, action)
     }
     @Test fun disconnectedMenuKeepsCopyAvailableAndDisablesMutations() {
         compose.setContent { MaterialTheme { ThreadActionsMenu(ClientState(environment = environment), ThreadSummary("row", "p", "Row")) { _, _, _ -> fail() } } }
@@ -58,7 +70,7 @@ class ThreadActionsUiTest {
         val state = ClientState(environment = environment, projects = listOf(Project("a", "Alpha"), Project("b", "Beta")),
             threads = listOf(ThreadSummary("a", "a", "First"), ThreadSummary("b", "b", "Second")))
         compose.setContent { MaterialTheme { ThreadList(state, {}, {}) } }
-        compose.onNodeWithText("All projects").performClick()
+        compose.onNodeWithText("Project").performClick()
         compose.onNode(hasText("Alpha") and hasAnyAncestor(isPopup())).performClick()
         compose.onNodeWithText("First").assertExists()
         compose.onNodeWithText("Second").assertDoesNotExist()
