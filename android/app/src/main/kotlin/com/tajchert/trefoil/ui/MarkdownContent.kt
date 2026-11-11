@@ -286,6 +286,8 @@ private fun MdTable(table: MdNode.Table) {
     val shape = RoundedCornerShape(10.dp)
     val cellStyle = TrefoilType.message.copy(fontSize = 13.5.sp, lineHeight = 19.sp)
     val rowCount = table.rows.size + 1
+    BoxWithConstraints {
+    val available = constraints.maxWidth
     Box(Modifier.clip(shape).border(1.dp, c.line, shape).horizontalScroll(rememberScrollState())) {
         Layout(content = {
             for (r in 0 until rowCount) for (col in 0 until cols) {
@@ -307,9 +309,14 @@ private fun MdTable(table: MdNode.Table) {
             }
         }) { measurables, _ ->
             val minW = TableMinColumn.roundToPx(); val maxW = TableMaxColumn.roundToPx()
-            val widths = IntArray(cols) { col ->
+            val natural = IntArray(cols) { col ->
                 (0 until rowCount).maxOf { r -> measurables[r * cols + col].maxIntrinsicWidth(Int.MAX_VALUE) }.coerceIn(minW, maxW)
             }
+            // Longest unbreakable word per column: below this a cell can't wrap any narrower.
+            val tightest = IntArray(cols) { col ->
+                (0 until rowCount).maxOf { r -> measurables[r * cols + col].minIntrinsicWidth(Int.MAX_VALUE) }.coerceIn(minW, natural[col])
+            }
+            val widths = tableColumnWidths(natural, tightest, available)
             val heights = IntArray(rowCount) { r -> (0 until cols).maxOf { col -> measurables[r * cols + col].maxIntrinsicHeight(widths[col]) } }
             val placeables = measurables.mapIndexed { index, m -> m.measure(Constraints.fixed(widths[index % cols], heights[index / cols])) }
             layout(widths.sum(), heights.sum()) {
@@ -322,4 +329,19 @@ private fun MdTable(table: MdNode.Table) {
             }
         }
     }
+    }
+}
+
+/**
+ * Auto table layout: natural widths when they fit; otherwise columns give up their slack in proportion,
+ * wrapping text, down to their longest word. Only a table that can't fit even then scrolls sideways.
+ */
+internal fun tableColumnWidths(natural: IntArray, tightest: IntArray, available: Int): IntArray {
+    val naturalSum = natural.sum(); val tightSum = tightest.sum()
+    if (available == Constraints.Infinity || naturalSum <= available) return natural
+    if (tightSum >= available) return tightest
+    val ratio = (available - tightSum).toDouble() / (naturalSum - tightSum)
+    val widths = IntArray(natural.size) { tightest[it] + ((natural[it] - tightest[it]) * ratio).toInt() }
+    widths[widths.indices.maxBy { natural[it] - tightest[it] }] += available - widths.sum()
+    return widths
 }

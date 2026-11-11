@@ -70,4 +70,19 @@ class MarkdownContentTest {
         assertFalse(isSafeLink("javascript:alert(1)"))
         assertFalse(isSafeLink("intent://x"))
     }
+
+    @Test fun tableColumnsKeepNaturalWidthWhenTheyFit() {
+        assertArrayEquals(intArrayOf(100, 150), tableColumnWidths(intArrayOf(100, 150), intArrayOf(80, 60), 400))
+    }
+
+    @Test fun tableColumnsShrinkTowardTheirLongestWordToFit() {
+        val widths = tableColumnWidths(intArrayOf(180, 600), intArrayOf(180, 90), 370)
+        assertEquals(370, widths.sum())
+        assertEquals(180, widths[0])
+        assertTrue(widths[1] >= 90)
+    }
+
+    @Test fun tableScrollsOnlyWhenEvenTightestColumnsOverflow() {
+        assertArrayEquals(intArrayOf(200, 250), tableColumnWidths(intArrayOf(280, 280), intArrayOf(200, 250), 370))
+    }
 }
