@@ -1,6 +1,11 @@
 package com.tajchert.trefoil.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.test.*
@@ -139,5 +144,43 @@ class ConversationUiTest {
         compose.onNodeWithText("fixture.txt").assertDoesNotExist()
         compose.onNodeWithContentDescription("Expand activity").performClick()
         compose.onNodeWithText("fixture.txt").assertExists()
+    }
+
+    private val longThread = ClientState(selectedThreadId = "fixture", canWrite = true, connection = ConnectionStatus.Connected,
+        messages = (1..30).map { ConversationMessage("m$it", if (it % 2 == 0) "assistant" else "user", "Fixture message $it") })
+
+    /** Shrinking the host stands in for the keyboard opening: both reduce the list viewport (Robolectric windows are 470dp tall). */
+    private fun shrinkableConversation(): androidx.compose.runtime.MutableState<Int> {
+        val height = mutableStateOf(460)
+        compose.setContent { TrefoilTheme { Box(Modifier.width(390.dp).height(height.value.dp)) { Conversation(longThread, {}, {}, { _, _, _ -> }) } } }
+        return height
+    }
+
+    private fun scrollRange() = compose.onNode(hasScrollToIndexAction()).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+    private fun atEnd() = scrollRange().let { it.value() >= it.maxValue() }
+
+    @Test fun keyboardOpeningKeepsLatestMessageVisibleWhenFollowingTheBottom() {
+        val height = shrinkableConversation()
+        compose.waitForIdle()
+        assertTrue(atEnd())
+        compose.onNodeWithText("Reply…").performClick()
+        compose.runOnIdle { height.value = 300 }
+        compose.waitForIdle()
+        assertTrue("list should stay pinned to the latest message", atEnd())
+        compose.onNodeWithText("Fixture message 30").assertIsDisplayed()
+        compose.onNodeWithText("Latest").assertDoesNotExist()
+    }
+
+    @Test fun keyboardOpeningKeepsScrolledPositionWhenReadingHistory() {
+        val height = shrinkableConversation()
+        compose.onNode(hasScrollToIndexAction()).performTouchInput { swipeDown(startY = top + 50f, endY = bottom - 50f) }
+        compose.waitForIdle()
+        assertFalse(atEnd())
+        val before = scrollRange().value()
+        compose.onNodeWithText("Reply…").performClick()
+        compose.runOnIdle { height.value = 300 }
+        compose.waitForIdle()
+        assertEquals(before, scrollRange().value())
+        compose.onNodeWithText("Latest").assertIsDisplayed()
     }
 }

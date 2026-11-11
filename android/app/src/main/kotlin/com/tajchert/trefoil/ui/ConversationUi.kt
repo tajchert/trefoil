@@ -109,6 +109,20 @@ internal fun Conversation(
             if (list.layoutInfo.totalItemsCount > 0) list.scrollToItem(list.layoutInfo.totalItemsCount - 1)
         }
     }
+    // The keyboard opening (or the composer growing) shrinks the viewport, and LazyColumn keeps its top
+    // anchored, which would push the latest messages under the keyboard. Stay pinned to the bottom only if
+    // the list was at its end before the resize; a position the reader scrolled to is left untouched.
+    LaunchedEffect(list) {
+        var lastHeight = -1
+        var wasAtEnd = true
+        snapshotFlow { list.layoutInfo.viewportSize.height to !list.canScrollForward }.collect { (height, atEnd) ->
+            if (height != lastHeight && lastHeight > 0 && wasAtEnd) {
+                val count = list.layoutInfo.totalItemsCount
+                if (!atEnd && count > 0) list.scrollToItem(count - 1)
+            } else wasAtEnd = atEnd
+            lastHeight = height
+        }
+    }
     val thread = if (draft != null) null else state.threads.find { it.id == state.selectedThreadId }
     val project = state.projects.find { it.id == (draft?.projectId ?: thread?.projectId) }
     val canLoadActivity = state.connection == ConnectionStatus.Connected && !state.busy
