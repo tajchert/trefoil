@@ -25,7 +25,7 @@ class ConversationUiTest {
             messages = listOf(ConversationMessage("old", "user", "Hello"))))
         val sends = mutableListOf<String>()
         compose.setContent { MaterialTheme { Conversation(state.value, { sends += it }, {}, { _, _, _ -> }) } }
-        compose.onNodeWithText("Message T3…").performTextInput("Hello")
+        compose.onNodeWithText("Reply…").performTextInput("Hello")
         compose.onNodeWithContentDescription("Send message").performClick()
         compose.onNodeWithContentDescription("Send message").assertIsNotEnabled()
         compose.runOnIdle { state.value = state.value.copy(connection = ConnectionStatus.Disconnected, canWrite = false) }
@@ -40,9 +40,9 @@ class ConversationUiTest {
 
     @Test fun disconnectedConversationDisablesApprovalAndSendButRetainsDraftEditing() {
         compose.setContent { MaterialTheme { Conversation(ClientState(selectedThreadId = "fixture", requests = listOf(RuntimeRequest("approval", "Run fixture command"))), {}, {}, { _, _, _ -> }) } }
-        compose.onNodeWithText("Message T3…").performTextInput("Draft")
+        compose.onNodeWithText("Reply…").performTextInput("Draft")
         compose.onNodeWithContentDescription("Send message").assertIsNotEnabled()
-        compose.onNodeWithText("Approve").assertIsNotEnabled()
+        compose.onNodeWithText("Allow").assertIsNotEnabled()
         compose.onNodeWithText("Deny").assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).assertTextEquals("Draft")
     }
@@ -110,7 +110,7 @@ class ConversationUiTest {
         compose.onNodeWithContentDescription("Expand completed work").assertExists()
         compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Review the next command"))
         compose.onNodeWithText("Review the next command").assertExists()
-        compose.onNodeWithText("Approve").assertIsEnabled()
+        compose.onNodeWithText("Allow").assertIsEnabled()
     }
 
     @Test fun navigatingAwayRestoresDraftAndExpandedWorkWithinTheThreadStateProvider() {
@@ -124,7 +124,7 @@ class ConversationUiTest {
                 }
             }
         }
-        compose.onNodeWithText("Message T3…").performTextInput("Keep my draft")
+        compose.onNodeWithText("Reply…").performTextInput("Keep my draft")
         compose.onNodeWithContentDescription("Expand activity").performClick()
         compose.runOnIdle { selected.value = "b" }
         compose.onNode(hasSetTextAction()).assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))

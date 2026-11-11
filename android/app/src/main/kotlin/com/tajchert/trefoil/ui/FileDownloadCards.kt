@@ -1,6 +1,9 @@
 package com.tajchert.trefoil.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -50,12 +53,12 @@ internal fun DownloadFileCard(reference: RemoteFileReference, modifier: Modifier
         val thread = ui.threadId ?: return
         action(environment, thread, reference)
     }
-    OutlinedCard(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
+    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = Tf.colors.s1, contentColor = Tf.colors.text, border = BorderStroke(1.dp, Tf.colors.line)) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Icon(if (apk) Icons.Default.Android else Icons.Default.InsertDriveFile, null, Modifier.size(26.dp), tint = MaterialTheme.colorScheme.primary)
+                if (apk) Icon(Icons.Default.Android, null, Modifier.size(22.dp), tint = Tf.colors.muted) else Icon(TfIcons.File, null, Modifier.size(22.dp), tint = Tf.colors.muted)
                 Column(Modifier.weight(1f)) {
-                    Text(completed?.displayName ?: reference.fileName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(completed?.displayName ?: reference.fileName, style = TrefoilType.mono.copy(fontSize = 13.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
                     val label = when {
                         completed != null -> "${fileByteLabel(completed.sizeBytes)} · Saved to Downloads/Trefoil"
                         downloading -> fileByteLabel(state.bytesDownloaded) + (state.totalBytes?.let { " / ${fileByteLabel(it)}" } ?: " downloaded")
@@ -63,7 +66,7 @@ internal fun DownloadFileCard(reference: RemoteFileReference, modifier: Modifier
                         state?.status == DownloadStatus.Failed -> "Download failed"
                         else -> listOfNotNull(if (apk) "Android package" else "File", reference.sizeBytes?.let(::fileByteLabel)).joinToString(" · ")
                     }
-                    Text(label, Modifier.padding(top = 3.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(label, Modifier.padding(top = 3.dp), style = TrefoilType.meta.copy(fontSize = 12.sp), color = Tf.colors.muted)
                 }
                 when {
                     downloading -> IconButton(onClick = { remoteAction(ui.onCancel) }) { Icon(Icons.Default.Close, "Cancel download ${reference.fileName}") }

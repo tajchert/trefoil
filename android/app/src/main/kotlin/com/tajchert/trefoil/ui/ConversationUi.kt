@@ -3,39 +3,34 @@
  */
 package com.tajchert.trefoil.ui
 
-import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.tajchert.trefoil.core.model.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 
 @Composable
 internal fun Conversation(
@@ -51,14 +46,15 @@ internal fun Conversation(
     seedPrompt: String? = null,
     onSeedConsumed: () -> Unit = {},
 ) {
+    val c = Tf.colors
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
     val state = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())
     if (state.selectedThreadId == null && draft == null) {
         Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.Forum, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
-                Text("Room for your next thought", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 20.dp))
-                Text("Choose a conversation or start a new one.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                TrefoilMark(Modifier.size(48.dp))
+                Text("Pick a thread", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 20.dp))
+                Text("Choose a thread from the list, or start a new one.", style = TrefoilType.preview, color = c.muted, modifier = Modifier.padding(top = 6.dp))
             }
         }
         return
@@ -67,6 +63,25 @@ internal fun Conversation(
     var text by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf("") }
     var submitted by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf<String?>(null) }
     var messageIdsAtSend by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf(arrayListOf<String>()) }
+    val canSend = state.canWrite && !state.busy
+    /** The one send path: the Send button and the seeded first prompt both go through here. */
+    fun submit(value: String): Boolean {
+        if (value.isBlank() || submitted != null || !canSend) return false
+        messageIdsAtSend = ArrayList(state.messages.map { it.id })
+        submitted = value
+        send(value)
+        return true
+    }
+    // Survives recomposition and configuration change so the seed is never submitted twice.
+    var seedHandled by rememberSaveable(seedPrompt) { mutableStateOf(false) }
+    LaunchedEffect(seedPrompt, draft != null, seedHandled) {
+        if (seedPrompt != null && draft != null && !seedHandled) {
+            seedHandled = true
+            text = seedPrompt
+            submit(seedPrompt) // if this cannot send (read-only), the text stays in the composer
+            onSeedConsumed()
+        }
+    }
     LaunchedEffect(state.messages) {
         val pending = submitted
         if (pending != null && state.messages.any { it.role == "user" && it.text == pending && it.id !in messageIdsAtSend }) {
@@ -97,296 +112,155 @@ internal fun Conversation(
     val thread = if (draft != null) null else state.threads.find { it.id == state.selectedThreadId }
     val project = state.projects.find { it.id == (draft?.projectId ?: thread?.projectId) }
     val canLoadActivity = state.connection == ConnectionStatus.Connected && !state.busy
-    val providerStack = thread?.let { threadProviders(it, state.providers) }.orEmpty()
     val workStartedAt = thread?.let(::threadWorkStartedAt)?.let(::validThreadInstant)
     val clock = rememberThreadWorkClock(state.activeRunId != null && workStartedAt != null)
     val workLabel = "Working" + if (workStartedAt != null) " ${formatWorkDuration(clock - workStartedAt)}" else ""
-    CompositionLocalProvider(LocalFileDownloadUi provides fileDownloadUi) {
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (providerStack.isNotEmpty()) {
-                ThreadProviderStack(providerStack, state.providers)
-                Spacer(Modifier.width(10.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(if (draft != null) "New conversation" else thread?.title?.ifBlank { "Untitled conversation" } ?: "Conversation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (project != null) Text(project.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp))
-            }
-            if (state.activeRunId != null) Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
-                Text(workLabel, Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
-        Box(Modifier.weight(1f)) {
-            LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp)) {
-                if (state.busy && entries.isEmpty()) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                if (!state.busy && entries.isEmpty()) item {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.AutoAwesome, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
-                        Text(if (draft != null) "New conversation in ${project?.title ?: "this project"}" else "What would you like to build?", Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
-                        Text(if (draft != null) "Your first message starts the thread." else "Send a message to get started.", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                items(entries, key = { it.key }) { entry ->
-                    when (entry) {
-                        is ConversationEntry.Message -> MessageRow(entry.message, entry.stacked,
-                            showMetadata = if (entry.message.role == "user") {
-                                (entries.getOrNull(entries.indexOf(entry) + 1) as? ConversationEntry.Message)?.message?.role != "user"
-                            } else !entry.message.streaming && (state.activeRunId == null || (entry.message.runId != null && entry.message.runId != state.activeRunId)) &&
-                                entry.message.id == state.messages.lastOrNull { it.role == "assistant" && it.runId == entry.message.runId }?.id)
-                        is ConversationEntry.Activities -> ActivityStack(entry.activities, canLoadActivity = canLoadActivity, onLoadActivity = onLoadActivity)
-                        is ConversationEntry.Work -> CompletedWork(entry, canLoadActivity, onLoadActivity)
-                    }
-                }
-                if (state.activeRunId != null && state.messages.none { it.streaming }) item(key = "working") {
-                    Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-                        Text("Working…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                items(state.requests, key = { "request:${it.id}" }) { RequestCard(it, state.canWrite && !state.busy, respond) }
-                item(key = "bottom") { Spacer(Modifier.height(4.dp)) }
-            }
-            if (!nearBottom) FilledTonalButton(onClick = { following = true; scope.launch { list.animateScrollToItem(list.layoutInfo.totalItemsCount - 1) } }, modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)) {
-                Icon(Icons.Default.ArrowDownward, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Latest")
-            }
-        }
-        Surface(color = MaterialTheme.colorScheme.surface) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                if (state.activeRunId != null) Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Next message will be queued", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = interrupt, enabled = state.canWrite && !state.busy) { Icon(Icons.Default.Stop, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Stop") }
-                }
-                if (!state.canWrite) Text("Read only · reconnect to continue", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
-                if (submitted != null) Text("Waiting for server confirmation…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
-                ComposerPickers(state, draft, onSetRuntimeMode, onSetModel)
-                OutlinedTextField(
-                    value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Message T3…") }, maxLines = 6,
-                    shape = RoundedCornerShape(20.dp),
-                    colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
-                    trailingIcon = {
-                        FilledIconButton(onClick = { if (text.isNotBlank() && submitted == null && state.canWrite && !state.busy) { messageIdsAtSend = ArrayList(state.messages.map { it.id }); submitted = text; send(text) } }, enabled = state.canWrite && !state.busy && text.isNotBlank() && submitted == null, modifier = Modifier.padding(end = 6.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.Send, if (state.activeRunId != null) "Queue message" else "Send message", Modifier.size(20.dp))
+    CompositionLocalProvider(LocalFileDownloadUi provides fileDownloadUi, LocalContentColor provides c.text) {
+        Column(Modifier.fillMaxSize()) {
+            ConversationHeader(
+                title = if (draft != null) "New thread" else thread?.title?.ifBlank { "Untitled conversation" } ?: "Conversation",
+                projectTitle = project?.title, branch = thread?.branch?.takeIf { it.isNotBlank() },
+                workLabel = workLabel.takeIf { state.activeRunId != null }, onBack = onBack, actions = actions)
+            HorizontalDivider(color = c.line)
+            Box(Modifier.weight(1f)) {
+                LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    if (state.busy && entries.isEmpty()) item { LinearProgressIndicator(Modifier.fillMaxWidth(), color = c.accent, trackColor = c.s2) }
+                    if (!state.busy && entries.isEmpty()) item {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 56.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            TrefoilMark(Modifier.size(40.dp))
+                            Text(if (draft != null) "New thread in ${project?.title ?: "this project"}" else "Nothing here yet", Modifier.padding(top = 18.dp), style = MaterialTheme.typography.titleMedium)
+                            Text(if (draft != null) "Your first message starts the thread." else "Send a message to get started.", Modifier.padding(top = 6.dp), style = TrefoilType.preview, color = c.muted)
                         }
                     }
-                )
+                    items(entries, key = { it.key }) { entry ->
+                        when (entry) {
+                            is ConversationEntry.Message -> MessageRow(entry.message, entry.stacked,
+                                showMetadata = if (entry.message.role == "user") {
+                                    (entries.getOrNull(entries.indexOf(entry) + 1) as? ConversationEntry.Message)?.message?.role != "user"
+                                } else !entry.message.streaming && (state.activeRunId == null || (entry.message.runId != null && entry.message.runId != state.activeRunId)) &&
+                                    entry.message.id == state.messages.lastOrNull { it.role == "assistant" && it.runId == entry.message.runId }?.id)
+                            is ConversationEntry.Activities -> ActivityStack(entry.activities, canLoadActivity = canLoadActivity, onLoadActivity = onLoadActivity)
+                            is ConversationEntry.Work -> CompletedWork(entry, canLoadActivity, onLoadActivity)
+                        }
+                    }
+                    if (state.activeRunId != null && state.messages.none { it.streaming }) item(key = "working") {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            WorkingSpinner(size = 16.dp)
+                            Text("Working…", style = TrefoilType.meta, color = c.blue)
+                        }
+                    }
+                    items(state.requests, key = { "request:${it.id}" }) { RequestCard(it, canSend, respond) }
+                    item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
+                }
+                if (!nearBottom) Surface(onClick = { following = true; scope.launch { list.animateScrollToItem(list.layoutInfo.totalItemsCount - 1) } },
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp), shape = RoundedCornerShape(16.dp), color = c.s2, contentColor = c.text, border = BorderStroke(1.dp, c.line), shadowElevation = 2.dp) {
+                    Row(Modifier.height(32.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(TfIcons.ChevronDown, null, Modifier.size(16.dp)); Text("Latest", style = TrefoilType.meta.copy(color = c.text))
+                    }
+                }
+            }
+            // The composer owns its bottom insets: it rides above the keyboard, or above the navigation bar when closed.
+            Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+                QuickReplies(state.requests, canSend, respond)
+                ConversationComposer(state, draft, text, { text = it }, submitted != null, onSetRuntimeMode, onSetModel, interrupt) { submit(text) }
             }
         }
-    }
     }
 }
 
 @Composable
-private fun ComposerPickers(state: ClientState, draft: ThreadDraft?, onSetRuntimeMode: (RuntimeMode) -> Unit, onSetModel: (ModelOption) -> Unit) {
+private fun ConversationHeader(title: String, projectTitle: String?, branch: String?, workLabel: String?, onBack: (() -> Unit)?, actions: @Composable RowScope.() -> Unit) {
+    val c = Tf.colors
+    Row(Modifier.fillMaxWidth().heightIn(min = 68.dp).padding(start = if (onBack != null) 4.dp else 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) { Icon(TfIcons.Back, "Back to threads", Modifier.size(22.dp)) }
+        Column(Modifier.weight(1f).padding(start = if (onBack != null) 2.dp else 0.dp)) {
+            Text(title, style = TrefoilType.rowTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (projectTitle != null || workLabel != null) Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (projectTitle != null) {
+                    ProjectTile(projectTitle, size = 20.dp)
+                    Text(projectTitle, style = TrefoilType.meta, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (branch != null) BranchLabel(branch, Modifier.weight(1f, fill = false))
+                }
+                if (workLabel != null) {
+                    WorkingSpinner(size = 14.dp)
+                    Text(workLabel, style = TrefoilType.meta, color = c.blue, maxLines = 1)
+                }
+            }
+        }
+        actions()
+    }
+}
+
+@Composable
+private fun ConversationComposer(
+    state: ClientState, draft: ThreadDraft?, text: String, onText: (String) -> Unit, waiting: Boolean,
+    onSetRuntimeMode: (RuntimeMode) -> Unit, onSetModel: (ModelOption) -> Unit, interrupt: () -> Unit, onSend: () -> Unit,
+) {
+    val c = Tf.colors
+    val running = state.activeRunId != null
+    val canSend = state.canWrite && !state.busy
+    val noticeStyle = TrefoilType.meta.copy(fontSize = 12.sp, color = c.muted)
+    Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 16.dp, top = 4.dp)) {
+        if (!state.canWrite) Text("Read only · reconnect to continue", Modifier.padding(start = 6.dp, bottom = 6.dp), style = noticeStyle)
+        if (waiting) Text("Waiting for server confirmation…", Modifier.padding(start = 6.dp, bottom = 6.dp), style = noticeStyle)
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = c.s1, contentColor = c.text, border = BorderStroke(1.dp, c.line)) {
+            Column {
+                BasicTextField(
+                    value = text, onValueChange = onText, maxLines = 6,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.text), cursorBrush = SolidColor(c.accent),
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 2.dp),
+                    decorationBox = { inner ->
+                        Box {
+                            if (text.isEmpty()) Text(if (draft != null) "What should the agent do?" else if (running) "Queue a message…" else "Reply…", style = MaterialTheme.typography.bodyLarge, color = c.muted)
+                            inner()
+                        }
+                    },
+                )
+                Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ComposerPickers(state, draft, onSetRuntimeMode, onSetModel, Modifier.weight(1f))
+                    if (running && text.isBlank()) CircleButton("Stop", TfIcons.Stop, c.text, c.bg, canSend, interrupt)
+                    else CircleButton(if (running) "Queue message" else "Send message", TfIcons.Send, c.accent, c.onAccent, canSend && text.isNotBlank() && !waiting, onSend)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CircleButton(description: String, icon: ImageVector, container: Color, content: Color, enabled: Boolean, onClick: () -> Unit) {
+    Surface(onClick = onClick, enabled = enabled, shape = CircleShape, color = container, contentColor = content,
+        modifier = Modifier.size(44.dp).alpha(if (enabled) 1f else .4f).semantics { contentDescription = description; role = Role.Button }) {
+        Box(contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(22.dp)) }
+    }
+}
+
+@Composable
+private fun ComposerPickers(state: ClientState, draft: ThreadDraft?, onSetRuntimeMode: (RuntimeMode) -> Unit, onSetModel: (ModelOption) -> Unit, modifier: Modifier = Modifier) {
+    val c = Tf.colors
     val mode = if (draft != null) draft.runtimeMode else state.selectedRuntimeMode
     val model = if (draft != null) draft.model else state.selectedModel
     val enabled = state.canWrite && !state.busy
     var modeOpen by remember { mutableStateOf(false) }
     var modelOpen by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box {
-            AssistChip(onClick = { modeOpen = true }, enabled = enabled, label = { Text(mode?.label ?: "Mode", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { Icon(Icons.Default.Shield, null, Modifier.size(18.dp)) }, modifier = Modifier.semantics { contentDescription = "Runtime mode: ${mode?.label ?: "not set"}" })
-            DropdownMenu(modeOpen, { modeOpen = false }) {
-                allowedRuntimeModes(model).forEach { option ->
-                    DropdownMenuItem(text = { Column { Text(option.label); Text(option.description, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
-                        onClick = { modeOpen = false; onSetRuntimeMode(option) },
-                        trailingIcon = { if (option == mode) Icon(Icons.Default.Check, "Selected") })
-                }
-            }
-        }
-        Box {
-            AssistChip(onClick = { modelOpen = true }, enabled = enabled && state.models.isNotEmpty(), label = { Text(model?.label ?: "Model", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { Icon(Icons.Default.AutoAwesome, null, Modifier.size(18.dp)) }, modifier = Modifier.semantics { contentDescription = "Model: ${model?.label ?: "not set"}" })
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.weight(1f, fill = false)) {
+            TfPill(model?.label ?: "Model", { modelOpen = true }, icon = TfIcons.Sparkle, enabled = enabled && state.models.isNotEmpty(), contentDescription = "Model: ${model?.label ?: "not set"}")
             DropdownMenu(modelOpen, { modelOpen = false }) {
                 val choices = if (state.selectedProviderLocked && draft == null && model != null) state.models.filter { it.instanceId == model.instanceId } else state.models
                 choices.forEach { option ->
-                    DropdownMenuItem(text = { Column { Text(option.label); Text(option.instanceId, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+                    DropdownMenuItem(text = { Column { Text(option.label); Text(option.instanceId, style = MaterialTheme.typography.labelSmall, color = c.muted) } },
                         onClick = { modelOpen = false; onSetModel(option) },
-                        trailingIcon = { if (option == model) Icon(Icons.Default.Check, "Selected") })
+                        trailingIcon = { if (option == model) Icon(TfIcons.Check, "Selected", Modifier.size(18.dp)) })
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun MessageRow(message: ConversationMessage, stacked: Boolean, showMetadata: Boolean) {
-    val user = message.role == "user"
-    val clipboard = LocalClipboardManager.current
-    Column(Modifier.fillMaxWidth().padding(top = if (stacked) 4.dp else 16.dp, bottom = if (user) 4.dp else 12.dp), horizontalAlignment = if (user) Alignment.End else Alignment.Start) {
-        if (user) {
-            Surface(shape = RoundedCornerShape(18.dp, 18.dp, 5.dp, 18.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth(.85f)) {
-                SelectionContainer { Text(message.text, Modifier.padding(horizontal = 16.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyLarge) }
-            }
-        } else {
-            MarkdownContent(message.text, Modifier.fillMaxWidth())
-        }
-        MessageFileCards(message, Modifier.fillMaxWidth(if (user) .85f else 1f))
-        if (message.streaming) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
-            Text("Writing…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-        } else if (showMetadata) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                messageTime(message.updatedAt ?: message.createdAt)?.let { time -> Text((if (!user) "T3 · " else "") + time, Modifier.padding(top = 6.dp, end = if (user) 4.dp else 0.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                if (!user) IconButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }) { Icon(Icons.Default.ContentCopy, "Copy response", Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-        }
-    }
-}
-
-private fun messageTime(value: String?): String? = timelineInstant(value)?.let { DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault()).format(it) }
-
-@Composable
-private fun CompletedWork(work: ConversationEntry.Work, canLoadActivity: Boolean, onLoadActivity: (String) -> Unit) {
-    var expanded by rememberSaveable(work.key) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth().clickable(onClickLabel = if (expanded) "Collapse completed work" else "Expand completed work") { expanded = !expanded }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Default.CheckCircleOutline, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(work.label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, if (expanded) "Collapse completed work" else "Expand completed work", Modifier.size(20.dp))
-        }
-        if (expanded) Column(Modifier.padding(start = 12.dp)) {
-            work.entries.forEach { entry ->
-                key(entry.key) {
-                    when (entry) {
-                        is ConversationEntry.Message -> MessageRow(entry.message, false, false)
-                        is ConversationEntry.Activities -> ActivityStack(entry.activities, initiallyExpanded = true, canLoadActivity = canLoadActivity, onLoadActivity = onLoadActivity)
-                        is ConversationEntry.Work -> Unit
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Boolean = false, canLoadActivity: Boolean = false, onLoadActivity: (String) -> Unit = {}, fileDownloadUi: FileDownloadUi = FileDownloadUi()) {
-    var expanded by rememberSaveable(activities.first().id) { mutableStateOf(initiallyExpanded) }
-    val running = activities.any { it.isRunning }
-    val attention = activities.any { it.needsAttention }
-    val visible = expanded || running || attention
-    val label = when {
-        attention -> "Activity needs attention"
-        running -> "Working"
-        activities.all { it.kind == "reasoning" } -> "Thought"
-        activities.all { it.status in setOf("completed", "succeeded", "success", "done") } -> "Work completed"
-        else -> "Activity"
-    }
-    Surface(Modifier.fillMaxWidth().padding(vertical = 6.dp).animateContentSize(), color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium) {
-        Column {
-            Row(Modifier.fillMaxWidth().clickable(onClickLabel = if (expanded) "Collapse activity" else "Expand activity") { expanded = !expanded }.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                if (running) CircularProgressIndicator(Modifier.size(15.dp), strokeWidth = 1.5.dp)
-                else Icon(if (attention) Icons.Default.ErrorOutline else activityIcon(activities.last()), null, Modifier.size(17.dp), tint = if (attention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                Column(Modifier.weight(1f)) {
-                    Text(if (activities.size == 1) activityHeadline(activities.first()) else "$label · ${activities.size} activities", style = MaterialTheme.typography.labelLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (!visible) {
-                        val command = activities.last().takeIf { it.kind == "command_execution" }?.input?.lineSequence()?.firstOrNull()?.trim()
-                        val subtitle = command?.takeIf { it.isNotBlank() } ?: activities.last().title.takeIf { activities.size > 1 }
-                        if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall.copy(fontFamily = if (command != null) FontFamily.Monospace else null), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, if (expanded) "Collapse activity" else "Expand activity", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (visible) activities.forEach { activity ->
-                key(activity.id) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .4f))
-                    ActivityDetail(activity, canLoadActivity, onLoadActivity)
-                }
-            }
-        }
-    }
-}
-
-private fun activityHeadline(activity: ToolActivity): String {
-    if (activity.title.replace(' ', '_') != activity.kind) return activity.title
-    return when (activity.kind) {
-        "reasoning" -> if (activity.isRunning) "Thinking" else "Thought"
-        "command_execution" -> "Run command"
-        "file_change" -> "File changes"
-        "file_search" -> "Search files"
-        "web_search" -> "Search the web"
-        else -> activity.title.replaceFirstChar { it.uppercase() }
-    }
-}
-
-private fun activityIcon(activity: ToolActivity) = when (activity.kind) {
-    "command_execution" -> Icons.Default.Terminal
-    "file_change" -> Icons.Default.EditNote
-    "file_read", "file" -> Icons.Default.Description
-    "file_search", "web_search", "search" -> Icons.Default.Search
-    "reasoning" -> Icons.Default.Psychology
-    "proposed_plan" -> Icons.Default.Assignment
-    "system_notice" -> Icons.Default.Info
-    "notification" -> Icons.Default.NotificationsNone
-    "compaction" -> Icons.Default.Compress
-    "handoff", "subagent" -> Icons.Default.AccountTree
-    else -> Icons.Default.Build
-}
-
-@Composable
-private fun ActivityDetail(activity: ToolActivity, canLoadActivity: Boolean, onLoadActivity: (String) -> Unit) {
-    val clipboard = LocalClipboardManager.current
-    val structured = listOfNotNull(activity.input, activity.output, activity.diffStr, activity.oldStr, activity.newStr, activity.searchResults, activity.failure).filter { it.isNotBlank() }
-    val fallback = activity.detail.takeIf { it.isNotBlank() && structured.isEmpty() }
-    val copyText = (structured + listOfNotNull(fallback)).distinct().joinToString("\n\n")
-    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(activityIcon(activity), null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(activityHeadline(activity), style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-            if (activity.status.isNotBlank()) Text(activity.status.replace('_', ' '), style = MaterialTheme.typography.labelSmall, color = if (activity.needsAttention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-            if (copyText.isNotBlank()) IconButton(onClick = { clipboard.setText(AnnotatedString(copyText)) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.ContentCopy, "Copy activity", Modifier.size(14.dp)) }
-        }
-        activity.fileName?.takeIf { it.isNotBlank() }?.let { SelectionContainer { Text(it, style = MaterialTheme.typography.labelSmall) } }
-        Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (activity.kind in setOf("reasoning", "proposed_plan")) MarkdownContent(activity.output?.takeIf { it.isNotBlank() } ?: activity.detail)
-            else SelectionContainer {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    activity.input?.takeIf { it.isNotBlank() }?.let {
-                        Text(if (activity.kind == "command_execution") "$ $it" else it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
-                    }
-                    val details = listOfNotNull(activity.output, activity.diffStr,
-                        activity.oldStr?.takeIf { activity.diffStr == null }?.let { "Before\n$it" },
-                        activity.newStr?.takeIf { activity.diffStr == null }?.let { "After\n$it" },
-                        activity.searchResults, fallback).distinct()
-                    details.forEach { Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)) }
-                    activity.failure?.takeIf { it.isNotBlank() && it !in details }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                    activity.exitCode?.let { Text("Exit code $it", style = MaterialTheme.typography.labelSmall, color = if (it == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error) }
-                }
-            }
-        }
-        if (activity.outputOmitted || activity.detailsOmitted) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (activity.detailsOmitted) "File details are not included in this snapshot." else "Output is not included in this snapshot.", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = { onLoadActivity(activity.id) }, enabled = canLoadActivity) { Text(if (activity.detailsOmitted) "Load details" else "Load output") }
-        }
-    }
-}
-
-@Composable
-private fun RequestCard(request: RuntimeRequest, enabled: Boolean, respond: (String, String, Map<String, List<String>>) -> Unit) {
-    var answers by rememberSaveable(request.id) { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
-    val valid = request.questions.all { !it.required || answers[it.id]?.any(String::isNotBlank) == true }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer), modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("NEEDS YOUR ATTENTION", style = MaterialTheme.typography.labelSmall)
-            Text(request.title, style = MaterialTheme.typography.titleMedium)
-            if (request.detail.isNotBlank()) SelectionContainer { Text(request.detail, style = MaterialTheme.typography.bodyMedium) }
-            if (!request.canApprove) Text("This request is not supported here. Open another T3 client to respond.")
-            else {
-                request.questions.forEach { question ->
-                    Text(question.title, fontWeight = FontWeight.Medium)
-                    if (question.options.isEmpty()) OutlinedTextField(value = answers[question.id]?.firstOrNull().orEmpty(), onValueChange = { answers = answers + (question.id to listOf(it)) }, enabled = enabled, modifier = Modifier.fillMaxWidth(), label = { Text("Your answer") })
-                    else question.options.forEach { option ->
-                        val checked = option in answers[question.id].orEmpty()
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked, onCheckedChange = { selected -> answers = answers + (question.id to if (question.multiple) { if (selected) answers[question.id].orEmpty() + option else answers[question.id].orEmpty() - option } else if (selected) listOf(option) else emptyList()) }, enabled = enabled)
-                            Text(option, Modifier.weight(1f))
-                        }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (request.questions.isNotEmpty()) Button(onClick = { respond(request.id, "accept", answers) }, enabled = enabled && valid) { Text("Submit answers") }
-                    else { Button(onClick = { respond(request.id, "accept", emptyMap()) }, enabled = enabled) { Text("Approve") }; OutlinedButton(onClick = { respond(request.id, "decline", emptyMap()) }, enabled = enabled) { Text("Deny") } }
+        Box(Modifier.weight(1f, fill = false)) {
+            TfPill(mode?.label ?: "Mode", { modeOpen = true }, icon = TfIcons.Shield, enabled = enabled, contentDescription = "Runtime mode: ${mode?.label ?: "not set"}")
+            DropdownMenu(modeOpen, { modeOpen = false }) {
+                allowedRuntimeModes(model).forEach { option ->
+                    DropdownMenuItem(text = { Column { Text(option.label); Text(option.description, style = MaterialTheme.typography.labelSmall, color = c.muted) } },
+                        onClick = { modeOpen = false; onSetRuntimeMode(option) },
+                        trailingIcon = { if (option == mode) Icon(TfIcons.Check, "Selected", Modifier.size(18.dp)) })
                 }
             }
         }
