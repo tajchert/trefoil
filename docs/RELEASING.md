@@ -1,5 +1,9 @@
 # Android releases
 
+Release `0.9.0` (`versionCode = 15`) redesigns the app: new tokens, bundled Inter and
+JetBrains Mono (OFL-1.1, see `licenses/`), new adaptive launcher icon and splash, and
+adaptive phone, two-pane and rail layouts. Check the launcher icon and onboarding on a device.
+
 Release `0.8.1` (`versionCode = 14`) fixes settlement Undo during conversation
 refresh, pin ordering, snooze restoration, stale project filters and date pickers.
 
