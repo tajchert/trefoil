@@ -20,6 +20,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 internal data class MarkdownBlock(val text: String, val code: Boolean = false, val language: String = "")
 internal fun markdownBlocks(text: String): List<MarkdownBlock> {
@@ -52,31 +55,42 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
 
 @Composable
 internal fun MarkdownContent(text: String, modifier: Modifier = Modifier) {
+    val c = Tf.colors
     val clipboard = LocalClipboardManager.current
     val blocks = remember(text) { markdownBlocks(text) }
     SelectionContainer(modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             blocks.forEach { block ->
                 if (block.code) {
-                    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainer) {
+                    Surface(shape = RoundedCornerShape(14.dp), color = c.s1, contentColor = c.text, border = BorderStroke(1.dp, c.line)) {
                         Column(Modifier.fillMaxWidth()) {
-                            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(block.language.ifBlank { "Code" }, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                IconButton(onClick = { clipboard.setText(AnnotatedString(block.text)) }) { Icon(Icons.Default.ContentCopy, "Copy code", Modifier.size(16.dp)) }
+                            Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(block.language.ifBlank { "Code" }, Modifier.weight(1f), style = TrefoilType.mono.copy(fontSize = 11.sp), color = c.muted)
+                                IconButton(onClick = { clipboard.setText(AnnotatedString(block.text)) }, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ContentCopy, "Copy code", Modifier.size(15.dp), tint = c.muted) }
                             }
-                            Text(block.text, Modifier.horizontalScroll(rememberScrollState()).padding(12.dp), style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                            Text(block.text, Modifier.horizontalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, bottom = 12.dp), style = TrefoilType.code, color = c.text)
                         }
                     }
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         block.text.lines().forEach { line ->
                             val heading = Regex("^(#{1,6})\\s+(.*)$").matchEntire(line)
                             val bullet = Regex("^\\s*[-*+]\\s+(.*)$").matchEntire(line)
                             val quote = line.startsWith("> ")
-                            val value = heading?.groupValues?.get(2) ?: bullet?.let { "•  ${it.groupValues[1]}" } ?: if (quote) line.removePrefix("> ") else line
-                            val style = when (heading?.groupValues?.get(1)?.length) { 1 -> MaterialTheme.typography.headlineSmall; 2 -> MaterialTheme.typography.titleLarge; 3, 4, 5, 6 -> MaterialTheme.typography.titleMedium; else -> MaterialTheme.typography.bodyLarge }
-                            Text(inlineMarkdown(value), style = style, fontWeight = if (heading != null) FontWeight.SemiBold else null, color = if (quote) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                                modifier = if (quote) Modifier.background(MaterialTheme.colorScheme.surfaceContainer).padding(10.dp) else Modifier)
+                            val value = heading?.groupValues?.get(2) ?: bullet?.groupValues?.get(1) ?: if (quote) line.removePrefix("> ") else line
+                            val style = when (heading?.groupValues?.get(1)?.length) {
+                                1 -> MaterialTheme.typography.headlineSmall; 2 -> MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, lineHeight = 26.sp)
+                                3, 4, 5, 6 -> MaterialTheme.typography.titleMedium; else -> TrefoilType.message
+                            }
+                            val rendered = inlineMarkdown(value)
+                            when {
+                                bullet != null -> Row {
+                                    Text("•", Modifier.width(18.dp), style = style, color = c.muted)
+                                    Text(rendered, Modifier.weight(1f), style = style, color = c.text)
+                                }
+                                quote -> Text(rendered, style = style, color = c.muted, modifier = Modifier.fillMaxWidth().background(c.s1, RoundedCornerShape(10.dp)).padding(10.dp))
+                                else -> Text(rendered, style = style, fontWeight = if (heading != null) FontWeight.SemiBold else null, color = c.text)
+                            }
                         }
                     }
                 }
@@ -86,19 +100,22 @@ internal fun MarkdownContent(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun inlineMarkdown(text: String) = buildAnnotatedString {
-    val tokens = Regex("(`[^`]+`|\\*\\*[^*]+\\*\\*|\\*[^*]+\\*|\\[[^]]+]\\([^)]+\\))")
-    var cursor = 0
-    tokens.findAll(text).forEach { match ->
-        append(text.substring(cursor, match.range.first))
-        val token = match.value
-        when {
-            token.startsWith("`") -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = MaterialTheme.colorScheme.surfaceContainerHigh)) { append(token.removeSurrounding("`")) }
-            token.startsWith("**") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(token.removeSurrounding("**")) }
-            token.startsWith("*") -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(token.removeSurrounding("*")) }
-            else -> withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) { append(token.substringAfter('[').substringBefore(']')); append(" (${token.substringAfter("](").dropLast(1)})") }
+private fun inlineMarkdown(text: String): AnnotatedString {
+    val c = Tf.colors
+    return buildAnnotatedString {
+        val tokens = Regex("(`[^`]+`|\\*\\*[^*]+\\*\\*|\\*[^*]+\\*|\\[[^]]+]\\([^)]+\\))")
+        var cursor = 0
+        tokens.findAll(text).forEach { match ->
+            append(text.substring(cursor, match.range.first))
+            val token = match.value
+            when {
+                token.startsWith("`") -> withStyle(SpanStyle(fontFamily = MonoFamily, fontSize = 13.sp, background = c.s2)) { append(token.removeSurrounding("`")) }
+                token.startsWith("**") -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(token.removeSurrounding("**")) }
+                token.startsWith("*") -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(token.removeSurrounding("*")) }
+                else -> withStyle(SpanStyle(color = c.accent)) { append(token.substringAfter('[').substringBefore(']')); append(" (${token.substringAfter("](").dropLast(1)})") }
+            }
+            cursor = match.range.last + 1
         }
-        cursor = match.range.last + 1
+        append(text.substring(cursor))
     }
-    append(text.substring(cursor))
 }
