@@ -1,5 +1,8 @@
 # Android releases
 
+Release `0.9.1` (`versionCode = 16`) keeps the conversation pinned to the latest message
+when the keyboard opens, unless the reader had scrolled up.
+
 Release `0.9.0` (`versionCode = 15`) redesigns the app: new tokens, bundled Inter and
 JetBrains Mono (OFL-1.1, see `licenses/`), new adaptive launcher icon and splash, and
 adaptive phone, two-pane and rail layouts. Check the launcher icon and onboarding on a device.
