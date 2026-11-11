@@ -89,4 +89,14 @@ class ThreadAgentsSheetTest {
         compose.onNodeWithTag("readonly-subagent-bar").assertIsDisplayed()
         compose.onNodeWithText("Reply…").assertDoesNotExist()
     }
+
+    @Test fun agentRowsMapRosterAndGateStopOnCanWrite() {
+        val live = Subagent(id = "s1", threadId = "parent", runId = "r1", origin = "app_owned", driver = "codex", childThreadId = "child", title = "Explore", status = "running", progress = "Reading")
+        val roster = subagentRoster(listOf(ConversationRun("r1", "running", startedAt = "2026-01-01T00:00:00Z")), listOf(live))!!
+        val on = agentRows(roster, emptyList(), emptyList(), 0L, canWrite = true).single()
+        assertEquals("Explore", on.title)
+        assertEquals("child", on.openThreadId)
+        assertEquals(live.canStop, on.canStop)
+        assertFalse(agentRows(roster, emptyList(), emptyList(), 0L, canWrite = false).single().canStop)
+    }
 }
