@@ -44,6 +44,7 @@ fun TrefoilApp(
     sendFailed: Flow<Unit> = emptyFlow(),
     onThreadAction: (ThreadTarget, ThreadAction, String?) -> Unit = { _, _, _ -> },
     onUndoSettlement: (SettlementUndo) -> Unit = {},
+    machineProbes: Map<String, MachineProbe> = emptyMap(),
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -95,7 +96,7 @@ fun TrefoilApp(
                 val listWidth: Dp = if (layout == ShellLayout.Rail) 360.dp else (maxWidth * 0.5f).coerceIn(320.dp, 420.dp)
                 Row(Modifier.fillMaxSize()) {
                     if (layout == ShellLayout.Rail && connected) {
-                        MachineRail(state, savedEnvironments, needsYou, { choosingEnvironment = false; showThread = false; onConnect(it) }, shell)
+                        MachineRail(state, savedEnvironments, needsYou, { choosingEnvironment = false; showThread = false; onConnect(it) }, shell, probes = machineProbes)
                     }
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         when {
@@ -104,7 +105,7 @@ fun TrefoilApp(
                                 MachinesScreen(state, savedEnvironments, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true }, { sshConnecting = true },
                                     { onDisconnect(); choosingEnvironment = true; showThread = false },
                                     onBack = if (connected) ({ choosingEnvironment = false }) else null,
-                                    modifier = Modifier.weight(1f).windowInsetsPadding(BottomBarsAndIme))
+                                    modifier = Modifier.weight(1f).windowInsetsPadding(BottomBarsAndIme), probes = machineProbes)
                             }
                             showScreens -> Column(Modifier.fillMaxSize().then(if (screenFullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Vertical)))) {
                                 if (!screenFullscreen) ConnectionBanner(state, onReconnect)

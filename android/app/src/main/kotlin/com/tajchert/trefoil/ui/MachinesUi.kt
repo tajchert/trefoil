@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +54,7 @@ internal fun MachinesScreen(
     onConnect: (SavedEnvironment) -> Unit, onForget: (SavedEnvironment) -> Unit,
     onPair: () -> Unit, onSsh: () -> Unit, onDisconnect: () -> Unit,
     onBack: (() -> Unit)?, modifier: Modifier = Modifier,
+    probes: Map<String, MachineProbe> = emptyMap(),
 ) {
     val c = Tf.colors
     var forgetting by remember { mutableStateOf<SavedEnvironment?>(null) }
@@ -73,7 +75,7 @@ internal fun MachinesScreen(
             if (saved.isNotEmpty()) {
                 item { Text("SAVED", style = TrefoilType.section, color = c.muted, modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 10.dp)) }
                 items(saved, key = { it.id }) { environment ->
-                    MachineCard(environment, state.environment?.id == environment.id, state, onConnect = { onConnect(environment) },
+                    MachineCard(environment, state.environment?.id == environment.id, state, machineStatus(environment, state, probes), onConnect = { onConnect(environment) },
                         onForget = { forgetting = environment }, onDisconnect = onDisconnect, modifier = Modifier.padding(bottom = 10.dp))
                 }
             }
@@ -103,35 +105,37 @@ private fun machineSubtitle(environment: SavedEnvironment): String =
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MachineCard(
-    environment: SavedEnvironment, current: Boolean, state: ClientState,
+    environment: SavedEnvironment, current: Boolean, state: ClientState, status: MachineStatus,
     onConnect: () -> Unit, onForget: () -> Unit, onDisconnect: () -> Unit, modifier: Modifier = Modifier,
 ) {
     val c = Tf.colors
     var menu by remember { mutableStateOf(false) }
     val icon = if (environment.ssh != null) TfIcons.Server else TfIcons.Desktop
     val live = current && state.connection == ConnectionStatus.Connected
-    val statusColor = when {
-        !current -> c.muted
-        live -> c.green
-        state.connection == ConnectionStatus.Connecting || state.connection == ConnectionStatus.Reconnecting -> c.amber
-        else -> c.muted
-    }
     val shape = RoundedCornerShape(20.dp)
     val working = if (live) state.threads.count { !it.archived && threadIsWorking(it) } else 0
     val needsYou = if (live) state.threads.count { !it.archived && threadIndicator(it).kind in setOf("attention", "input") } else 0
     Row(
         modifier.fillMaxWidth().clip(shape).background(c.s1).border(if (current) 2.dp else 1.dp, if (current) c.accent else c.line, shape)
             .combinedClickable(enabled = !state.busy, role = Role.Button, onClick = onConnect, onLongClick = { menu = true })
+            .semantics { stateDescription = status.label }
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Box(Modifier.size(48.dp)) {
             Box(Modifier.fillMaxSize().background(c.s2, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = c.text) }
-            Box(Modifier.align(Alignment.BottomEnd).offset(2.dp, 2.dp).size(12.dp).background(c.s1, CircleShape).padding(2.dp).background(statusColor, CircleShape))
+            Box(Modifier.align(Alignment.BottomEnd).offset(if (status.inProgress) 4.dp else 2.dp, if (status.inProgress) 4.dp else 2.dp)
+                .size(if (status.inProgress) 18.dp else 12.dp).background(c.s1, CircleShape), contentAlignment = Alignment.Center) {
+                MachineStatusIndicator(status, size = 8.dp)
+            }
         }
         Column(Modifier.weight(1f)) {
             Text(environment.name, style = TrefoilType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(machineSubtitle(environment), style = TrefoilType.mono, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+            if (!live && status != MachineStatus.Unknown && status != MachineStatus.Offline) {
+                Text(if (status.inProgress) "${status.label}…" else status.label, style = TrefoilType.meta,
+                    color = if (status.inProgress) c.muted else status.color(c), maxLines = 1, modifier = Modifier.padding(top = 6.dp))
+            }
             if (working > 0 || needsYou > 0) {
                 Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (working > 0) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

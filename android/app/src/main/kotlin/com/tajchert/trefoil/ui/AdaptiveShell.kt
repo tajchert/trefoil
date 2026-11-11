@@ -40,7 +40,14 @@ internal data class ShellActions(
     val onDisconnect: (() -> Unit)? = null,
 )
 
-internal enum class MachineStatus(val label: String) { Online("Connected"), Connecting("Connecting"), Offline("Offline"), Failed("Connection error") }
+/** Live states (Online … Failed) describe the active connection; the rest come from background probes. */
+internal enum class MachineStatus(val label: String) {
+    Online("Connected"), Connecting("Connecting"), Offline("Offline"), Failed("Connection error"),
+    Reachable("Online"), Checking("Checking"), Unreachable("Unreachable"), AuthFailed("Sign-in rejected"),
+    NeedsAttention("Needs attention"), Unknown("Not checked");
+    /** Amber spinner instead of a dot while work is in flight. */
+    val inProgress: Boolean get() = this == Connecting || this == Checking
+}
 
 internal fun machineStatus(state: ClientState): MachineStatus = when {
     state.environment == null -> MachineStatus.Offline
@@ -50,11 +57,35 @@ internal fun machineStatus(state: ClientState): MachineStatus = when {
     else -> MachineStatus.Offline
 }
 
+internal fun MachineProbe.status(): MachineStatus = when (this) {
+    MachineProbe.Unknown -> MachineStatus.Unknown
+    MachineProbe.Checking -> MachineStatus.Checking
+    MachineProbe.Online -> MachineStatus.Reachable
+    MachineProbe.Unreachable -> MachineStatus.Unreachable
+    MachineProbe.AuthFailed -> MachineStatus.AuthFailed
+    MachineProbe.NeedsAttention -> MachineStatus.NeedsAttention
+}
+
+/**
+ * Status of any saved machine: the current one follows the live connection while it is in use;
+ * otherwise (including the current machine after a disconnect) the latest background probe.
+ */
+internal fun machineStatus(environment: SavedEnvironment, state: ClientState, probes: Map<String, MachineProbe>): MachineStatus =
+    if (environment.id == state.environment?.id && (state.busy || state.connection != ConnectionStatus.Disconnected)) machineStatus(state)
+    else (probes[environment.id] ?: MachineProbe.Unknown).status()
+
 internal fun MachineStatus.color(c: TrefoilColors): Color = when (this) {
-    MachineStatus.Online -> c.green
-    MachineStatus.Connecting -> c.amber
-    MachineStatus.Failed -> c.red
-    MachineStatus.Offline -> c.muted
+    MachineStatus.Online, MachineStatus.Reachable -> c.green
+    MachineStatus.Connecting, MachineStatus.Checking -> c.amber
+    MachineStatus.Failed, MachineStatus.Unreachable, MachineStatus.AuthFailed, MachineStatus.NeedsAttention -> c.red
+    MachineStatus.Offline, MachineStatus.Unknown -> c.muted
+}
+
+/** Status dot, or an amber spinner while connecting or checking. */
+@Composable
+internal fun MachineStatusIndicator(status: MachineStatus, modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 8.dp) {
+    val c = Tf.colors
+    if (status.inProgress) WorkingSpinner(modifier, size = size * 1.6f, color = status.color(c)) else StatusDot(status.color(c), modifier, size = size)
 }
 
 /** Sliders button with the app menu (screen sessions, machines, connect, disconnect). */
@@ -82,7 +113,8 @@ internal fun railLabel(name: String): String =
 
 /** 80dp machine rail (≥1200dp): Trefoil mark, one item per saved environment, add, settings. */
 @Composable
-internal fun MachineRail(state: ClientState, saved: List<SavedEnvironment>, needsYou: Int, onSelect: (SavedEnvironment) -> Unit, actions: ShellActions, modifier: Modifier = Modifier) {
+internal fun MachineRail(state: ClientState, saved: List<SavedEnvironment>, needsYou: Int, onSelect: (SavedEnvironment) -> Unit, actions: ShellActions, modifier: Modifier = Modifier,
+    probes: Map<String, MachineProbe> = emptyMap()) {
     val c = Tf.colors
     Column(modifier.width(80.dp).fillMaxHeight().background(c.rail).windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start))
         .padding(top = 16.dp, bottom = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -92,7 +124,7 @@ internal fun MachineRail(state: ClientState, saved: List<SavedEnvironment>, need
             val list = if (active != null && saved.none { it.id == active.id }) listOf(active) + saved else saved
             list.forEach { environment ->
                 val current = environment.id == state.environment?.id
-                RailItem(environment, current, if (current) needsYou else 0, if (current) machineStatus(state) else null, enabled = !state.busy || current) {
+                RailItem(environment, current, if (current) needsYou else 0, if (current) machineStatus(state) else machineStatus(environment, state, probes), enabled = !state.busy || current) {
                     if (current) actions.onMachines() else onSelect(environment)
                 }
             }
@@ -103,12 +135,12 @@ internal fun MachineRail(state: ClientState, saved: List<SavedEnvironment>, need
 }
 
 @Composable
-private fun RailItem(environment: SavedEnvironment, current: Boolean, badge: Int, status: MachineStatus?, enabled: Boolean, onClick: () -> Unit) {
+private fun RailItem(environment: SavedEnvironment, current: Boolean, badge: Int, status: MachineStatus, enabled: Boolean, onClick: () -> Unit) {
     val c = Tf.colors
     Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, contentColor = if (current) c.text else c.muted, shape = RoundedCornerShape(16.dp),
         modifier = Modifier.width(72.dp).semantics {
             contentDescription = environment.name; selected = current; role = Role.Tab
-            stateDescription = listOfNotNull(status?.label, badge.takeIf { it > 0 }?.let { "$it need you" }).joinToString(", ")
+            stateDescription = listOfNotNull(status.label, badge.takeIf { it > 0 }?.let { "$it need you" }).joinToString(", ")
         }) {
         Column(Modifier.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Box(Modifier.size(56.dp, 32.dp).background(if (current) c.accentSoft else Color.Transparent, RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
@@ -116,7 +148,7 @@ private fun RailItem(environment: SavedEnvironment, current: Boolean, badge: Int
                 if (badge > 0) Text(badge.toString(), Modifier.align(Alignment.TopEnd).offset(x = (-6).dp, y = (-2).dp).background(c.amber, RoundedCornerShape(8.dp))
                     .defaultMinSize(minWidth = 16.dp).padding(horizontal = 4.dp), color = Color(0xFF1A1205), fontFamily = InterFamily, fontWeight = FontWeight.Bold,
                     fontSize = 10.sp, lineHeight = 16.sp, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                else if (status != null) StatusDot(status.color(c), Modifier.align(Alignment.TopEnd).offset(x = (-10).dp, y = 4.dp), size = 7.dp)
+                else MachineStatusIndicator(status, Modifier.align(Alignment.TopEnd).offset(x = if (status.inProgress) (-8).dp else (-10).dp, y = if (status.inProgress) 2.dp else 4.dp), size = 7.dp)
             }
             Text(railLabel(environment.name), fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, lineHeight = 14.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
