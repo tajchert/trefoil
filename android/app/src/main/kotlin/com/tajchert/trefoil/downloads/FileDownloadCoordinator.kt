@@ -20,6 +20,8 @@ import kotlinx.coroutines.launch
 class FileDownloadCoordinator(private val scope: CoroutineScope, private val client: TrefoilClient, private val store: DownloadStore) {
     private val mutable = MutableStateFlow<Map<DownloadKey, FileDownloadState>>(emptyMap())
     val state = mutable.asStateFlow()
+    /** In-memory inline image previews; separate from explicit saves to Downloads. */
+    val images = InlineImageLoader(client)
     private val jobs = mutableMapOf<DownloadKey, Job>()
     private var nextAttempt = 0L
 
