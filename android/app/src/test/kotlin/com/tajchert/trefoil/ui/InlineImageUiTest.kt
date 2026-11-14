@@ -62,4 +62,29 @@ class InlineImageUiTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithText("screenshot.png").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Download screenshot.png").assertExists()
     }
+
+    @Test fun imageOnlyActivityExpandsAndOpensViewer() {
+        val client = ImageClient(fixturePng(100, 100))
+        compose.setContent { TrefoilTheme { CompositionLocalProvider(LocalFileDownloadUi provides ui(client)) {
+            ActivityStack(listOf(ToolActivity("image", "View image", status = "completed", images = listOf(shot))))
+        } } }
+        compose.onNodeWithContentDescription("Expand activity").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("screenshot.png").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("screenshot.png").performClick()
+        compose.onNodeWithContentDescription("Close image").assertExists()
+    }
+
+    @Test fun commandOutputAndImageBothRenderAndDownloadUsesReference() {
+        var requested: RemoteFileReference? = null
+        val client = ImageClient(fixturePng(100, 100))
+        compose.setContent { TrefoilTheme { CompositionLocalProvider(LocalFileDownloadUi provides ui(client, onDownload = { _, _, r -> requested = r })) {
+            ActivityStack(listOf(ToolActivity("command", "Run", kind = "command_execution", status = "completed", output = "Fixture output", images = listOf(shot))))
+        } } }
+        compose.onNodeWithContentDescription("Expand commands").performClick()
+        compose.onNodeWithText("Run").performClick()
+        compose.onNodeWithText("Fixture output").assertExists()
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Download screenshot.png").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Download screenshot.png").performClick()
+        assertEquals(shot, requested)
+    }
 }

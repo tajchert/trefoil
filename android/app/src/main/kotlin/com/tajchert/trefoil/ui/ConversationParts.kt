@@ -195,11 +195,11 @@ internal fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Bo
 internal fun ToolActivity.hasExpandableDetail(): Boolean =
     listOf(input, output, diffStr, oldStr, newStr, searchResults, failure).any { !it.isNullOrBlank() } ||
         (detail.isNotBlank() && !((kind == "checkpoint" || title.equals("checkpoint", true)) && detail.trim().equals("completed", true))) ||
-        outputOmitted || detailsOmitted || exitCode != null
+        outputOmitted || detailsOmitted || exitCode != null || images.isNotEmpty()
 
 private fun ToolActivity.hasCommandOutput(): Boolean =
     listOf(output, diffStr, oldStr, newStr, searchResults, failure).any { !it.isNullOrBlank() } ||
-        detail.isNotBlank() || outputOmitted || detailsOmitted || exitCode != null
+        detail.isNotBlank() || outputOmitted || detailsOmitted || exitCode != null || images.isNotEmpty()
 
 @Composable
 private fun CommandStack(activities: List<ToolActivity>, canLoadActivity: Boolean, onLoadActivity: (String) -> Unit) {
@@ -274,6 +274,7 @@ private fun ActivityDetail(activity: ToolActivity, canLoadActivity: Boolean, onL
             if (copyText.isNotBlank()) IconButton(onClick = { clipboard.setText(AnnotatedString(copyText)) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.ContentCopy, "Copy activity", Modifier.size(14.dp), tint = c.muted) }
         }
         activity.fileName?.takeIf { it.isNotBlank() }?.let { SelectionContainer { Text(it, style = TrefoilType.mono, color = c.muted) } }
+        activity.images.forEach { reference -> key(reference.identity) { InlineOrCard(reference) } }
         Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (activity.kind in setOf("reasoning", "proposed_plan")) MarkdownContent(activity.output?.takeIf { it.isNotBlank() } ?: activity.detail)
             else SelectionContainer {

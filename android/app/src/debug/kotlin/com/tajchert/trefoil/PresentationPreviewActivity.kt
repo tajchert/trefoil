@@ -1,15 +1,22 @@
 package com.tajchert.trefoil
 
 import android.os.Bundle
+import android.graphics.Bitmap
+import android.graphics.Color
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.downloads.InlineImageLoader
 import com.tajchert.trefoil.ui.*
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import java.time.Instant
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Offline visual fixtures, available only in debug builds. Never opens a client or a vault. */
 class PresentationPreviewActivity : ComponentActivity() {
@@ -36,6 +43,19 @@ class PresentationPreviewActivity : ComponentActivity() {
             ))
         setContent {
             TrefoilTheme {
+                if (intent?.data?.host == "images") {
+                    val image = RemoteFileReference(path = "/fixture/preview.png", fileName = "preview.png", mimeType = "image/png")
+                    val loader = remember { InlineImageLoader(PreviewImageClient()) }
+                    Surface(Modifier.fillMaxSize().systemBarsPadding()) {
+                        CompositionLocalProvider(LocalFileDownloadUi provides FileDownloadUi("fixture", "fixture", true, imageLoader = loader)) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                ActivityStack(listOf(ToolActivity("image", "View image", status = "completed", images = listOf(image))))
+                                ActivityStack(listOf(ToolActivity("output", "Inspect image", status = "completed", output = "Synthetic image output", images = listOf(image))))
+                            }
+                        }
+                    }
+                    return@TrefoilTheme
+                }
                 var selected by remember { mutableStateOf(intent?.data?.host == "conversation") }
                 Surface(Modifier.fillMaxSize().systemBarsPadding()) {
                     if (selected) Conversation(fixture, {}, {}, { _, _, _ -> })
@@ -44,4 +64,26 @@ class PresentationPreviewActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/** Synthetic bitmap source for the isolated image activity preview. */
+private class PreviewImageClient : TrefoilClient {
+    override val state = MutableStateFlow(ClientState(environment = SavedEnvironment("fixture", "Fixture", "https://fixture.invalid", "fixture"), connection = ConnectionStatus.Connected, selectedThreadId = "fixture"))
+    override suspend fun downloadFile(reference: RemoteFileReference, output: OutputStream, environmentId: String, threadId: String, onProgress: (FileDownloadProgress) -> Unit): DownloadedFile {
+        val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(Color.rgb(70, 125, 160))
+        val bytes = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        bitmap.recycle()
+        output.write(bytes)
+        return DownloadedFile(reference.fileName, "image/png", bytes.size.toLong())
+    }
+    override suspend fun pair(pairingUrl: String, name: String, allowInsecureHttp: Boolean): SavedEnvironment = error("unused")
+    override suspend fun connect(environment: SavedEnvironment) {}
+    override suspend fun disconnect() {}
+    override suspend fun selectThread(threadId: String) {}
+    override suspend fun sendMessage(text: String) = error("unused")
+    override suspend fun interruptRun() = error("unused")
+    override suspend fun respond(requestId: String, decision: String, answers: Map<String, List<String>>) = error("unused")
+    override suspend fun reconnect() {}
+    override fun close() {}
 }
