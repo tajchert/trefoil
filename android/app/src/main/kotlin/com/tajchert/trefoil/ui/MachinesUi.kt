@@ -55,6 +55,7 @@ internal fun MachinesScreen(
     onPair: () -> Unit, onSsh: () -> Unit, onDisconnect: () -> Unit,
     onBack: (() -> Unit)?, modifier: Modifier = Modifier,
     probes: Map<String, MachineProbe> = emptyMap(),
+    onUsage: (() -> Unit)? = null,
 ) {
     val c = Tf.colors
     var forgetting by remember { mutableStateOf<SavedEnvironment?>(null) }
@@ -76,7 +77,7 @@ internal fun MachinesScreen(
                 item { Text("SAVED", style = TrefoilType.section, color = c.muted, modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 10.dp)) }
                 items(saved, key = { it.id }) { environment ->
                     MachineCard(environment, state.environment?.id == environment.id, state, machineStatus(environment, state, probes), onConnect = { onConnect(environment) },
-                        onForget = { forgetting = environment }, onDisconnect = onDisconnect, modifier = Modifier.padding(bottom = 10.dp))
+                        onForget = { forgetting = environment }, onDisconnect = onDisconnect, modifier = Modifier.padding(bottom = 10.dp), onUsage = onUsage)
                 }
             }
             item {
@@ -107,6 +108,7 @@ private fun machineSubtitle(environment: SavedEnvironment): String =
 private fun MachineCard(
     environment: SavedEnvironment, current: Boolean, state: ClientState, status: MachineStatus,
     onConnect: () -> Unit, onForget: () -> Unit, onDisconnect: () -> Unit, modifier: Modifier = Modifier,
+    onUsage: (() -> Unit)? = null,
 ) {
     val c = Tf.colors
     var menu by remember { mutableStateOf(false) }
@@ -132,6 +134,8 @@ private fun MachineCard(
         Column(Modifier.weight(1f)) {
             Text(environment.name, style = TrefoilType.rowTitle, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(machineSubtitle(environment), style = TrefoilType.mono, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+            if (live && onUsage != null) Text(usageSummaryLine(state.providers), style = TrefoilType.meta, color = c.accent,
+                modifier = Modifier.padding(top = 6.dp).clickable(role = Role.Button, onClick = onUsage).semantics { contentDescription = "Open usage" })
             if (!live && status != MachineStatus.Unknown && status != MachineStatus.Offline) {
                 Text(if (status.inProgress) "${status.label}…" else status.label, style = TrefoilType.meta,
                     color = if (status.inProgress) c.muted else status.color(c), maxLines = 1, modifier = Modifier.padding(top = 6.dp))
@@ -151,6 +155,7 @@ private fun MachineCard(
         Box {
             IconButton(onClick = { menu = true }, Modifier.size(40.dp)) { Icon(TfIcons.More, "Options for ${environment.name}", Modifier.size(20.dp), tint = c.muted) }
             DropdownMenu(menu, { menu = false }, containerColor = c.sheet, shape = RoundedCornerShape(16.dp)) {
+                if (live && onUsage != null) DropdownMenuItem(text = { Text("Usage") }, onClick = { menu = false; onUsage() })
                 if (current) DropdownMenuItem(
                     text = { Text("Disconnect") }, leadingIcon = { Icon(TfIcons.Disconnect, null, Modifier.size(20.dp)) },
                     onClick = { menu = false; onDisconnect() })

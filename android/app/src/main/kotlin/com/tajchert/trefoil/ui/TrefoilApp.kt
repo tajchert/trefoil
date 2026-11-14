@@ -51,6 +51,11 @@ fun TrefoilApp(
     onUndoSettlement: (SettlementUndo) -> Unit = {},
     machineProbes: Map<String, MachineProbe> = emptyMap(),
     onStopSubagent: (String) -> Unit = {},
+    usage: UsageUiState = UsageUiState(),
+    onOpenUsage: () -> Unit = {},
+    onUsageRange: (UsageRange) -> Unit = {},
+    onRefreshUsage: () -> Unit = {},
+    onRetryUsage: () -> Unit = {},
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -68,6 +73,7 @@ fun TrefoilApp(
         // First prompt typed in the new-thread sheet; the draft conversation sends it via its composer.
         var seedPrompt by rememberSaveable { mutableStateOf<String?>(null) }
         var showScreens by rememberSaveable(state.environment?.id) { mutableStateOf(false) }
+        var showUsage by rememberSaveable(state.environment?.id) { mutableStateOf(false) }
         var screenFullscreen by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(state.environment?.id, screenViewer.target) { if (screenViewer.target == null) screenFullscreen = false }
         var showThread by rememberSaveable { mutableStateOf(false) }
@@ -103,6 +109,7 @@ fun TrefoilApp(
             onMachines = { choosingEnvironment = true; showThread = false },
             onConnectMachine = { adding = true },
             onScreens = if (connected) ({ showScreens = true }) else null,
+            onUsage = if (state.connection == ConnectionStatus.Connected) ({ showUsage = true; onOpenUsage() }) else null,
             onDisconnect = if (connected) ({ onDisconnect(); choosingEnvironment = true; showThread = false }) else null,
         )
         val needsYou = remember(state.threads) { threadSections(threadShelves(state.threads), ThreadFilter.NeedsYou).sumOf { it.threads.size } }
@@ -113,7 +120,8 @@ fun TrefoilApp(
                 val layout = shellLayout(maxWidth.value)
                 val twoPane = layout != ShellLayout.Phone
                 val machines = !connected || choosingEnvironment
-                BackHandler(!showScreens && ((choosingEnvironment && connected) || (showThread && !twoPane && !machines) || (backParent != null && !machines && (twoPane || showThread)))) {
+                BackHandler(showUsage) { showUsage = false }
+                BackHandler(!showUsage && !showScreens && ((choosingEnvironment && connected) || (showThread && !twoPane && !machines) || (backParent != null && !machines && (twoPane || showThread)))) {
                     if (choosingEnvironment) choosingEnvironment = false
                     else if (backParent != null) select(backParent.id)
                     else { cancelDraft(); showThread = false }
@@ -125,12 +133,13 @@ fun TrefoilApp(
                     }
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         when {
+                            showUsage -> UsageScreen(state, usage, { showUsage = false }, onRefreshUsage, onUsageRange, onRetryUsage, Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars))
                             machines -> Column(Modifier.fillMaxSize().statusBarsPadding()) {
                                 ConnectionBanner(state, onReconnect)
                                 MachinesScreen(state, savedEnvironments, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true }, { sshConnecting = true },
                                     { onDisconnect(); choosingEnvironment = true; showThread = false },
                                     onBack = if (connected) ({ choosingEnvironment = false }) else null,
-                                    modifier = Modifier.weight(1f).windowInsetsPadding(BottomBarsAndIme), probes = machineProbes)
+                                    modifier = Modifier.weight(1f).windowInsetsPadding(BottomBarsAndIme), probes = machineProbes, onUsage = shell.onUsage)
                             }
                             showScreens -> Column(Modifier.fillMaxSize().then(if (screenFullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Vertical)))) {
                                 if (!screenFullscreen) ConnectionBanner(state, onReconnect)
