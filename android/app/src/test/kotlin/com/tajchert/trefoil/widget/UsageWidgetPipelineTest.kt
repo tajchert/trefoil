@@ -111,4 +111,11 @@ class UsageWidgetPipelineTest {
             assertEquals(it, parseUsageWidgetIntent(Intent(ACTION_OPEN_USAGE).putExtra(EXTRA_OPEN_USAGE_TAB, it.name)))
         }
     }
+
+    @Test fun statusLeadsWithSavedRefreshHint() {
+        val now = 10 * 60 * 60_000L
+        val snapshot = UsageWidgetSamples.snapshot(now).copy(lastError = "Open Trefoil to refresh this machine.")
+        assertEquals("Open Trefoil to refresh this machine · Updated 3h 0m ago", widgetStatus(snapshot, now - 3 * 60 * 60_000L, now))
+        assertEquals("Updated 3h 0m ago", widgetStatus(snapshot.copy(lastError = null), now - 3 * 60 * 60_000L, now))
+    }
 }

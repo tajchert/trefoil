@@ -59,11 +59,12 @@ internal fun LimitBarsContent(
             val showFreshness = stale && size.height.value >= 90 * scale
             if (showFreshness)
                 LimitNote(
-                    widgetFreshness(
+                    widgetStatus(
+                        snapshot,
                         snapshot.limitsUpdatedAtMillis ?: snapshot.updatedAtMillis,
                         now,
                     ),
-                    GlanceModifier.clickable(refreshUsageAction()),
+                    GlanceModifier.clickable(widgetRefreshAction(snapshot, UsageWidgetTab.Limits)),
                 )
             val providers =
                 compactProviders(

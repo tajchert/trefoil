@@ -149,8 +149,8 @@ internal fun LimitRingsContent(
         }
         if (grid.showFooter)
             LimitNote(
-                "${widgetFreshness(snapshot.limitsUpdatedAtMillis ?: snapshot.updatedAtMillis, now)} · ${snapshot.machineName}",
-                GlanceModifier.clickable(refreshUsageAction()),
+                "${widgetStatus(snapshot, snapshot.limitsUpdatedAtMillis ?: snapshot.updatedAtMillis, now)} · ${snapshot.machineName}",
+                GlanceModifier.clickable(widgetRefreshAction(snapshot, UsageWidgetTab.Limits)),
             )
     }
 }

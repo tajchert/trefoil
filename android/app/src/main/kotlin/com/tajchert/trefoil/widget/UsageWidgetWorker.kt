@@ -83,7 +83,8 @@ class UsageWidgetWorker(context: Context, parameters: WorkerParameters) : Corout
                     .let { check(it.connection == ConnectionStatus.Connected) }
             }
             client.refreshUsageLimits(false)
-            val reports = UsageRange.entries.map { client.usageReport(it, ZoneId.systemDefault().id, false) }
+            // No UI waits on this read, so take the completed report instead of a provisional one.
+            val reports = UsageRange.entries.map { client.usageReport(it, ZoneId.systemDefault().id, true) }
             val now = System.currentTimeMillis()
             store.update { old ->
                 // A foreground environment switch/forget always wins over this older background read.

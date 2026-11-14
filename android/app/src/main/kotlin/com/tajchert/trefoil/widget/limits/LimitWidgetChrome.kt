@@ -59,14 +59,14 @@ internal fun LimitHeader(title: String, snapshot: UsageWidgetSnapshot, now: Long
         Image(
             ImageProvider(R.drawable.widget_limits_refresh),
             "Refresh usage",
-            GlanceModifier.size(40.dp).padding(8.dp).clickable(refreshUsageAction()),
+            GlanceModifier.size(40.dp).padding(8.dp).clickable(widgetRefreshAction(snapshot, UsageWidgetTab.Limits)),
             colorFilter = ColorFilter.tint(GlanceTheme.colors.onSurface),
         )
     }
     Text(
-        widgetFreshness(snapshot.limitsUpdatedAtMillis ?: snapshot.updatedAtMillis, now),
+        widgetStatus(snapshot, snapshot.limitsUpdatedAtMillis ?: snapshot.updatedAtMillis, now),
         maxLines = 1,
-        modifier = GlanceModifier.clickable(refreshUsageAction()),
+        modifier = GlanceModifier.clickable(widgetRefreshAction(snapshot, UsageWidgetTab.Limits)),
         style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
     )
 }

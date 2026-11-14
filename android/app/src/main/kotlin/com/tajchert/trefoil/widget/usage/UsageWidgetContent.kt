@@ -89,7 +89,7 @@ internal fun UsageLabel(
 }
 
 @Composable
-private fun Header(title: String, fit: UsageFit, action: Action? = null) {
+private fun Header(title: String, snapshot: UsageWidgetSnapshot, fit: UsageFit, action: Action? = null) {
     Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         UsageLabel(
             title,
@@ -99,7 +99,7 @@ private fun Header(title: String, fit: UsageFit, action: Action? = null) {
             Image(
                 ImageProvider(R.drawable.widget_usage_refresh),
                 "Refresh usage",
-                GlanceModifier.size(32.dp).padding(6.dp).clickable(refreshUsageAction()),
+                GlanceModifier.size(32.dp).padding(6.dp).clickable(widgetRefreshAction(snapshot, UsageWidgetTab.Cost)),
                 colorFilter = ColorFilter.tint(GlanceTheme.colors.onSurface),
             )
         }
@@ -110,11 +110,11 @@ private fun Header(title: String, fit: UsageFit, action: Action? = null) {
 private fun Footer(snapshot: UsageWidgetSnapshot, fit: UsageFit) {
     val now = System.currentTimeMillis()
     val stale = isWidgetStale(snapshot.updatedAtMillis, now)
-    val text = widgetFreshness(snapshot.updatedAtMillis, now)
+    val text = widgetStatus(snapshot, snapshot.updatedAtMillis, now)
     if (fit.footer || stale) {
         UsageLabel(
             if (fit.width >= 280 * fit.fontScale) "${snapshot.machineName} · $text" else text,
-            GlanceModifier.clickable(refreshUsageAction()),
+            GlanceModifier.clickable(widgetRefreshAction(snapshot, UsageWidgetTab.Cost)),
             muted = true,
             fontSize = if (fit.tight) 10 else 12,
         )
@@ -131,7 +131,7 @@ private fun Missing(range: UsageRange) =
 
 @Composable
 private fun SummaryContent(snapshot: UsageWidgetSnapshot, fit: UsageFit) {
-    if (fit.height >= 170 * fit.fontScale) Header("Usage summary", fit)
+    if (fit.height >= 170 * fit.fontScale) Header("Usage summary", snapshot, fit)
     if (fit.tight) {
         val report = snapshot.reports[UsageRange.Today]
         if (report == null) Missing(UsageRange.Today)
@@ -259,7 +259,7 @@ private fun ChartContent(
     val selected =
         UsageWidgetKeys.range(prefs).let { if (it == UsageRange.Today) UsageRange.Week else it }
     val range = if (fit.chartDays == 7) UsageRange.Week else selected
-    if (!fit.tight) Header("Usage chart · ${range.label}", fit)
+    if (!fit.tight) Header("Usage chart · ${range.label}", snapshot, fit)
     if (fit.controls) {
         Row {
             if (fit.chartDays == 30)
@@ -363,6 +363,7 @@ private fun ColumnScope.TableContent(
     val grouping = UsageWidgetKeys.grouping(prefs)
     Header(
         "Top usage · ${range.label}",
+        snapshot,
         fit,
         if (fit.controls) null else selectAction("table", "cycle", "next"),
     )

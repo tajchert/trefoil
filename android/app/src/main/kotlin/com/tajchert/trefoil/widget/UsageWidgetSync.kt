@@ -113,7 +113,11 @@ class UsageWidgetSync(private val context: Context, private val scope: Coroutine
             try { block() } catch (e: CancellationException) { throw e } catch (_: Exception) { failed = true }
         }
         read { client.refreshUsageLimits(automatic = true) }
-        for (range in UsageRange.entries) read { report(client.usageReport(range, ZoneId.systemDefault().id, false)) }
+        for (range in UsageRange.entries) read {
+            val provisional = client.usageReport(range, ZoneId.systemDefault().id, false)
+            report(provisional)
+            if (provisional.refreshing) report(client.usageReport(range, ZoneId.systemDefault().id, true))
+        }
         store.update { old -> if (old?.environmentId != environment.id) old else old.copy(
             lastError = if (failed) "Could not refresh usage." else null,
             lastErrorAtMillis = if (failed) System.currentTimeMillis() else null) }

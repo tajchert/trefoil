@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.LocalContext
 import androidx.glance.action.Action
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.action.actionRunCallback
@@ -78,6 +79,11 @@ fun openUsageAction(context: Context, tab: UsageWidgetTab): Action = actionStart
 
 /** Asks for a background refresh of the widget snapshot (never a mutation). */
 fun refreshUsageAction(): Action = actionRunCallback<RefreshUsageWidgetsAction>()
+
+/** Refresh tap: opens Trefoil when a background refresh can't reach this machine (e.g. SSH needs a prompt). */
+@Composable
+fun widgetRefreshAction(snapshot: UsageWidgetSnapshot, tab: UsageWidgetTab): Action =
+    if (snapshot.backgroundRefresh) refreshUsageAction() else openUsageAction(LocalContext.current, tab)
 
 /** Full-widget message for no data / not connected / error states. Tapping opens Trefoil. */
 @Composable

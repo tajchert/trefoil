@@ -16,6 +16,10 @@ fun widgetFreshness(updatedAtMillis: Long, now: Long): String {
     return if (age < 60_000) "Updated just now" else "Updated ${formatUsageDuration(age)} ago"
 }
 
+/** Status line: the last refresh problem (e.g. "Open Trefoil to refresh this machine.") leads, then freshness. */
+fun widgetStatus(snapshot: UsageWidgetSnapshot, updatedAtMillis: Long, now: Long): String =
+    snapshot.lastError?.let { "${it.removeSuffix(".")} · ${widgetFreshness(updatedAtMillis, now)}" } ?: widgetFreshness(updatedAtMillis, now)
+
 fun isWidgetStale(updatedAtMillis: Long, now: Long): Boolean = now - updatedAtMillis > WIDGET_STALE_AFTER_MS
 
 /** Monochrome provider mark (tint it), or null for unknown drivers. Same mapping as ui/ProviderIconUi.kt. */
