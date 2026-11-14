@@ -1,6 +1,6 @@
 import java.util.Properties
 
-plugins { alias(libs.plugins.android.application); alias(libs.plugins.compose.compiler) }
+plugins { alias(libs.plugins.android.application); alias(libs.plugins.compose.compiler); alias(libs.plugins.kotlin.serialization) }
 
 // Adapted from Flocket's release signing setup (Apache-2.0). See docs/RELEASING.md.
 val keystoreProperties = Properties().apply {
@@ -45,8 +45,16 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.coroutines.android)
+    implementation(libs.glance.appwidget)
+    implementation(libs.glance.material3)
+    implementation(libs.glance.preview)
+    implementation(libs.glance.appwidget.preview)
+    implementation(libs.work.runtime)
     testImplementation(libs.junit)
     testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation(libs.glance.appwidget.testing)
+    testImplementation(libs.work.testing)
+    testImplementation(libs.coroutines.test)
     testImplementation(platform(libs.compose.bom))
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

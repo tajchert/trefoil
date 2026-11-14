@@ -54,4 +54,12 @@ class UsageControllerTest {
         controller.retry(); started.await(); controller.reset(); yield()
         assertTrue(cancelled); assertEquals(com.tajchert.trefoil.ui.UsageUiState(), controller.state.value)
     }
+    @Test fun snapshotSinkReceivesBothProvisionalAndCompletedReports() = runBlocking {
+        val fake = Fake()
+        val received = mutableListOf<UsageReport>()
+        val controller = UsageController(this, { fake }, onReport = { received += it })
+        controller.open(); yield()
+        assertEquals(listOf(true, false), received.map { it.refreshing })
+        assertEquals(received.last(), controller.state.value.report)
+    }
 }

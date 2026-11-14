@@ -1,6 +1,10 @@
 package com.tajchert.trefoil
 
 import android.os.Bundle
+import android.content.Intent
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.tajchert.trefoil.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -14,6 +18,15 @@ import com.tajchert.trefoil.downloads.DownloadFileActions
 import android.widget.Toast
 
 class MainActivity : ComponentActivity() {
+    private var usageRequest by mutableStateOf<Pair<Long, UsageWidgetTab>?>(null)
+    private fun handleUsageIntent(intent: Intent?) {
+        parseUsageWidgetIntent(intent)?.let { usageRequest = ((usageRequest?.first ?: 0) + 1) to it }
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleUsageIntent(intent)
+    }
     private val model: TrefoilViewModel by viewModels()
     private val fileActions by lazy { DownloadFileActions(this) }
     private fun openDownloaded(file: CompletedDownload, install: Boolean = false, share: Boolean = false) {
@@ -28,6 +41,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { model.pause(); super.onStop() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Only a fresh launch consumes the widget intent; recreation (rotation) must not reopen Usage.
+        if (savedInstanceState == null) handleUsageIntent(intent)
         enableEdgeToEdge()
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
@@ -43,6 +58,7 @@ class MainActivity : ComponentActivity() {
             val machineProbes by model.machineProbes.collectAsStateWithLifecycle()
             val usage by model.usage.collectAsStateWithLifecycle()
             TrefoilApp(
+                usageOpenRequest = usageRequest,
                 usage = usage,
                 onOpenUsage = model.usageController::open,
                 onUsageRange = model.usageController::selectRange,
@@ -91,4 +107,9 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
+}
+
+internal fun parseUsageWidgetIntent(intent: Intent?): UsageWidgetTab? {
+    if (intent?.action != ACTION_OPEN_USAGE) return null
+    return UsageWidgetTab.entries.firstOrNull { it.name == intent.getStringExtra(EXTRA_OPEN_USAGE_TAB) } ?: UsageWidgetTab.Limits
 }

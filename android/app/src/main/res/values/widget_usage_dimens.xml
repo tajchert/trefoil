@@ -1,0 +1,15 @@
+<resources>
+    <!-- Owned by the cost and tokens widgets stream. -->
+    <dimen name="widget_usage_summary_min_width">210dp</dimen>
+    <dimen name="widget_usage_summary_min_height">140dp</dimen>
+    <dimen name="widget_usage_summary_min_resize_width">110dp</dimen>
+    <dimen name="widget_usage_summary_min_resize_height">40dp</dimen>
+    <dimen name="widget_usage_chart_min_width">280dp</dimen>
+    <dimen name="widget_usage_chart_min_height">140dp</dimen>
+    <dimen name="widget_usage_chart_min_resize_width">180dp</dimen>
+    <dimen name="widget_usage_chart_min_resize_height">110dp</dimen>
+    <dimen name="widget_usage_table_min_width">280dp</dimen>
+    <dimen name="widget_usage_table_min_height">230dp</dimen>
+    <dimen name="widget_usage_table_min_resize_width">180dp</dimen>
+    <dimen name="widget_usage_table_min_resize_height">110dp</dimen>
+</resources>

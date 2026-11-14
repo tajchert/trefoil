@@ -1,0 +1,9 @@
+<resources>
+    <!-- Owned by the cost and tokens widgets stream. -->
+    <string name="widget_usage_summary_label">Usage summary</string>
+    <string name="widget_usage_summary_description">Estimated cost and tokens for today, 7 and 30 days</string>
+    <string name="widget_usage_chart_label">Usage chart</string>
+    <string name="widget_usage_chart_description">Daily estimated cost or tokens as a bar chart</string>
+    <string name="widget_usage_table_label">Top usage</string>
+    <string name="widget_usage_table_description">Providers and models sorted by most used</string>
+</resources>

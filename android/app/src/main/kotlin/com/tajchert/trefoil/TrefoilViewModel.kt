@@ -23,7 +23,9 @@ internal const val RETAINED_CONNECTION_FRESHNESS_MS = 20_000L
 
 class TrefoilViewModel(application: Application) : AndroidViewModel(application) {
     private val client = T3Client(viewModelScope)
-    val usageController = UsageController(viewModelScope, { client })
+    val usageController = UsageController(viewModelScope, { client }, onReport = {
+        try { widgetSync.report(it) } catch (e: CancellationException) { throw e } catch (_: Exception) { /* Widget storage must not fail app reads. */ }
+    })
     val usage = usageController.state
     init {
         viewModelScope.launch {
@@ -40,6 +42,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     val state = client.state
     private val _environments = MutableStateFlow<List<SavedEnvironment>>(emptyList())
     val environments = _environments.asStateFlow()
+    private val widgetSync = com.tajchert.trefoil.widget.UsageWidgetSync(application, viewModelScope, client, environments)
     private val _notice = MutableStateFlow<String?>(null)
     val notice = _notice.asStateFlow()
     private val _working = MutableStateFlow(false)
@@ -322,6 +325,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         }
         initialized.await()
         vaultMutex.withLock { save(_environments.value.filterNot { it.id == environment.id }) }
+        widgetSync.forget(environment.id)
     }
     fun pause() {
         if (!foreground) return
@@ -402,6 +406,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         }
     }
     override fun onCleared() {
+        widgetSync.close()
         probeJob?.cancel()
         screenSessions.close()
         tunnelMonitor?.cancel()

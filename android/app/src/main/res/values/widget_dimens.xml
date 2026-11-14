@@ -1,0 +1,5 @@
+<resources>
+    <!-- Shared widget limits. -->
+    <dimen name="widget_max_resize_width">624dp</dimen>
+    <dimen name="widget_max_resize_height">600dp</dimen>
+</resources>

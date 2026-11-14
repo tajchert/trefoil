@@ -6,7 +6,8 @@ import java.time.ZoneId
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-class UsageController(private val scope: CoroutineScope, private val client: () -> TrefoilClient, private val zone: () -> String = { ZoneId.systemDefault().id }) {
+class UsageController(private val scope: CoroutineScope, private val client: () -> TrefoilClient, private val zone: () -> String = { ZoneId.systemDefault().id },
+    private val onReport: suspend (UsageReport) -> Unit = {}) {
     private val mutable = MutableStateFlow(UsageUiState())
     val state: StateFlow<UsageUiState> = mutable.asStateFlow()
     private var loadJob: Job? = null
@@ -39,10 +40,12 @@ class UsageController(private val scope: CoroutineScope, private val client: () 
             try {
                 var report = client().usageReport(range, zone(), awaitRefresh)
                 ensureActive()
+                onReport(report)
                 mutable.update { it.copy(reports = it.reports + (range to report), loading = false, refreshing = report.refreshing && !awaitRefresh) }
                 if (report.refreshing && !awaitRefresh) {
                     report = client().usageReport(range, zone(), true)
                     ensureActive()
+                    onReport(report)
                     mutable.update { it.copy(reports = it.reports + (range to report), refreshing = false) }
                 }
             } catch (e: CancellationException) { throw e }
