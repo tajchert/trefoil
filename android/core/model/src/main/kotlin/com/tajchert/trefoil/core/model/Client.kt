@@ -79,6 +79,8 @@ data class RunAttempt(
 data class ProviderInstance(
     val instanceId: String, val driver: String,
     val displayName: String? = null, val accentColor: String? = null, val enabled: Boolean = true,
+    /** Server `ServerProvider.usageLimits`; null when the provider reports none. Last good value is kept by the server. */
+    val usageLimits: ProviderUsageLimits? = null,
 )
 data class Question(val id: String, val title: String, val options: List<String> = emptyList(), val multiple: Boolean = false, val required: Boolean = true)
 data class RuntimeRequest(val id: String, val title: String, val detail: String = "", val questions: List<Question> = emptyList(), val canApprove: Boolean = true)
@@ -138,6 +140,8 @@ data class ClientState(
     val subagents: List<Subagent> = emptyList(),
     /** Server `environment.capabilities.threadStop`; false when not reported. */
     val threadStopSupported: Boolean = false,
+    /** Session grants `diagnostics:read`, which `server.getUsageSummary` requires. Limits only need read access. */
+    val canReadUsage: Boolean = false,
 )
 
 /** A mutation may or may not have been applied; reconcile from server state, never resend it. */
@@ -175,6 +179,20 @@ interface TrefoilClient {
     suspend fun setRuntimeMode(mode: RuntimeMode) { error("Runtime mode changes are unavailable") }
     /** Dispatches `thread.model-selection.set` for the selected thread. */
     suspend fun setModel(model: ModelOption) { error("Model changes are unavailable") }
+    /**
+     * Reads historical cost/token usage of the connected environment (`server.getUsageSummary`).
+     * [awaitRefresh] false asks for a provisional answer (`provisional: true`); true waits for a fresh scan.
+     * Read-only: failures throw [UsageException] and never change the connection state.
+     */
+    suspend fun usageReport(range: UsageRange, timeZone: String, awaitRefresh: Boolean = false): UsageReport =
+        throw UsageException(UsageFailure.Unsupported, "Usage is unavailable")
+    /**
+     * Asks the server to re-probe providers (`server.refreshProviders {}`), updating
+     * [ClientState.providers] usage limits. [automatic] refreshes are throttled to one per 5 minutes per
+     * environment and return false when skipped. Read-only: failures throw [UsageException].
+     */
+    suspend fun refreshUsageLimits(automatic: Boolean = false): Boolean =
+        throw UsageException(UsageFailure.Unsupported, "Usage limits are unavailable")
     suspend fun reconnect()
     fun close()
 }
