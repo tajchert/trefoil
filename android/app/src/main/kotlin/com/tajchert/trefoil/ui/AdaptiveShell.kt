@@ -38,6 +38,7 @@ internal data class ShellActions(
     val onMachines: () -> Unit,
     val onConnectMachine: () -> Unit,
     val onScreens: (() -> Unit)? = null,
+    val onUsage: (() -> Unit)? = null,
     val onDisconnect: (() -> Unit)? = null,
 )
 
@@ -98,6 +99,7 @@ internal fun ShellMenuButton(state: ClientState, actions: ShellActions, tint: Co
         DropdownMenu(open, { open = false }) {
             if (actions.onScreens != null) DropdownMenuItem(text = { Text("Screen sessions") }, enabled = !state.busy,
                 leadingIcon = { Icon(TfIcons.Screens, null, Modifier.size(20.dp)) }, onClick = { open = false; actions.onScreens.invoke() })
+            if (actions.onUsage != null) DropdownMenuItem(text = { Text("Usage") }, onClick = { open = false; actions.onUsage.invoke() })
             DropdownMenuItem(text = { Text("Machines") }, leadingIcon = { Icon(TfIcons.Desktop, null, Modifier.size(20.dp)) },
                 onClick = { open = false; actions.onMachines() })
             DropdownMenuItem(text = { Text("Connect machine") }, enabled = !state.busy, leadingIcon = { Icon(TfIcons.Plus, null, Modifier.size(20.dp)) },

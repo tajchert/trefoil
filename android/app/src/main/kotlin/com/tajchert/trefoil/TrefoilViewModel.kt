@@ -23,6 +23,13 @@ internal const val RETAINED_CONNECTION_FRESHNESS_MS = 20_000L
 
 class TrefoilViewModel(application: Application) : AndroidViewModel(application) {
     private val client = T3Client(viewModelScope)
+    val usageController = UsageController(viewModelScope, { client })
+    val usage = usageController.state
+    init {
+        viewModelScope.launch {
+            client.state.map { it.environment?.id }.distinctUntilChanged().collect { usageController.reset() }
+        }
+    }
     val screenSessions = com.tajchert.trefoil.ui.screens.ScreenSessionCoordinator(viewModelScope, client)
     val fileDownloads = com.tajchert.trefoil.downloads.FileDownloadCoordinator(viewModelScope, client,
         com.tajchert.trefoil.downloads.MediaStoreDownloadStore(application))

@@ -41,7 +41,13 @@ class MainActivity : ComponentActivity() {
             val sshLogin by model.sshLogin.collectAsStateWithLifecycle()
             val connectionAttempt by model.connectionAttempt.collectAsStateWithLifecycle()
             val machineProbes by model.machineProbes.collectAsStateWithLifecycle()
+            val usage by model.usage.collectAsStateWithLifecycle()
             TrefoilApp(
+                usage = usage,
+                onOpenUsage = model.usageController::open,
+                onUsageRange = model.usageController::selectRange,
+                onRefreshUsage = model.usageController::refresh,
+                onRetryUsage = model.usageController::retry,
                 state = state.copy(error = notice ?: state.error, busy = working || state.busy),
                 savedEnvironments = environments,
                 onPair = model::pair,
