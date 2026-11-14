@@ -1,6 +1,6 @@
 package com.tajchert.trefoil.ui
 
-import com.tajchert.trefoil.core.model.UsageLimitWindow
+import com.tajchert.trefoil.core.model.*
 import java.time.Instant
 import java.util.Locale
 
@@ -49,3 +49,26 @@ internal fun formatUsageReset(window: UsageLimitWindow, now: Long): String? {
     val reset = resetMillis(window) ?: return null
     return when { reset <= now -> "resets now"; reset - now < 60_000 -> "Resets momentarily"; else -> "resets in ${formatUsageDuration(reset - now)}" }
 }
+
+/** Usage page state owned by the ViewModel. [reports] keeps the last answer per range so switching back is instant. */
+data class UsageUiState(
+    val range: UsageRange = UsageRange.Week,
+    val reports: Map<UsageRange, UsageReport> = emptyMap(),
+    /** No report yet for [range] and a request is in flight. */
+    val loading: Boolean = false,
+    /** A report is shown but a fresher one (awaitRefresh) is being fetched. */
+    val refreshing: Boolean = false,
+    val failure: UsageFailure? = null,
+    val failureMessage: String? = null,
+    val limitsRefreshing: Boolean = false,
+    /** Last limits refresh failed; the last good limits stay visible. */
+    val limitsError: String? = null,
+) {
+    val report: UsageReport? get() = reports[range]
+}
+
+/**
+ * One line for the connected machine card: lowest remaining window per enabled provider with limits,
+ * e.g. "Claude 62% left · Codex 80% left"; "Usage" when no provider reports windows.
+ */
+internal fun usageSummaryLine(providers: List<ProviderInstance>): String = "Usage" // TODO(usage-ui-screen): implement
