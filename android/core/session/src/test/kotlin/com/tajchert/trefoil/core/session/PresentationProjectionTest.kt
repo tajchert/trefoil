@@ -7,6 +7,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PresentationProjectionTest {
+    @Test fun toolImagesProjectReferencesWithoutBase64AndNormalizeViewedFileUrls() {
+        val projection = fixture("""{"visibleTurnItems":[{"position":3,"sourceThreadId":"parent","sourceItemId":"source","item":{"id":"local","type":"dynamic_tool","viewedImagePath":"file:///tmp/a%20b.png","output":[{"type":"image","source":{"type":"base64","media_type":"IMAGE/PNG","data":"SECRET"}},{"type":"image","source":{"type":"url","url":"x"}},{"type":"image","mimeType":"image/svg+xml","data":"svg"}]}}]}""")
+        val activity = toolActivities(projection).single()
+        assertEquals(2, activity.images.size)
+        assertEquals("/tmp/a b.png", activity.images[0].path)
+        assertEquals("image/png", activity.images[0].mimeType)
+        assertEquals("source", activity.images[1].toolOutputItemId)
+        assertEquals(0, activity.images[1].toolOutputIndex)
+        assertEquals("parent", activity.images[1].sourceThreadId)
+        assertFalse(activity.detail.contains("SECRET"))
+        assertEquals("parent", activity.sourceThreadId)
+    }
+
+    @Test fun toolImageCapAndRevisionSensitiveIdentity() {
+        val blocks = (0..9).joinToString(",") { "{\"type\":\"image\",\"mimeType\":\"image/jpeg\",\"data\":\"hidden\"}" }
+        val first = toolActivities(fixture("""{"turnItems":[{"id":"i","type":"dynamic_tool","revision":"r1","output":[$blocks]}]}""")).single()
+        val next = toolActivities(fixture("""{"turnItems":[{"id":"i","type":"dynamic_tool","revision":"r2","output":[$blocks]}]}""")).single()
+        assertEquals(8, first.images.size)
+        assertNotEquals(first.images[0].identity, next.images[0].identity)
+    }
     @Test fun legacyTerminalCompletionFallsBackToUpdatedOnlyWhenOptionalFieldIsAbsent() {
         val base = """"id":"legacy","latestRunId":"run","status":"failed","updatedAt":"2026-11-07T11:00:00Z""""
         assertEquals("2026-11-07T11:00:00Z", threadSummary(fixture("{$base}")).latestRunCompletedAt)

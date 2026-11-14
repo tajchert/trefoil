@@ -617,7 +617,10 @@ class T3Client(
                 state.value.selectedThreadId == captured.threadId && state.value.connection == ConnectionStatus.Connected
         }
         try {
-            check((reference.path == null) != (reference.attachmentId == null)) { "Invalid file reference" }
+            check(listOf(reference.path, reference.attachmentId, reference.toolOutputItemId).count { it != null } == 1) { "Invalid file reference" }
+            check(reference.toolOutputItemId != null || reference.toolOutputIndex == null) { "Invalid file reference" }
+            val sourceThreadId = reference.sourceThreadId ?: captured.threadId
+            check(sourceThreadId.isNotBlank() && sourceThreadId.length <= 256 && sourceThreadId.none { it.isISOControl() }) { "Invalid file reference" }
             val resource = buildJsonObject {
                 val attachmentId = reference.attachmentId
                 if (attachmentId != null) {
@@ -625,10 +628,15 @@ class T3Client(
                     put("_tag", "attachment"); put("attachmentId", attachmentId)
                     put("fileName", safeDownloadFileName(reference.fileName)); put("disposition", "attachment")
                     reference.mimeType?.takeIf { it.isNotBlank() && it.length <= 100 }?.let { put("mimeType", it) }
+                } else if (reference.toolOutputItemId != null) {
+                    val itemId = reference.toolOutputItemId ?: error("Invalid tool image reference")
+                    val index = reference.toolOutputIndex
+                    check(itemId.isNotBlank() && itemId.length <= 256 && index != null && index >= 0 && index < 8) { "Invalid tool image reference" }
+                    put("_tag", "tool-output-image"); put("threadId", sourceThreadId); put("itemId", itemId); put("index", index)
                 } else {
                     val path = reference.path ?: error("Invalid file reference")
                     check(path.isNotBlank() && path.length <= 1024 && path.none { it.isISOControl() }) { "Invalid file reference" }
-                    put("_tag", "media-file"); put("threadId", captured.threadId); put("path", path); put("disposition", "attachment")
+                    put("_tag", "media-file"); put("threadId", sourceThreadId); put("path", path); put("disposition", "attachment")
                 }
             }
             val asset = rpc("assets.createUrl", buildJsonObject { put("resource", resource) }, captured.epoch, ::current).jsonObject

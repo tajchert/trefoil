@@ -61,6 +61,7 @@ data class ToolActivity(
     val oldStr: String? = null, val newStr: String? = null,
     val searchResults: String? = null, val failure: String? = null,
     val sourceThreadId: String? = null, val sourceItemId: String? = null,
+    val images: List<RemoteFileReference> = emptyList(),
 )
 data class ConversationRun(
     val id: String, val status: String,

@@ -10,10 +10,21 @@ data class RemoteFileReference(
     val fileName: String,
     val mimeType: String? = null,
     val sizeBytes: Long? = null,
+    val toolOutputItemId: String? = null,
+    val toolOutputIndex: Int? = null,
+    val revision: String? = null,
+    /** Origin of an inherited tool item; selection guards still use the visible thread. */
+    val sourceThreadId: String? = null,
 ) {
-    val identity: String get() = attachmentId?.let { "attachment:$it" } ?: "path:$path"
+    val identity: String get() = when {
+        toolOutputItemId != null -> "tool-output:${identityPart(sourceThreadId)}:${identityPart(toolOutputItemId)}:$toolOutputIndex:${identityPart(revision)}"
+        attachmentId != null -> "attachment:$attachmentId"
+        sourceThreadId != null || revision != null -> "path:${identityPart(sourceThreadId)}:${identityPart(path)}:${identityPart(revision)}"
+        else -> "path:$path"
+    }
     override fun toString() = "RemoteFileReference(content=***)"
 }
+private fun identityPart(value: String?): String = "${value.orEmpty().length}:${value.orEmpty()}"
 data class FileDownloadProgress(val bytesDownloaded: Long, val totalBytes: Long?)
 data class DownloadedFile(val fileName: String, val mimeType: String, val sizeBytes: Long)
 

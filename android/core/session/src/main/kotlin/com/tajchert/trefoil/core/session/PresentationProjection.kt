@@ -183,7 +183,7 @@ internal fun fileDetailsOmitted(item: JsonObject): Boolean = item.string("type")
 internal fun retainHydratedActivities(incoming: JsonObject, previous: JsonObject): JsonObject {
     var next = incoming
     val incomingItems = presentationItems(incoming).associateBy { it.string("id") }
-    val identity = listOf("type", "sourceThreadId", "sourceItemId", "runId", "nodeId", "providerTurnId", "status", "startedAt", "completedAt", "updatedAt", "input", "fileName")
+    val identity = listOf("type", "sourceThreadId", "sourceItemId", "runId", "nodeId", "providerTurnId", "status", "startedAt", "completedAt", "updatedAt", "input", "fileName", "outputRevision", "revision", "viewedImagePath", "toolName")
     presentationItems(previous).filter { (it["_trefoilDetailsLoaded"] as? JsonPrimitive)?.booleanOrNull == true }.forEach { old ->
         val current = incomingItems[old.string("id")]
         if (current != null && identity.all { old[it] == current[it] } &&
@@ -257,10 +257,51 @@ internal fun conversationMessages(projection: JsonObject): List<ConversationMess
 }
 
 /** Dynamic tools permit arbitrary JSON values instead of strings. */
-private fun JsonObject.detailText(key: String): String? = when (val value = get(key)) {
+private fun JsonObject.detailText(key: String): String? = when (val value = get(key)?.let(::withoutImageData)) {
     null, JsonNull -> null
     is JsonPrimitive -> value.contentOrNull?.takeIf { it.isNotBlank() }
     else -> value.toString()
+}
+
+/** Image bytes are fetched only through assets, including when a provider sends full raw output. */
+private fun withoutImageData(value: JsonElement): JsonElement = when (value) {
+    is JsonArray -> JsonArray(value.map(::withoutImageData))
+    is JsonObject -> if (value.string("type") == "image") buildJsonObject {
+        put("type", "image")
+        imageBlockMime(value)?.let { put("mimeType", it) }
+    } else JsonObject(value.mapValues { withoutImageData(it.value) })
+    else -> value
+}
+
+private val toolImageMimes = setOf("image/jpeg", "image/png", "image/gif", "image/webp")
+private const val maxToolImages = 8
+
+private fun imageBlockMime(block: JsonObject): String? {
+    if (block.string("type") != "image") return null
+    // JS Predicate.isObject includes arrays: an array source cannot be a base64 source.
+    if (block["source"] is JsonArray) return null
+    val source = block["source"] as? JsonObject
+    if (source != null && source.string("type") != "base64") return null
+    val mime = (if (source == null) block["mimeType"] else source["media_type"]) as? JsonPrimitive
+    return mime?.takeIf { it.isString }?.content?.lowercase()?.takeIf { it in toolImageMimes }
+}
+
+/** Matches shared toolOutput.ts: image blocks, base64 source or direct MIME; raster only, first 8. */
+private fun toolImageMimes(value: JsonElement?): List<String> {
+    val blocks = when (value) {
+        is JsonArray -> value
+        is JsonObject -> value["content"] as? JsonArray ?: JsonArray(listOf(value))
+        null -> JsonArray(emptyList())
+        else -> JsonArray(listOf(value))
+    }
+    return blocks.asSequence().mapNotNull { (it as? JsonObject)?.let(::imageBlockMime) }.take(maxToolImages).toList()
+}
+
+/** Timestamps are the normal wire revision; hashing the body also handles unversioned updates. */
+private fun toolImageRevision(item: JsonObject): String {
+    val fields = listOf("status", "startedAt", "completedAt", "updatedAt", "input", "viewedImagePath", "output", "outputRevision", "revision")
+    val body = JsonObject(fields.mapNotNull { key -> item[key]?.let { key to it } }.toMap()).toString()
+    return java.security.MessageDigest.getInstance("SHA-256").digest(body.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 }
 
 internal fun toolActivities(projection: JsonObject): List<ToolActivity> {
@@ -272,6 +313,18 @@ internal fun toolActivities(projection: JsonObject): List<ToolActivity> {
         val primary = listOf("input", "text", "markdown", "fileName", "pattern", "patterns", "message", "reason")
             .firstNotNullOfOrNull { item.detailText(it) }.orEmpty()
         val output = item.detailText("output")
+        val sourceThreadId = item.optionalText("sourceThreadId") ?: projection.obj("thread").optionalText("id")
+        val sourceItemId = item.optionalText("sourceItemId") ?: item.optionalText("id")
+        val imageMimes = if (kind == "dynamic_tool") toolImageMimes(item["output"]) else emptyList()
+        val viewedPath = if (kind == "dynamic_tool") (item["viewedImagePath"] as? JsonPrimitive)?.contentOrNull?.let(::normalizeViewedImagePath) else null
+        val imageRevision = if (viewedPath != null || imageMimes.isNotEmpty()) toolImageRevision(item) else null
+        val images = buildList {
+            if (viewedPath != null) add(RemoteFileReference(path = viewedPath, fileName = viewedPath.substringAfterLast('/'), mimeType = imageMime(viewedPath), sourceThreadId = sourceThreadId, revision = imageRevision))
+            imageMimes.forEachIndexed { index, mime -> add(RemoteFileReference(
+                fileName = "tool-output-${index + 1}.${mime.substringAfter('/')}", mimeType = mime,
+                toolOutputItemId = sourceItemId, toolOutputIndex = index, revision = imageRevision, sourceThreadId = sourceThreadId,
+            )) }
+        }
         val failure = (item["failure"] as? JsonObject)?.optionalText("message") ?: item.detailText("failure")
         val diff = item.detailText("diffStr") ?: listOfNotNull(item.detailText("oldStr"), item.detailText("newStr"))
             .joinToString("\n\n").takeIf { it.isNotBlank() }
@@ -292,6 +345,21 @@ internal fun toolActivities(projection: JsonObject): List<ToolActivity> {
             oldStr = item.detailText("oldStr"), newStr = item.detailText("newStr"),
             searchResults = item.detailText("results"), failure = failure,
             sourceThreadId = item.optionalText("sourceThreadId"), sourceItemId = item.optionalText("sourceItemId"),
+            images = images,
         )
     }
+}
+
+private fun normalizeViewedImagePath(raw: String): String? {
+    val value = raw.trim()
+    val path = try {
+        if (value.startsWith("file:", ignoreCase = true)) java.net.URI(value).takeIf { it.scheme.equals("file", ignoreCase = true) && it.rawAuthority == null && it.rawQuery == null && it.rawFragment == null }?.path
+        else value
+    } catch (_: Exception) { null } ?: return null
+    if (!path.startsWith('/') || path.startsWith("//") || path.length > 1024 || path.any { it.isISOControl() || it == '\\' } || path.split('/').any { it == "." || it == ".." } || imageMime(path) == null) return null
+    return path
+}
+
+private fun imageMime(path: String): String? = when (path.substringAfterLast('.', "").lowercase()) {
+    "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; else -> null
 }

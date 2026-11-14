@@ -85,6 +85,51 @@ class FileSessionTest {
             assertEquals(4, f.server.requestCount)
         }
     }
+    @Test fun inheritedImagesMintSourceResourcesThroughExistingDownloadPolicy() = runBlocking {
+        Fixture().use { f ->
+            f.connect()
+            val projection = EffectRpc.json.parseToJsonElement("""{"thread":{"id":"t"},"visibleTurnItems":[{"position":1,"sourceThreadId":"parent","sourceItemId":"source","item":{"id":"visible","type":"dynamic_tool","viewedImagePath":"file:///tmp/a%20b.png","output":[{"type":"image","mimeType":"image/png"}]}}]}""").jsonObject
+            val images = toolActivities(projection).single().images
+            assertEquals(2, images.size)
+            images.forEach { f.client.downloadFile(it, ByteArrayOutputStream(), "e", "t") }
+            val frames = mutableListOf<JsonObject>(); while (true) frames += f.calls.tryReceive().getOrNull() ?: break
+            val resources = frames.filter { it.string("tag") == "assets.createUrl" }.map { it.obj("payload").obj("resource") }
+            assertEquals("media-file", resources[0].string("_tag"))
+            assertEquals("parent", resources[0].string("threadId"))
+            assertEquals("/tmp/a b.png", resources[0].string("path"))
+            assertEquals("tool-output-image", resources[1].string("_tag"))
+            assertEquals("parent", resources[1].string("threadId"))
+            assertEquals("source", resources[1].string("itemId"))
+            assertEquals(0, resources[1]["index"]?.jsonPrimitive?.int)
+            assertFalse("disposition" in resources[1])
+        }
+    }
+    @Test fun toolImageThreadSwitchRejectsLateSignedUrl() = runBlocking {
+        Fixture().use { f ->
+            f.connect(); f.holdAsset = true
+            val reference = RemoteFileReference(fileName = "image.png", toolOutputItemId = "native", toolOutputIndex = 0, sourceThreadId = "parent")
+            val download = async { runCatching { f.client.downloadFile(reference, ByteArrayOutputStream(), "e", "t") } }
+            val pending = withTimeout(5000) { f.held.receive() }
+            f.client.selectThread("other")
+            Fixture.complete(pending.first, pending.second, """{"relativeUrl":"/api/assets/signed/image.png","expiresAt":4102444800000}""")
+            assertTrue(download.await().isFailure)
+            assertEquals(4, f.server.requestCount)
+        }
+    }
+
+    @Test fun invalidToolImageReferencesNeverMintAnAsset() = runBlocking {
+        Fixture().use { f ->
+            f.connect()
+            val base = RemoteFileReference(fileName = "image.png", toolOutputItemId = "native", toolOutputIndex = 0)
+            val invalid = listOf(base.copy(toolOutputIndex = -1), base.copy(toolOutputIndex = 8), base.copy(toolOutputIndex = null),
+                base.copy(toolOutputItemId = ""), base.copy(path = "/tmp/a.png"), base.copy(attachmentId = "a"), base.copy(sourceThreadId = ""))
+            invalid.forEach { reference ->
+                assertTrue(runCatching { f.client.downloadFile(reference, ByteArrayOutputStream(), "e", "t") }.isFailure)
+            }
+            val frames = mutableListOf<JsonObject>(); while (true) frames += f.calls.tryReceive().getOrNull() ?: break
+            assertFalse(frames.any { it.string("tag") == "assets.createUrl" })
+        }
+    }
     @Test fun messageMappingPreservesAttachmentMetadataAndInheritedMessageItems() {
         val projection = EffectRpc.json.parseToJsonElement("""{"messages":[{"id":"m","role":"user","text":"","attachments":[{"type":"file","id":"a.apk","name":"app.apk","mimeType":"application/vnd.android.package-archive","sizeBytes":42}]}],"turnItems":[]}""").jsonObject
         val mapped = conversationMessages(projection).single().attachments.single()
