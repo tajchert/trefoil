@@ -71,4 +71,18 @@ data class UsageUiState(
  * One line for the connected machine card: lowest remaining window per enabled provider with limits,
  * e.g. "Claude 62% left · Codex 80% left"; "Usage" when no provider reports windows.
  */
-internal fun usageSummaryLine(providers: List<ProviderInstance>): String = "Usage" // TODO(usage-ui-screen): implement
+internal fun usageSummaryLine(providers: List<ProviderInstance>): String = providers.mapNotNull { provider ->
+    val remaining = provider.usageLimits?.windows?.minOfOrNull { it.remainingPercent }
+    if (!provider.enabled || remaining == null) null
+    else "${provider.displayName ?: provider.driver.replaceFirstChar { it.titlecase(Locale.ROOT) }} $remaining% left"
+}.joinToString(" · ").ifEmpty { "Usage" }
+
+internal fun usageProviderLabel(driver: String): String = driver.replaceFirstChar { it.titlecase(Locale.ROOT) }
+
+internal fun usageShare(value: Double, total: Double): Float =
+    if (!value.isFinite() || !total.isFinite() || total <= 0) 0f else (value / total).coerceIn(0.0, 1.0).toFloat()
+
+internal fun usageCheckedAgo(checkedAt: String, now: Long): String? = try {
+    val minutes = ((now - Instant.parse(checkedAt).toEpochMilli()).coerceAtLeast(0) / 60_000)
+    "Checked $minutes min ago"
+} catch (_: Exception) { null }
