@@ -258,6 +258,10 @@ class RetainedSessionTest {
             val reconnect = async { f.connect() }
             val config = withTimeout(5000) { f.configurations.receive() }
             assertEquals(ConnectionStatus.Connecting, f.client.state.value.connection)
+            assertEquals("working", f.client.state.value.selectedThreadId)
+            assertEquals("Working reply", f.client.state.value.messages.single().text)
+            assertEquals(30, f.client.state.value.threads.size)
+            assertFalse(f.client.state.value.canWrite)
             f.client.selectThread("open-0")
             assertEquals("Open reply", f.client.state.value.messages.single().text)
             assertFalse(f.client.state.value.canWrite)

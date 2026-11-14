@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tajchert.trefoil.core.model.*
+import kotlinx.coroutines.delay
 
 /** Width classes used by the shell: phone, two panes (foldable / tablet portrait), two panes + machine rail. */
 internal enum class ShellLayout { Phone, TwoPane, Rail }
@@ -159,24 +160,26 @@ private fun RailItem(environment: SavedEnvironment, current: Boolean, badge: Int
 /** Slim connection notice under the list header: amber while connecting/offline, red on errors. */
 @Composable
 internal fun ConnectionBanner(state: ClientState, reconnect: () -> Unit, modifier: Modifier = Modifier) {
-    if (state.connection == ConnectionStatus.Connected && state.error == null && !state.busy) return
-    if (state.environment == null && state.error == null && !state.busy) return
-    val c = Tf.colors
     val failed = state.error != null
-    val connecting = state.busy || state.connection == ConnectionStatus.Connecting || state.connection == ConnectionStatus.Reconnecting
+    val connecting = state.connection == ConnectionStatus.Connecting || state.connection == ConnectionStatus.Reconnecting
+    var delayed by remember(state.environment?.id, connecting) { mutableStateOf(false) }
+    LaunchedEffect(state.environment?.id, connecting) {
+        if (connecting) { delay(1_500); delayed = true }
+    }
+    if (!failed && (state.connection == ConnectionStatus.Connected || state.environment == null || (connecting && !delayed))) return
+    val c = Tf.colors
     val tone = if (failed) c.red else c.amber
     val background = if (failed) c.red.copy(alpha = if (c.isDark) .16f else .10f).compositeOver(c.bg) else c.amberSoft
     val message = state.error ?: when {
-        state.busy -> "Connecting…"
         state.connection == ConnectionStatus.Reconnecting -> "Reconnecting…"
         state.connection == ConnectionStatus.Connecting -> "Connecting…"
         else -> "Offline. Drafts stay here."
     }
     Row(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).background(background, RoundedCornerShape(12.dp))
-        .heightIn(min = 40.dp).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        .height(48.dp).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         if (connecting) WorkingSpinner(size = 16.dp, color = tone) else StatusDot(tone)
         Text(message, Modifier.weight(1f).padding(vertical = 8.dp), style = TrefoilType.meta, color = c.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (state.environment != null && !state.busy) TextButton(onClick = reconnect, colors = ButtonDefaults.textButtonColors(contentColor = tone),
+        if (state.environment != null) TextButton(onClick = reconnect, enabled = !connecting && !state.busy, colors = ButtonDefaults.textButtonColors(contentColor = tone),
             contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Reconnect", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
     }
 }

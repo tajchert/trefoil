@@ -71,6 +71,9 @@ fun TrefoilApp(
         var screenFullscreen by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(state.environment?.id, screenViewer.target) { if (screenViewer.target == null) screenFullscreen = false }
         var showThread by rememberSaveable { mutableStateOf(false) }
+        LaunchedEffect(state.selectedThreadId, draft) {
+            if (state.selectedThreadId == null && draft == null) showThread = false
+        }
         var submittedSsh by remember { mutableStateOf(false) }
         var submittedPair by remember { mutableStateOf(false) }
         LaunchedEffect(connectionAttempt) {
@@ -172,7 +175,7 @@ fun TrefoilApp(
                                     list(Modifier.width(listWidth).fillMaxHeight())
                                     VerticalDivider(color = c.line)
                                     detail(Modifier.weight(1f).fillMaxHeight())
-                                } else if (showThread) detail(Modifier.fillMaxSize())
+                                } else if (showThread && (state.selectedThreadId != null || draft != null)) detail(Modifier.fillMaxSize())
                                 else list(Modifier.fillMaxSize())
                             }
                         }
