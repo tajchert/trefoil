@@ -1,5 +1,9 @@
 # Android releases
 
+Release `0.13.0` (`versionCode = 21`) previews images inside expanded tool rows (local image
+reads and structured tool-output images) with full-screen zoom, and keeps hydrated images across
+compact snapshots. Check image retrieval against a real environment on a device.
+
 Release `0.12.1` (`versionCode = 20`) adds a distinct launcher picker preview image
 for each of the five usage widgets, using illustrative sample data.
 
