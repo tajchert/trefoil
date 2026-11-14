@@ -1,5 +1,8 @@
 # Android releases
 
+Release `0.12.1` (`versionCode = 20`) adds a distinct launcher picker preview image
+for each of the five usage widgets, using illustrative sample data.
+
 Release `0.12.0` (`versionCode = 19`) adds the Usage screen (provider limits, cost and tokens)
 and adaptive home screen widgets for limits, cost and tokens, shows working subagents in the
 conversation, groups consecutive commands and expands failed ones, and keeps live connections
