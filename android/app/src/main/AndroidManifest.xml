@@ -6,5 +6,25 @@
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <receiver android:name=".widget.LimitBarsWidgetReceiver" android:exported="true" android:label="@string/widget_limit_bars_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_limit_bars_info" />
+        </receiver>
+        <receiver android:name=".widget.LimitRingsWidgetReceiver" android:exported="true" android:label="@string/widget_limit_rings_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_limit_rings_info" />
+        </receiver>
+        <receiver android:name=".widget.UsageSummaryWidgetReceiver" android:exported="true" android:label="@string/widget_usage_summary_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_usage_summary_info" />
+        </receiver>
+        <receiver android:name=".widget.UsageChartWidgetReceiver" android:exported="true" android:label="@string/widget_usage_chart_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_usage_chart_info" />
+        </receiver>
+        <receiver android:name=".widget.UsageTableWidgetReceiver" android:exported="true" android:label="@string/widget_usage_table_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_usage_table_info" />
+        </receiver>
     </application>
 </manifest>

@@ -2,13 +2,18 @@ package com.tajchert.trefoil.core.model
 
 // Shapes adapted from T3 Code `packages/contracts/src/{usage,providerUsageLimits}.ts`
 // at 46449b5379a0089f4ef3ce85bce10a1d28beb4cb (MIT, see protocol/T3-LICENSE.txt).
+// @Serializable only so the app can persist the last snapshot for home screen widgets.
+
+import kotlinx.serialization.Serializable
 
 /** Usage page periods. [days] counts today; Today = 1. */
+@Serializable
 enum class UsageRange(val label: String, val days: Int) {
     Today("Today", 1), Week("7 days", 7), Month("30 days", 30),
 }
 
 /** T3 `UsageTokenTotals`: input = uncached + cache reads + cache writes; reasoning is already inside output. */
+@Serializable
 data class UsageTokens(
     val uncachedInput: Long = 0,
     val cachedInput: Long = 0,
@@ -25,6 +30,7 @@ data class UsageTokens(
 }
 
 /** One provider (when [model] is null) or provider+model row, summed over the period. */
+@Serializable
 data class UsageBreakdown(
     /** T3 `UsageProviderKind` wire literal, e.g. "claude", "codex"; unknown literals are kept. */
     val provider: String,
@@ -37,12 +43,15 @@ data class UsageBreakdown(
 )
 
 /** One local calendar day (`yyyy-MM-dd` in [UsageReport.timeZone]). Days without usage are present with zeros. */
+@Serializable
 data class UsageDayTotal(val day: String, val costUsd: Double = 0.0, val tokens: Long = 0)
 
 /** T3 `UsageSource` reduced to what the UI explains; [status] is "ok" | "missing" | "partial" | "failed" (unknown kept). */
+@Serializable
 data class UsageSourceState(val provider: String, val status: String, val message: String? = null)
 
 /** Historical cost/token usage of one environment for one period (`server.getUsageSummary`). */
+@Serializable
 data class UsageReport(
     val environmentId: String,
     val range: UsageRange,
@@ -69,6 +78,7 @@ data class UsageReport(
 )
 
 /** T3 `ServerProviderUsageWindow`; [kind] is "session" | "weekly" | "monthly" | "other" (unknown kept). */
+@Serializable
 data class UsageLimitWindow(
     val id: String,
     val kind: String,
@@ -82,6 +92,7 @@ data class UsageLimitWindow(
 }
 
 /** T3 `ServerProviderUsageLimits` for one provider instance (from `ServerProvider.usageLimits`). */
+@Serializable
 data class ProviderUsageLimits(
     val checkedAt: String,
     val windows: List<UsageLimitWindow> = emptyList(),

@@ -1,0 +1,25 @@
+<resources>
+    <!-- Home screen widget sizes. Each widget stream owns its own entries. -->
+    <dimen name="widget_max_resize_width">624dp</dimen>
+    <dimen name="widget_max_resize_height">600dp</dimen>
+    <dimen name="widget_limit_bars_min_width">250dp</dimen>
+    <dimen name="widget_limit_bars_min_height">110dp</dimen>
+    <dimen name="widget_limit_bars_min_resize_width">110dp</dimen>
+    <dimen name="widget_limit_bars_min_resize_height">40dp</dimen>
+    <dimen name="widget_limit_rings_min_width">110dp</dimen>
+    <dimen name="widget_limit_rings_min_height">110dp</dimen>
+    <dimen name="widget_limit_rings_min_resize_width">40dp</dimen>
+    <dimen name="widget_limit_rings_min_resize_height">40dp</dimen>
+    <dimen name="widget_usage_summary_min_width">180dp</dimen>
+    <dimen name="widget_usage_summary_min_height">110dp</dimen>
+    <dimen name="widget_usage_summary_min_resize_width">110dp</dimen>
+    <dimen name="widget_usage_summary_min_resize_height">40dp</dimen>
+    <dimen name="widget_usage_chart_min_width">250dp</dimen>
+    <dimen name="widget_usage_chart_min_height">110dp</dimen>
+    <dimen name="widget_usage_chart_min_resize_width">180dp</dimen>
+    <dimen name="widget_usage_chart_min_resize_height">110dp</dimen>
+    <dimen name="widget_usage_table_min_width">250dp</dimen>
+    <dimen name="widget_usage_table_min_height">180dp</dimen>
+    <dimen name="widget_usage_table_min_resize_width">180dp</dimen>
+    <dimen name="widget_usage_table_min_resize_height">110dp</dimen>
+</resources>

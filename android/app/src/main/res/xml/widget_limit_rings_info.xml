@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_limit_rings_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="@dimen/widget_limit_rings_min_width"
+    android:minHeight="@dimen/widget_limit_rings_min_height"
+    android:minResizeWidth="@dimen/widget_limit_rings_min_resize_width"
+    android:minResizeHeight="@dimen/widget_limit_rings_min_resize_height"
+    android:maxResizeWidth="@dimen/widget_max_resize_width"
+    android:maxResizeHeight="@dimen/widget_max_resize_height"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />
