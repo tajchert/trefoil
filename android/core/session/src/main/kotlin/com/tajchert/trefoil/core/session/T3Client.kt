@@ -24,6 +24,7 @@ class T3Client(
     private val scope: CoroutineScope,
     private val connectionTimeoutMillis: Long = 20_000,
     private val requestTimeoutMillis: Long = 30_000,
+    private val usageClockMillis: () -> Long = System::currentTimeMillis,
 ) : TrefoilClient {
     private val mutable = MutableStateFlow(ClientState())
     override val state: StateFlow<ClientState> = mutable.asStateFlow()
@@ -52,6 +53,11 @@ class T3Client(
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonElement>>()
     private val streams = ConcurrentHashMap<String, (JsonObject) -> Unit>()
     private val lifecycleLock = Any()
+    private data class UsageKey(val environmentId: String, val range: UsageRange, val timeZone: String, val untilDay: String)
+    private data class CachedUsage(val report: UsageReport, val at: Long)
+    private val usageCache = mutableMapOf<UsageKey, CachedUsage>()
+    private val limitsFinished = mutableMapOf<String, Long>()
+    private var limitsInFlight: Pair<Long, Deferred<Boolean>>? = null
     fun millisSinceLastPong(): Long? = synchronized(lifecycleLock) {
         if (socket == null) null else (System.currentTimeMillis() - pongAt).coerceAtLeast(0)
     }
@@ -67,7 +73,7 @@ class T3Client(
         val current = state.value
         current.environment?.id?.let { id ->
             environmentStates.remove(id)
-            environmentStates[id] = current.copy(canWrite = false, canRead = false, busy = false, error = null, screens = ScreenCatalog())
+            environmentStates[id] = current.copy(canWrite = false, canRead = false, canReadUsage = false, busy = false, error = null, screens = ScreenCatalog())
             while (environmentStates.size > 4) {
                 val evicted = environmentStates.keys.first()
                 environmentStates.remove(evicted)
@@ -119,9 +125,10 @@ class T3Client(
         disconnect()
         val epoch = generation
         synchronized(lifecycleLock) {
+            if (state.value.environment?.id != environment.id) usageCache.clear()
             val retained = environmentStates[environment.id] ?: ClientState()
             projection = JsonObject(emptyMap())
-            update { retained.copy(environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, canRead = false, busy = false, error = null, settlementUndo = null, threadActionsConfigured = false) }
+            update { retained.copy(environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, canRead = false, canReadUsage = false, busy = false, error = null, settlementUndo = null, threadActionsConfigured = false) }
         }
         try {
             val base = url(environment.baseUrl, environment.allowInsecureHttp)
@@ -131,6 +138,7 @@ class T3Client(
             require(session["authenticated"]?.jsonPrimitive?.booleanOrNull == true) { "Authorization expired; pair again" }
             val permissions = (session["permissions"] ?: session["scopes"]) as? JsonArray
             val mayOperate = permissions?.any { it.jsonPrimitive.content == "orchestration:operate" } == true
+            val mayReadUsage = permissions?.any { (it as? JsonPrimitive)?.contentOrNull == "diagnostics:read" } == true
             val ticket = try { fetch(ticketRequest("/api/auth/websocket-ticket/rpc")) } catch (error: HttpFailure) {
                 if (error.status != 404) throw error
                 fetch(ticketRequest("/api/auth/websocket-ticket"))
@@ -172,7 +180,7 @@ class T3Client(
                 provider.objects("models").map { ModelOption(provider.string("instanceId"), it.string("slug"), it.string("name"), modes) }
             }
             val defaultMode = RuntimeMode.fromWire(config.obj("settings").string("defaultRuntimeMode"))
-            update { it.copy(connection = ConnectionStatus.Connected, models = models, providers = providerInstances(config), defaultRuntimeMode = defaultMode, threadStopSupported = threadStop,
+            update { it.copy(connection = ConnectionStatus.Connected, canReadUsage = mayReadUsage, models = models, providers = providerInstances(config), defaultRuntimeMode = defaultMode, threadStopSupported = threadStop,
                 selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
             subscribe("orchestration.subscribeShell", buildJsonObject {
                 put("requestCompletionMarker", true)
@@ -202,7 +210,7 @@ class T3Client(
         }
     }
     private fun send(frame: JsonObject) { check(socket?.send(frame.toString()) == true) { "Connection is unavailable" } }
-    private suspend fun rpc(tag: String, payload: JsonObject, epoch: Long = generation, guard: () -> Boolean = { true }): JsonElement {
+    private suspend fun rpc(tag: String, payload: JsonObject, epoch: Long = generation, guard: () -> Boolean = { true }, timeoutMillis: Long = requestTimeoutMillis): JsonElement {
         check(pending.size < 64) { "Too many outstanding requests" }
         val id = serial.incrementAndGet().toString()
         val result = CompletableDeferred<JsonElement>(); pending[id] = result
@@ -212,7 +220,7 @@ class T3Client(
             context.ensureActive()
             check(epoch == generation && guard()) { "Session changed; command was not sent" }
             send(EffectRpc.request(id, tag, payload)); sent = true
-        }; return withTimeoutOrNull(requestTimeoutMillis) { result.await() } ?: throw RequestTimedOut() }
+        }; return withTimeoutOrNull(timeoutMillis) { result.await() } ?: throw RequestTimedOut() }
         finally { if (pending.remove(id) != null && sent) runCatching { send(EffectRpc.signal("Interrupt", id)) } }
     }
     private fun subscribe(tag: String, payload: JsonObject, handler: (JsonObject) -> Unit): String {
@@ -249,7 +257,7 @@ class T3Client(
         shellReady = false; threadReady = false; authorized = false; previewAuthorized = false
         resetScreens()
         undoPlan = null
-        update { it.copy(connection = ConnectionStatus.Error, canWrite = false, canRead = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null) }
+        update { it.copy(connection = ConnectionStatus.Error, canWrite = false, canRead = false, canReadUsage = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null) }
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
     }
@@ -264,7 +272,77 @@ class T3Client(
         pending.clear(); streams.clear(); threadSubscription = null; shellReady = false; threadReady = false; authorized = false; previewAuthorized = false
         resetScreens()
         undoPlan = null
-        update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, canRead = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null) }
+        update { it.copy(connection = ConnectionStatus.Disconnected, canWrite = false, canRead = false, canReadUsage = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null) }
+    }
+
+    private fun usageEnvironment(): SavedEnvironment {
+        if (socket == null || state.value.connection != ConnectionStatus.Connected) throw UsageException(UsageFailure.NotConnected, "Connect to view usage.")
+        return state.value.environment ?: throw UsageException(UsageFailure.NotConnected, "Connect to view usage.")
+    }
+
+    private suspend fun <T> usageRead(block: suspend () -> T): T = try { block() }
+    catch (error: CancellationException) { throw error }
+    catch (error: UsageException) { throw error }
+    catch (_: RequestTimedOut) { throw UsageException(UsageFailure.TimedOut, "Usage request timed out. Try again.") }
+    catch (_: Exception) { throw UsageException(UsageFailure.Failed, "This T3 server could not report usage.") }
+
+    override suspend fun usageReport(range: UsageRange, timeZone: String, awaitRefresh: Boolean): UsageReport = usageRead {
+        val captured = synchronized(lifecycleLock) {
+            val environment = usageEnvironment()
+            if (!state.value.canReadUsage) throw UsageException(UsageFailure.NoPermission, "This connection cannot read usage.")
+            generation to environment.id
+        }
+        val today = Instant.ofEpochMilli(usageClockMillis()).atZone(java.time.ZoneId.of(timeZone)).toLocalDate()
+        val (since, until) = usageWindow(range, today)
+        val key = UsageKey(captured.second, range, timeZone, until)
+        synchronized(lifecycleLock) {
+            check(captured.first == generation)
+            usageCache[key]?.takeIf { usageClockMillis() - it.at in 0 until 60_000 && (!awaitRefresh || !it.report.refreshing) }?.let { return@usageRead it.report }
+        }
+        val reply = rpc("server.getUsageSummary", buildJsonObject {
+            put("sinceDay", since); put("untilDay", until); put("timeZone", timeZone)
+            if (awaitRefresh) put("awaitRefresh", true) else put("provisional", true)
+        }, captured.first, timeoutMillis = if (awaitRefresh) 120_000 else requestTimeoutMillis).jsonObject
+        val report = usageSummary(reply, captured.second, range)
+        synchronized(lifecycleLock) {
+            check(captured.first == generation && captured.second == state.value.environment?.id)
+            // A slower provisional request must not replace a fresh result that arrived first.
+            if (!report.refreshing || usageCache[key]?.report?.refreshing != false) usageCache[key] = CachedUsage(report, usageClockMillis())
+        }
+        report
+    }
+
+    override suspend fun refreshUsageLimits(automatic: Boolean): Boolean {
+        val work = synchronized(lifecycleLock) {
+            val environment = usageEnvironment()
+            val epoch = generation
+            limitsInFlight?.takeIf { it.first == epoch }?.let { return@synchronized it.second }
+            if (automatic && limitsFinished[environment.id]?.let { usageClockMillis() - it in 0 until 300_000 } == true) return false
+            val result = CompletableDeferred<Boolean>()
+            limitsInFlight = epoch to result
+            scope.launch {
+                val outcome = runCatching {
+                    usageRead {
+                        val reply = rpc("server.refreshProviders", buildJsonObject {}, epoch).jsonObject
+                        val providers = reply["providers"] as? JsonArray ?: error("Missing providers")
+                        require(providers.all { it is JsonObject && it.string("instanceId").isNotBlank() && it.string("driver").isNotBlank() })
+                        val instances = providerInstances(reply)
+                        synchronized(lifecycleLock) {
+                            check(epoch == generation && environment.id == state.value.environment?.id)
+                            update { it.copy(providers = instances) }
+                        }
+                        true
+                    }
+                }
+                synchronized(lifecycleLock) {
+                    limitsFinished[environment.id] = usageClockMillis()
+                    if (limitsInFlight?.second === result) limitsInFlight = null
+                }
+                outcome.fold(result::complete, result::completeExceptionally)
+            }
+            result
+        }
+        return work.await()
     }
     override suspend fun selectThread(threadId: String) = synchronized(lifecycleLock) {
         if (state.value.selectedThreadId != threadId) { fileDownloads.forEach { it.cancel() }; fileDownloads.clear(); resetScreens(interrupt = true) }
