@@ -2,6 +2,7 @@
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_limit_rings_description"
     android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewImage="@drawable/widget_preview_limit_rings"
     android:minWidth="@dimen/widget_limit_rings_min_width"
     android:minHeight="@dimen/widget_limit_rings_min_height"
     android:minResizeWidth="@dimen/widget_limit_rings_min_resize_width"
