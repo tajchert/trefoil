@@ -24,21 +24,21 @@ class UsageClientTest {
         }
     }
 
-    @Test fun provisionalThenAwaitRefreshAndFreshCacheServesBothModes() = runBlocking {
+    @Test fun provisionalThenAwaitRefreshAndCacheServesOnlyProvisionalReads() = runBlocking {
         Fixture().use { f ->
             f.connect()
             assertTrue(f.client.state.value.canReadUsage)
             assertTrue(f.client.usageReport(UsageRange.Week, "UTC").refreshing)
             assertTrue(f.client.usageReport(UsageRange.Week, "UTC").refreshing)
             assertFalse(f.client.usageReport(UsageRange.Week, "UTC", true).refreshing)
-            f.client.usageReport(UsageRange.Week, "UTC", true)
-            f.client.usageReport(UsageRange.Week, "UTC")
-            assertEquals(2, f.reads.get())
+            f.client.usageReport(UsageRange.Week, "UTC", true) // explicit refresh bypasses the cache
+            assertFalse(f.client.usageReport(UsageRange.Week, "UTC").refreshing)
+            assertEquals(3, f.reads.get())
             assertEquals(true, f.payloads.receive()["provisional"]?.jsonPrimitive?.boolean)
             assertEquals(true, f.payloads.receive()["awaitRefresh"]?.jsonPrimitive?.boolean)
             f.now += 60_001
             f.client.usageReport(UsageRange.Week, "UTC")
-            assertEquals(3, f.reads.get())
+            assertEquals(4, f.reads.get())
         }
     }
 

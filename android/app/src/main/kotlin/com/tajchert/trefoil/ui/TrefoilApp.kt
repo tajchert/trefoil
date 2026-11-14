@@ -109,7 +109,7 @@ fun TrefoilApp(
             onMachines = { choosingEnvironment = true; showThread = false },
             onConnectMachine = { adding = true },
             onScreens = if (connected) ({ showScreens = true }) else null,
-            onUsage = if (state.connection == ConnectionStatus.Connected) ({ choosingEnvironment = false; showUsage = true; onOpenUsage() }) else null,
+            onUsage = if (state.connection == ConnectionStatus.Connected) ({ showUsage = true; onOpenUsage() }) else null,
             onDisconnect = if (connected) ({ onDisconnect(); choosingEnvironment = true; showThread = false }) else null,
         )
         val needsYou = remember(state.threads) { threadSections(threadShelves(state.threads), ThreadFilter.NeedsYou).sumOf { it.threads.size } }

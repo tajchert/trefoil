@@ -297,7 +297,7 @@ class T3Client(
         val key = UsageKey(captured.second, range, timeZone, until)
         synchronized(lifecycleLock) {
             check(captured.first == generation)
-            usageCache[key]?.takeIf { usageClockMillis() - it.at in 0 until 60_000 && (!awaitRefresh || !it.report.refreshing) }?.let { return@usageRead it.report }
+            if (!awaitRefresh) usageCache[key]?.takeIf { usageClockMillis() - it.at in 0 until 60_000 }?.let { return@usageRead it.report }
         }
         val reply = rpc("server.getUsageSummary", buildJsonObject {
             put("sinceDay", since); put("untilDay", until); put("timeZone", timeZone)

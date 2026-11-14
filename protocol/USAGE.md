@@ -17,8 +17,8 @@ are tolerated; malformed array elements are skipped. Prices remain estimates and
 unpriced record counts and pricing status are exposed to the UI.
 
 The memory-only summary cache lasts 60 seconds per environment, range, time zone
-and until-day. Non-refreshing results satisfy either read mode; refreshing results
-only satisfy provisional reads. Changing environments clears the cache.
+and until-day and serves provisional reads only; `awaitRefresh` reads (explicit
+Refresh, provisional follow-up) always ask the server. Changing environments clears the cache.
 
 `server.getConfig` providers contain `usageLimits`, including checked time, windows
 and unavailable notices. `server.refreshProviders {}` requires `orchestration:read`

@@ -16,7 +16,7 @@ class UsageController(private val scope: CoroutineScope, private val client: () 
     fun selectRange(range: UsageRange) {
         loadJob?.cancel()
         mutable.update { it.copy(range = range, loading = false, refreshing = false, failure = null, failureMessage = null) }
-        if (state.value.report == null || state.value.report?.refreshing == true) load(range)
+        load(range)
     }
     fun refresh() { limits(false); load(state.value.range, true) }
     fun retry() = load(state.value.range)

@@ -31,6 +31,20 @@ class ConnectionNavigationTest {
         compose.runOnIdle { assertEquals(1, opened) }
     }
 
+    @Test fun usageOpenedFromMachinesReturnsToMachinesOnBack() {
+        var back: androidx.activity.OnBackPressedDispatcher? = null
+        compose.setContent {
+            back = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+            TrefoilApp(fixture, listOf(environment), { _, _, _ -> }, {}, {}, {}, {}, { _, _, _ -> }, null, {}, {}, {}, {}, {}, {}, {})
+        }
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Machines").performClick()
+        compose.onNodeWithContentDescription("Open usage").performClick()
+        compose.onNodeWithText("Machines").assertDoesNotExist()
+        compose.runOnUiThread { back!!.onBackPressed() }
+        compose.onNodeWithText("Machines").assertExists()
+    }
+
     @Test fun connectedMachineShowsUsageLine() {
         compose.setContent { TrefoilTheme { MachinesScreen(fixture, listOf(environment), {}, {}, {}, {}, {}, {}, onUsage = {}) } }
         compose.onNodeWithContentDescription("Open usage").assertExists()

@@ -34,7 +34,8 @@ class UsageControllerTest {
         val first = controller.state.value.range
         val other = UsageRange.entries.first { it != first }
         controller.selectRange(other); yield(); controller.selectRange(first); yield()
-        assertEquals(4, fake.calls.size)
+        // Returning to a loaded range asks again; the client cache decides whether that hits the server.
+        assertEquals(6, fake.calls.size)
         controller.refresh(); yield()
         assertEquals(listOf(true, false), fake.limits)
         assertTrue(fake.calls.last().second)

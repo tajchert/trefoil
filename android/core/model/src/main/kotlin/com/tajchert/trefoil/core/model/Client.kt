@@ -181,7 +181,8 @@ interface TrefoilClient {
     suspend fun setModel(model: ModelOption) { error("Model changes are unavailable") }
     /**
      * Reads historical cost/token usage of the connected environment (`server.getUsageSummary`).
-     * [awaitRefresh] false asks for a provisional answer (`provisional: true`); true waits for a fresh scan.
+     * [awaitRefresh] false asks for a provisional answer (`provisional: true`, served from a 60 s cache); true always
+     * asks the server and waits for a fresh scan.
      * Read-only: failures throw [UsageException] and never change the connection state.
      */
     suspend fun usageReport(range: UsageRange, timeZone: String, awaitRefresh: Boolean = false): UsageReport =
