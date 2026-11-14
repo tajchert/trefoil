@@ -145,7 +145,7 @@ internal fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Bo
     val attention = activities.any { it.needsAttention }
     val expandable = activities.size > 1 || activities.any { it.hasExpandableDetail() }
     var expanded by rememberSaveable(activities.first().id) { mutableStateOf(initiallyExpanded || running || attention) }
-    LaunchedEffect(running || attention) { if (running || attention) expanded = true }
+    LaunchedEffect(running, attention) { if (running || attention) expanded = true }
     val visible = expanded && expandable
     val label = when {
         attention -> "Activity needs attention"
@@ -208,7 +208,7 @@ private fun CommandStack(activities: List<ToolActivity>, canLoadActivity: Boolea
     val attention = activities.any { it.needsAttention }
     val expandable = activities.any { !it.input.isNullOrBlank() || it.hasCommandOutput() || it.isRunning }
     var expanded by rememberSaveable(activities.first().id) { mutableStateOf(running || attention) }
-    LaunchedEffect(running || attention) { if (running || attention) expanded = true }
+    LaunchedEffect(running, attention) { if (running || attention) expanded = true }
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().then(if (expandable) Modifier.clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse commands" else "Expand commands") { expanded = !expanded } else Modifier).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (running) WorkingSpinner(size = 16.dp) else Icon(if (attention) TfIcons.Close else TfIcons.Terminal, null, Modifier.size(16.dp), tint = if (attention) c.red else c.muted)

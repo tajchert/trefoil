@@ -33,6 +33,15 @@ class ConversationUiTest {
         compose.onNodeWithText("Exit code 2").assertIsDisplayed()
     }
 
+    @Test fun collapsedRunningCommandGroupReopensWhenItFails() {
+        val activity = mutableStateOf(ToolActivity("command", "Run", kind = "command_execution", status = "running", input = "check"))
+        compose.setContent { MaterialTheme { ActivityStack(listOf(activity.value)) } }
+        compose.onNodeWithContentDescription("Collapse commands").performClick()
+        compose.onNodeWithText("check").assertDoesNotExist()
+        compose.runOnIdle { activity.value = activity.value.copy(status = "completed", output = "failure output", exitCode = 2) }
+        compose.onNodeWithText("failure output").assertIsDisplayed()
+    }
+
     @Test fun subagentFooterTracksLiveAgentsAndOpensSheet() {
         val agent = Subagent("a", "fixture", status = "running", driver = "codex")
         val state = mutableStateOf(ClientState(selectedThreadId = "fixture", subagents = listOf(agent)))
