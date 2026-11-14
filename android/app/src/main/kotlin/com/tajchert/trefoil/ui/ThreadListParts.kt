@@ -111,7 +111,7 @@ internal fun ThreadFilterChips(filter: ThreadFilter, counts: Map<ThreadFilter, I
         TfChip("Needs you", { onFilter(if (filter == ThreadFilter.NeedsYou) ThreadFilter.All else ThreadFilter.NeedsYou) }, selected = filter == ThreadFilter.NeedsYou,
             count = counts[ThreadFilter.NeedsYou], leading = { StatusDot(c.amber) })
         TfChip("Working", { onFilter(if (filter == ThreadFilter.Working) ThreadFilter.All else ThreadFilter.Working) }, selected = filter == ThreadFilter.Working,
-            count = counts[ThreadFilter.Working], leading = { WorkingSpinner(size = 16.dp, animated = false) })
+            count = counts[ThreadFilter.Working], leading = { StatusDot(c.blue) })
         if (projects.isNotEmpty()) Box {
             TfChip(project?.title ?: "Project", { projectsOpen = true }, selected = project != null,
                 trailing = { Icon(TfIcons.ChevronDown, null, Modifier.size(14.dp)) })
