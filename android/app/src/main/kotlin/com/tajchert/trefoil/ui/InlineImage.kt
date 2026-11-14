@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -60,20 +61,26 @@ internal fun InlineOrCard(reference: RemoteFileReference, modifier: Modifier = M
     }
     when (val current = load) {
         ImageLoad.Failed -> DownloadFileCard(reference, modifier)
-        ImageLoad.Loading -> Box(
-            modifier.fillMaxWidth().aspectRatio(1.6f).clip(RoundedCornerShape(14.dp)).background(Tf.colors.s1).border(1.dp, Tf.colors.line, RoundedCornerShape(14.dp)),
-            contentAlignment = Alignment.Center,
-        ) { if (ui.canDownload) CircularProgressIndicator(Modifier.size(22.dp), color = Tf.colors.muted, strokeWidth = 2.dp) }
-        is ImageLoad.Ready -> LoadedImage(reference, current.bitmap, modifier)
+        ImageLoad.Loading -> InlineImageLoading(ui.canDownload, modifier)
+        is ImageLoad.Ready -> LoadedImageContent(reference, remember(current.bitmap) { current.bitmap.asImageBitmap() }, modifier)
     }
 }
 
+/** Stateless placeholder shown while an inline image is fetched. */
 @Composable
-private fun LoadedImage(reference: RemoteFileReference, bitmap: Bitmap, modifier: Modifier) {
+internal fun InlineImageLoading(canDownload: Boolean, modifier: Modifier = Modifier) {
+    Box(
+        modifier.fillMaxWidth().aspectRatio(1.6f).clip(RoundedCornerShape(14.dp)).background(Tf.colors.s1).border(1.dp, Tf.colors.line, RoundedCornerShape(14.dp)),
+        contentAlignment = Alignment.Center,
+    ) { if (canDownload) CircularProgressIndicator(Modifier.size(22.dp), color = Tf.colors.muted, strokeWidth = 2.dp) }
+}
+
+/** Stateless loaded image with its download overlay; takes a decoded bitmap so it can be previewed. */
+@Composable
+internal fun LoadedImageContent(reference: RemoteFileReference, image: ImageBitmap, modifier: Modifier = Modifier) {
     val ui = LocalFileDownloadUi.current
     val shape = RoundedCornerShape(14.dp)
-    val image = remember(bitmap) { bitmap.asImageBitmap() }
-    val ratio = (bitmap.width.toFloat() / bitmap.height).coerceIn(0.5f, 3f)
+    val ratio = (image.width.toFloat() / image.height).coerceIn(0.5f, 3f)
     var fullScreen by remember { mutableStateOf(false) }
     val key = ui.environmentId?.let { e -> ui.threadId?.let { DownloadKey(e, it, reference.identity) } }
     val state = ui.downloads[key]
@@ -97,7 +104,7 @@ private fun LoadedImage(reference: RemoteFileReference, bitmap: Bitmap, modifier
 }
 
 @Composable
-private fun FullScreenImage(name: String, image: androidx.compose.ui.graphics.ImageBitmap, onClose: () -> Unit) {
+private fun FullScreenImage(name: String, image: ImageBitmap, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offsetX by remember { mutableFloatStateOf(0f) }
