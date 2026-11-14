@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 
 internal const val BACKGROUND_CONNECTION_GRACE_MS = 60_000L
+internal const val RETAINED_CONNECTION_FRESHNESS_MS = 20_000L
 
 class TrefoilViewModel(application: Application) : AndroidViewModel(application) {
     private val client = T3Client(viewModelScope)
@@ -342,7 +343,8 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         val environment = resumeEnvironment
         resumeEnvironment = null
         if (environment != null && _sshLogin.value == null &&
-            (state.value.connection != ConnectionStatus.Connected || state.value.environment?.id != environment.id)) connect(environment)
+            (state.value.connection != ConnectionStatus.Connected || state.value.environment?.id != environment.id ||
+                (client.millisSinceLastPong()?.let { it > RETAINED_CONNECTION_FRESHNESS_MS } != false))) connect(environment)
         probeMachines(skipId = environment?.id)
     }
 

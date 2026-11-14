@@ -17,6 +17,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import java.time.Duration
+import java.lang.reflect.Proxy
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -35,11 +36,26 @@ class TrefoilViewModelLifecycleTest {
         mutable = T3Client::class.java.getDeclaredField("mutable").apply { isAccessible = true }.get(client) as MutableStateFlow<ClientState>
         mutable.value = ClientState(environment = environment, connection = ConnectionStatus.Connected,
             selectedThreadId = "thread", canWrite = true)
+        val socketType = Class.forName("okhttp3.WebSocket")
+        val socket = Proxy.newProxyInstance(socketType.classLoader, arrayOf(socketType)) { _, method, _ ->
+            when (method.returnType) { java.lang.Boolean.TYPE -> true; java.lang.Long.TYPE -> 0L; else -> null }
+        }
+        T3Client::class.java.getDeclaredField("socket").apply { isAccessible = true }.set(client, socket)
+        setPongAge(0)
     }
 
     @After fun tearDown() { model.viewModelScope.cancel(); client.close() }
 
     private fun advance(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms))
+    private fun setPongAge(age: Long) = T3Client::class.java.getDeclaredField("pongAt").apply { isAccessible = true }.setLong(client, System.currentTimeMillis() - age)
+
+    @Test fun stalePongReconnectsEvenWhenStateIsConnected() {
+        model.pause()
+        setPongAge(20_001)
+        model.resume()
+        assertEquals(ConnectionPhase.Testing, model.connectionAttempt.value.phase)
+        assertTrue(model.connectionAttempt.value.id > 0)
+    }
 
     @Test fun resumeWithinGraceKeepsLiveSessionAndDoesNotStartAConnectionAttempt() {
         model.pause()

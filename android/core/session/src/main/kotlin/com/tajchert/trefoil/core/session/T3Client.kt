@@ -29,7 +29,7 @@ class T3Client(
     override val state: StateFlow<ClientState> = mutable.asStateFlow()
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).build()
     private val fileDownloads = mutableSetOf<Call>()
-    private var socket: WebSocket? = null
+    @Volatile private var socket: WebSocket? = null
     @Volatile private var generation = 0L
     private var heartbeat: Job? = null
     private var threadSubscription: String? = null
@@ -47,11 +47,14 @@ class T3Client(
     private var previewScreenSubscription: String? = null
     private var deviceScreenSubscription: String? = null
     private val optionalScreenStreams = mutableSetOf<String>()
-    private var pongAt = 0L
+    @Volatile private var pongAt = 0L
     private val serial = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonElement>>()
     private val streams = ConcurrentHashMap<String, (JsonObject) -> Unit>()
     private val lifecycleLock = Any()
+    fun millisSinceLastPong(): Long? = synchronized(lifecycleLock) {
+        if (socket == null) null else (System.currentTimeMillis() - pongAt).coerceAtLeast(0)
+    }
     private var refreshSignals: Channel<Unit>? = null
     private var refreshJob: Job? = null
     private var projection = JsonObject(emptyMap())
