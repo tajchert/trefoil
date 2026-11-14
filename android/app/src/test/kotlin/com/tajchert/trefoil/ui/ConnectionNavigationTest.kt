@@ -20,6 +20,22 @@ class ConnectionNavigationTest {
     private val fixture = ClientState(environment = environment, connection = ConnectionStatus.Connected,
         projects = listOf(Project("p", "Project")), threads = listOf(ThreadSummary("t", "p", "Fixture thread")))
 
+    @Test fun usageOpensFromSettingsAndConnectedMachine() {
+        var opened = 0
+        compose.setContent {
+            TrefoilApp(fixture, listOf(environment), { _, _, _ -> }, {}, {}, {}, {}, { _, _, _ -> }, null, {}, {}, {}, {}, {}, {}, {},
+                onOpenUsage = { opened++ })
+        }
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Usage").performClick()
+        compose.runOnIdle { assertEquals(1, opened) }
+    }
+
+    @Test fun connectedMachineShowsUsageLine() {
+        compose.setContent { TrefoilTheme { MachinesScreen(fixture, listOf(environment), {}, {}, {}, {}, {}, {}, onUsage = {}) } }
+        compose.onNodeWithContentDescription("Open usage").assertExists()
+    }
+
     @Test fun restoredPhoneDetailWithoutSelectionReturnsToList() {
         val state = mutableStateOf(fixture)
         var restoring = false
