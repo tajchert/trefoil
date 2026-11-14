@@ -59,7 +59,7 @@ cd android
 ./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
 ```
 
-[Signing and release instructions](docs/RELEASING.md) · [Isolated T3 interoperability check](docs/reference/live-wire-validation.md)
+[Signing and release instructions](docs/RELEASING.md) · [Screenshot testing](docs/SCREENSHOT_TESTING.md) · [Isolated T3 interoperability check](docs/reference/live-wire-validation.md)
 
 Loopback HTTP is allowed for local development only; Android Emulator reaches the host through `10.0.2.2`. Direct public endpoints require HTTPS. Private IPv4 LAN HTTP requires explicit consent; SSH carries loopback HTTP inside its encrypted tunnel.
 
