@@ -1,18 +1,26 @@
 # Trefoil
 
-Native T3 Code mobile client. Android uses Kotlin/Compose and application ID
-`com.tajchert.trefoil`; iOS is future work.
+Native T3 Code mobile client. Android uses Kotlin/Compose (`android/`, application ID `com.tajchert.trefoil`); iOS is future work. Protocol contracts are pinned in `protocol/`; core modules are under `android/core/`, UI and app code under `android/app/`.
 
-- T3 projects/threads/conversations are the product model; terminals are separate.
-- Contracts are pinned and documented in `protocol/`. Tolerate additive fields.
-- Never replay mutations after disconnect. Reconcile unknown outcomes.
-- Never log tokens, pairing credentials or conversation content. Persist tokens encrypted.
-- SSH host keys must be verified before authentication; changed keys fail closed. Never store ephemeral tunnel ports as durable endpoints.
-- Never install, restart, update or stop a remote T3 server during onboarding.
-- Direct private-LAN HTTP requires explicit saved consent and literal RFC1918 IP validation. Public HTTP stays blocked; never bypass the shared URL policy.
-- Disable writes while disconnected/stale; one environment's failure must not corrupt another.
-- Tests must use fixtures or an isolated T3 instance; never modify real user threads.
+## Setup and checks
+
+Use Java 21 and Gradle 9.8. When `android/local.properties` is absent, set `ANDROID_HOME=/opt/homebrew/share/android-commandlinetools` for this checkout. Run Gradle from `android/`.
+
+Relevant existing checks:
+
+```sh
+./gradlew :core:model:test :core:ssh:test :core:protocol:test :core:session:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+```
+
+Focused thread image coverage belongs in `:core:model:test`, `:core:session:test`, and `:app:testDebugUnitTest`; use fixtures or an isolated T3 instance, never real user threads. This repository has no configured formatter or code generator. Follow neighboring Kotlin formatting and run `git diff --check`. Debug builds do not normally run R8.
+
+## Product and safety constraints
+
+- T3 projects, threads, and conversations are the product model; terminals are separate. Tolerate additive fields.
+- Never replay mutations after disconnect; reconcile unknown outcomes. Disable writes while disconnected or stale, and isolate failures by environment.
+- Never log tokens, pairing credentials, or conversation content. Persist tokens encrypted.
+- Verify SSH host keys before authentication; changed keys fail closed. Never store ephemeral tunnel ports as durable endpoints.
+- Never install, restart, update, or stop a remote T3 server during onboarding.
+- Direct private-LAN HTTP requires explicit saved consent and literal RFC1918 IP validation. Public HTTP stays blocked; never bypass shared URL policy.
 - Preserve Flocket Apache-2.0 and T3 MIT attribution on adapted code.
-- Use Conventional Commits and verify relevant tests before committing.
-
-Build from `android/`: `./gradlew :core:model:test :core:ssh:test :core:protocol:test :core:session:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`.
+- Use Conventional Commits and verify relevant checks before committing.
