@@ -204,17 +204,18 @@ private fun ToolActivity.hasCommandOutput(): Boolean =
 private fun CommandStack(activities: List<ToolActivity>, canLoadActivity: Boolean, onLoadActivity: (String) -> Unit) {
     val c = Tf.colors
     val running = activities.any { it.isRunning }
+    val attention = activities.any { it.needsAttention }
     val expandable = activities.any { !it.input.isNullOrBlank() || it.hasCommandOutput() || it.isRunning }
-    var expanded by rememberSaveable(activities.first().id) { mutableStateOf(running) }
+    var expanded by rememberSaveable(activities.first().id) { mutableStateOf(running || attention) }
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().then(if (expandable) Modifier.clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse commands" else "Expand commands") { expanded = !expanded } else Modifier).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (running) WorkingSpinner(size = 16.dp) else Icon(TfIcons.Terminal, null, Modifier.size(16.dp), tint = c.muted)
+            if (running) WorkingSpinner(size = 16.dp) else Icon(if (attention) TfIcons.Close else TfIcons.Terminal, null, Modifier.size(16.dp), tint = if (attention) c.red else c.muted)
             Text(if (running) "Running command…" else "Ran ${activities.size} command${if (activities.size == 1) "" else "s"}", Modifier.weight(1f), style = TrefoilType.meta, color = c.muted, maxLines = 1)
             if (expandable) Icon(TfIcons.ChevronDown, if (expanded) "Collapse commands" else "Expand commands", Modifier.size(18.dp), tint = c.muted)
         }
         if (expanded && expandable) activities.forEach { activity ->
             key(activity.id) {
-                var detailExpanded by rememberSaveable(activity.id) { mutableStateOf(false) }
+                var detailExpanded by rememberSaveable(activity.id) { mutableStateOf(activity.needsAttention) }
                 val hasOutput = activity.hasCommandOutput()
                 Row(Modifier.fillMaxWidth().then(if (hasOutput) Modifier.clickable(role = Role.Button) { detailExpanded = !detailExpanded } else Modifier).padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (activity.isRunning) WorkingSpinner(size = 14.dp) else Icon(if (activity.needsAttention) TfIcons.Close else TfIcons.Check, null, Modifier.size(14.dp), tint = if (activity.needsAttention) c.red else c.green)
