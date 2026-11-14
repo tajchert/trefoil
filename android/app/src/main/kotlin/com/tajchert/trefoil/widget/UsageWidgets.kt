@@ -4,6 +4,11 @@ import android.content.Context
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.updateAll
+import com.tajchert.trefoil.widget.limits.LimitBarsWidget
+import com.tajchert.trefoil.widget.limits.LimitRingsWidget
+import com.tajchert.trefoil.widget.usage.UsageChartWidget
+import com.tajchert.trefoil.widget.usage.UsageSummaryWidget
+import com.tajchert.trefoil.widget.usage.UsageTableWidget
 
 /** Every usage widget; [updateAll] re-renders all placed instances. */
 object UsageWidgets {

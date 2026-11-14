@@ -1,0 +1,7 @@
+<resources>
+    <!-- Owned by the limits widgets stream. -->
+    <string name="widget_limit_bars_label">Usage limits</string>
+    <string name="widget_limit_bars_description">Remaining provider limits per window, with time until reset</string>
+    <string name="widget_limit_rings_label">Limit gauges</string>
+    <string name="widget_limit_rings_description">Circular gauges of how much of each provider limit is left</string>
+</resources>
