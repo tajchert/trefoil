@@ -35,4 +35,29 @@ those identifiers and usage payloads must not be displayed or logged.
 
 Out of scope: credit redemption, cliproxy usage-limit sources, pooled accounts,
 model filters, price overrides, hourly charts, per-thread context usage and
-background probing of disconnected environments.
+general background probing of disconnected environments.
+
+## Home screen widgets
+
+Widgets persist one last-known snapshot for the most recently connected machine in
+`noBackupFilesDir/usage-widget.v1.json`: machine name and environment ID, enabled
+providers and their limits, Today/Week/Month usage reports, timestamps and a generic
+refresh error. Switching machines replaces it; forgetting that machine deletes it.
+Disconnecting retains it for stale display. Credentials remain in the encrypted
+environment vault; widget snapshots contain no credentials, endpoints or conversation
+content. Source messages and provider error messages are omitted from persistence.
+
+While widgets are placed, the connected app reads provisional reports and automatically
+refreshes limits at most once per ten minutes per environment. A unique WorkManager
+periodic job (KEEP, network required) runs approximately every 30 minutes; Android may
+defer it. Receivers schedule it on first placement, app startup restores it when widgets
+exist, and removing the last widget cancels it. The refresh button enqueues unique
+one-time work (KEEP, network required), bypassing the ten-minute snapshot age check.
+Both worker modes skip network if the app holds a live connection to that machine;
+periodic work also skips snapshots younger than ten minutes. Every run re-renders widgets.
+
+Background reads use saved direct connections, or complete saved SSH profiles with a
+pinned host key and saved authentication. They never prompt, change trust, pair, or
+install/start/stop a server. Changed SSH keys fail closed. T3Client enforces the same
+HTTPS/private-LAN consent policy as foreground connections. Failed reads retain old
+data with a generic error and never disconnect the app. No usage payloads are logged.

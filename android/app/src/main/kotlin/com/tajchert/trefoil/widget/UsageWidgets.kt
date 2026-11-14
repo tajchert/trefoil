@@ -1,6 +1,7 @@
 package com.tajchert.trefoil.widget
 
 import android.content.Context
+import kotlinx.coroutines.*
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.updateAll
@@ -16,8 +17,23 @@ object UsageWidgets {
     suspend fun updateAll(context: Context) { all.forEach { runCatching { it.updateAll(context) } } }
 }
 
-class LimitBarsWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = LimitBarsWidget() }
-class LimitRingsWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = LimitRingsWidget() }
-class UsageSummaryWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = UsageSummaryWidget() }
-class UsageChartWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = UsageChartWidget() }
-class UsageTableWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = UsageTableWidget() }
+abstract class ScheduledUsageWidgetReceiver : GlanceAppWidgetReceiver() {
+    override fun onEnabled(context: Context) {
+        super.onEnabled(context)
+        UsageWidgetRefresh.schedulePeriodic(context)
+    }
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        val pending = goAsync()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try { if (!usageWidgetsPlaced(context)) UsageWidgetRefresh.cancelPeriodic(context) }
+            finally { pending.finish() }
+        }
+    }
+}
+
+class LimitBarsWidgetReceiver : ScheduledUsageWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = LimitBarsWidget() }
+class LimitRingsWidgetReceiver : ScheduledUsageWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = LimitRingsWidget() }
+class UsageSummaryWidgetReceiver : ScheduledUsageWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = UsageSummaryWidget() }
+class UsageChartWidgetReceiver : ScheduledUsageWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = UsageChartWidget() }
+class UsageTableWidgetReceiver : ScheduledUsageWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = UsageTableWidget() }

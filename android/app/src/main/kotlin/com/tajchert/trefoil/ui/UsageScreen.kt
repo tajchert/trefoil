@@ -36,8 +36,9 @@ internal fun UsageScreen(
     onSelectRange: (UsageRange) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    initialTab: Int = 0,
 ) {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var tab by rememberSaveable(initialTab) { mutableIntStateOf(initialTab.coerceIn(0, 2)) }
     val c = Tf.colors
     BackHandler(onBack = onBack)
     Column(modifier.fillMaxSize().background(c.bg)) {

@@ -56,6 +56,7 @@ fun TrefoilApp(
     onUsageRange: (UsageRange) -> Unit = {},
     onRefreshUsage: () -> Unit = {},
     onRetryUsage: () -> Unit = {},
+    usageOpenRequest: Pair<Long, com.tajchert.trefoil.widget.UsageWidgetTab>? = null,
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -73,7 +74,13 @@ fun TrefoilApp(
         // First prompt typed in the new-thread sheet; the draft conversation sends it via its composer.
         var seedPrompt by rememberSaveable { mutableStateOf<String?>(null) }
         var showScreens by rememberSaveable(state.environment?.id) { mutableStateOf(false) }
-        var showUsage by rememberSaveable(state.environment?.id) { mutableStateOf(false) }
+        var showUsage by rememberSaveable { mutableStateOf(false) }
+        LaunchedEffect(usageOpenRequest) {
+            if (usageOpenRequest != null) { showUsage = true; choosingEnvironment = false; onOpenUsage() }
+        }
+        LaunchedEffect(state.environment?.id, state.canReadUsage) {
+            if (showUsage && state.canReadUsage) onOpenUsage()
+        }
         var screenFullscreen by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(state.environment?.id, screenViewer.target) { if (screenViewer.target == null) screenFullscreen = false }
         var showThread by rememberSaveable { mutableStateOf(false) }
@@ -133,7 +140,10 @@ fun TrefoilApp(
                     }
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         when {
-                            showUsage -> UsageScreen(state, usage, { showUsage = false }, onRefreshUsage, onUsageRange, onRetryUsage, Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars))
+                            showUsage -> key(usageOpenRequest?.first) {
+                                UsageScreen(state, usage, { showUsage = false }, onRefreshUsage, onUsageRange, onRetryUsage,
+                                    Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars), initialTab = usageOpenRequest?.second?.ordinal ?: 0)
+                            }
                             machines -> Column(Modifier.fillMaxSize().statusBarsPadding()) {
                                 ConnectionBanner(state, onReconnect)
                                 MachinesScreen(state, savedEnvironments, { choosingEnvironment = false; onConnect(it) }, onForget, { pairing = true }, { sshConnecting = true },
