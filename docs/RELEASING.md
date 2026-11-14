@@ -1,5 +1,10 @@
 # Android releases
 
+Release `0.12.0` (`versionCode = 19`) adds the Usage screen (provider limits, cost and tokens)
+and adaptive home screen widgets for limits, cost and tokens, shows working subagents in the
+conversation, groups consecutive commands and expands failed ones, and keeps live connections
+through a short background grace period. Check widget refresh against a real environment on a device.
+
 Release `0.11.0` (`versionCode = 18`) adds the thread Agents sheet: a header chip and menu item
 list this turn's subagents, rows open child threads, back returns to the parent, provider-native
 children are read-only, and eligible agents can be stopped. Check the sheet against a real
