@@ -41,7 +41,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { model.pause(); super.onStop() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleUsageIntent(intent)
+        // Only a fresh launch consumes the widget intent; recreation (rotation) must not reopen Usage.
+        if (savedInstanceState == null) handleUsageIntent(intent)
         enableEdgeToEdge()
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
