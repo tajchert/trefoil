@@ -96,23 +96,27 @@ internal fun ShellMenuButton(state: ClientState, actions: ShellActions, tint: Co
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) { Icon(TfIcons.Settings, "Settings", Modifier.size(22.dp), tint = tint) }
-        DropdownMenu(open, { open = false }) {
-            if (actions.onScreens != null) DropdownMenuItem(text = { Text("Screen sessions") }, enabled = !state.busy,
-                leadingIcon = { Icon(TfIcons.Screens, null, Modifier.size(20.dp)) }, onClick = { open = false; actions.onScreens.invoke() })
-            if (actions.onUsage != null) DropdownMenuItem(text = { Text("Usage") }, onClick = { open = false; actions.onUsage.invoke() })
-            DropdownMenuItem(text = { Text("Machines") }, leadingIcon = { Icon(TfIcons.Desktop, null, Modifier.size(20.dp)) },
-                onClick = { open = false; actions.onMachines() })
-            DropdownMenuItem(text = { Text("Connect machine") }, enabled = !state.busy, leadingIcon = { Icon(TfIcons.Plus, null, Modifier.size(20.dp)) },
-                onClick = { open = false; actions.onConnectMachine() })
-            if (actions.onDisconnect != null) DropdownMenuItem(text = { Text("Disconnect machine") },
-                leadingIcon = { Icon(TfIcons.Disconnect, null, Modifier.size(20.dp)) }, onClick = { open = false; actions.onDisconnect.invoke() })
-        }
+        DropdownMenu(open, { open = false }) { ShellMenuItems(state, actions) { open = false } }
     }
 }
 
 /** Short rail label: the first word of the machine name, at most 8 characters. */
 internal fun railLabel(name: String): String =
     name.trim().split(Regex("\\s+")).firstOrNull { it.isNotBlank() }?.take(8) ?: "Machine"
+
+/** Items of the settings menu; split out so previews can render them without a popup window. */
+@Composable
+internal fun ColumnScope.ShellMenuItems(state: ClientState, actions: ShellActions, close: () -> Unit) {
+    if (actions.onScreens != null) DropdownMenuItem(text = { Text("Screen sessions") }, enabled = !state.busy,
+        leadingIcon = { Icon(TfIcons.Screens, null, Modifier.size(20.dp)) }, onClick = { close(); actions.onScreens.invoke() })
+    if (actions.onUsage != null) DropdownMenuItem(text = { Text("Usage") }, onClick = { close(); actions.onUsage.invoke() })
+    DropdownMenuItem(text = { Text("Machines") }, leadingIcon = { Icon(TfIcons.Desktop, null, Modifier.size(20.dp)) },
+        onClick = { close(); actions.onMachines() })
+    DropdownMenuItem(text = { Text("Connect machine") }, enabled = !state.busy, leadingIcon = { Icon(TfIcons.Plus, null, Modifier.size(20.dp)) },
+        onClick = { close(); actions.onConnectMachine() })
+    if (actions.onDisconnect != null) DropdownMenuItem(text = { Text("Disconnect machine") },
+        leadingIcon = { Icon(TfIcons.Disconnect, null, Modifier.size(20.dp)) }, onClick = { close(); actions.onDisconnect.invoke() })
+}
 
 /** 80dp machine rail (≥1200dp): Trefoil mark, one item per saved environment, add, settings. */
 @Composable

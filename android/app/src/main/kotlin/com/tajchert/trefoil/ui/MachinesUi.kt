@@ -155,16 +155,26 @@ private fun MachineCard(
         Box {
             IconButton(onClick = { menu = true }, Modifier.size(40.dp)) { Icon(TfIcons.More, "Options for ${environment.name}", Modifier.size(20.dp), tint = c.muted) }
             DropdownMenu(menu, { menu = false }, containerColor = c.sheet, shape = RoundedCornerShape(16.dp)) {
-                if (live && onUsage != null) DropdownMenuItem(text = { Text("Usage") }, onClick = { menu = false; onUsage() })
-                if (current) DropdownMenuItem(
-                    text = { Text("Disconnect") }, leadingIcon = { Icon(TfIcons.Disconnect, null, Modifier.size(20.dp)) },
-                    onClick = { menu = false; onDisconnect() })
-                DropdownMenuItem(
-                    text = { Text("Forget", color = c.red) }, enabled = !state.busy, leadingIcon = { Icon(TfIcons.Trash, null, Modifier.size(20.dp), tint = c.red) },
-                    onClick = { menu = false; onForget() })
+                MachineMenuItems(current, live, state, onUsage, onDisconnect, onForget) { menu = false }
             }
         }
     }
+}
+
+/** Items of the machine card overflow menu; split out so previews can render them without a popup window. */
+@Composable
+internal fun ColumnScope.MachineMenuItems(
+    current: Boolean, live: Boolean, state: ClientState,
+    onUsage: (() -> Unit)?, onDisconnect: () -> Unit, onForget: () -> Unit, close: () -> Unit,
+) {
+    val c = Tf.colors
+    if (live && onUsage != null) DropdownMenuItem(text = { Text("Usage") }, onClick = { close(); onUsage() })
+    if (current) DropdownMenuItem(
+        text = { Text("Disconnect") }, leadingIcon = { Icon(TfIcons.Disconnect, null, Modifier.size(20.dp)) },
+        onClick = { close(); onDisconnect() })
+    DropdownMenuItem(
+        text = { Text("Forget", color = c.red) }, enabled = !state.busy, leadingIcon = { Icon(TfIcons.Trash, null, Modifier.size(20.dp), tint = c.red) },
+        onClick = { close(); onForget() })
 }
 
 @Composable
