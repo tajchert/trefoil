@@ -51,6 +51,7 @@ internal fun Conversation(
     onOpenParent: (() -> Unit)? = null,
     /** "Subagent of <parent title>" header subtitle for subagent children. */
     subtitle: String? = null,
+    onOpenAgents: (() -> Unit)? = null,
 ) {
     val c = Tf.colors
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
@@ -105,6 +106,7 @@ internal fun Conversation(
     val entries = remember(state.messages, state.activities, state.activeRunId, state.runs) {
         foldConversationTimeline(conversationTimeline(state.messages, state.activities), state.activeRunId, state.runs)
     }
+    val roster = remember(state.runs, state.subagents, draft) { if (draft == null) subagentRoster(state.runs, state.subagents) else null }
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val nearBottom by remember { derivedStateOf { !list.canScrollForward || (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= list.layoutInfo.totalItemsCount - 2 } }
@@ -167,10 +169,13 @@ internal fun Conversation(
                             is ConversationEntry.Work -> CompletedWork(entry, canLoadActivity, onLoadActivity)
                         }
                     }
-                    if (state.activeRunId != null && state.messages.none { it.streaming }) item(key = "working") {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            WorkingSpinner(size = 16.dp)
-                            Text("Working…", style = TrefoilType.meta, color = c.blue)
+                    if ((state.activeRunId != null && state.messages.none { it.streaming }) || (roster?.liveCount ?: 0) > 0) item(key = "working") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (state.activeRunId != null && state.messages.none { it.streaming }) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                WorkingSpinner(size = 16.dp)
+                                Text("Working…", style = TrefoilType.meta, color = c.blue)
+                            }
+                            if (roster != null) SubagentWorkingRow(roster, onOpenAgents)
                         }
                     }
                     items(state.requests, key = { "request:${it.id}" }) { RequestCard(it, canSend, respond) }

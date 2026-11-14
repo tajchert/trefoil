@@ -39,6 +39,11 @@ class SubagentPresentationTest {
         assertEquals(listOf("c", "m", "z"), ids(r))
     }
 
+    @Test fun workingAgentsSortBeforeEarlierSettledAgents() {
+        val r = subagentRoster(listOf(active), listOf(agent("done", "completed", startedAt = at(0)), agent("z", startedAt = at(5)), agent("a", startedAt = at(5))))
+        assertEquals(listOf("a", "z", "done"), ids(r))
+    }
+
     @Test fun fallsBackToMostRecentlyUpdatedRun() {
         val r = subagentRoster(listOf(finished, run("run-2", "completed")), listOf(
             agent("old", "completed", updatedAt = at(1)), agent("recent", "completed", runId = "run-2", updatedAt = at(9))))

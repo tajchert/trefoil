@@ -25,6 +25,16 @@ import org.robolectric.annotation.Config
 class ConversationUiTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun subagentFooterTracksLiveAgentsAndOpensSheet() {
+        val agent = Subagent("a", "fixture", status = "running", driver = "codex")
+        val state = mutableStateOf(ClientState(selectedThreadId = "fixture", subagents = listOf(agent)))
+        var opened = false
+        compose.setContent { MaterialTheme { Conversation(state.value, {}, {}, { _, _, _ -> }, onOpenAgents = { opened = true }) } }
+        compose.onNodeWithContentDescription("1 subagent, 1 working, 0 done").performClick()
+        compose.runOnIdle { assertTrue(opened); state.value = state.value.copy(subagents = listOf(agent.copy(status = "completed"))) }
+        compose.onNodeWithContentDescription("1 subagent, 1 working, 0 done").assertDoesNotExist()
+    }
+
     @Test fun draftWaitsForNewServerMessageAndNeverResendsOnReconnection() {
         val state = mutableStateOf(ClientState(selectedThreadId = "fixture", canWrite = true, connection = ConnectionStatus.Connected,
             messages = listOf(ConversationMessage("old", "user", "Hello"))))
