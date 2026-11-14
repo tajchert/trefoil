@@ -58,6 +58,45 @@ class ToolImagesTest {
         assertNotEquals(image.identity, toolActivities(reloaded).single().images.single().identity)
     }
 
+    @Test fun summarizedInputRetainsHydratedImagesUntilCompactRevisionChanges() {
+        val fullInput = "x".repeat(16_385)
+        val compactItem = buildJsonObject {
+            put("id", "i"); put("type", "dynamic_tool"); put("status", "completed")
+            put("updatedAt", "one"); put("outputOmitted", true)
+            put("input", buildJsonObject { put("summary", "x".repeat(159) + "…"); put("truncated", true) })
+        }
+        val full = buildJsonObject {
+            put("id", "i"); put("type", "dynamic_tool"); put("input", fullInput)
+            put("output", json("""{"content":[{"type":"text","text":"caption"},{"type":"image","mimeType":"image/png"}]}"""))
+        }
+        listOf(false, true).forEach { inherited ->
+            fun snapshot(item: JsonObject) = if (inherited) buildJsonObject {
+                put("visibleTurnItems", buildJsonArray { add(buildJsonObject {
+                    put("position", 4); put("sourceThreadId", "parent"); put("sourceItemId", "native")
+                    put("item", item)
+                }) })
+            } else projection(item.toString())
+            val compact = snapshot(compactItem)
+            var loaded = hydrateActivityProjection(compact, "i", full)
+            val activity = toolActivities(loaded).single()
+            assertEquals(fullInput, activity.input)
+            assertEquals(if (inherited) "parent" else "child", activity.images.single().sourceThreadId)
+            repeat(2) {
+                loaded = retainHydratedActivities(compact, loaded)
+                assertEquals(activity, toolActivities(loaded).single())
+            }
+            // Input changes must invalidate even when lifecycle timestamps have not changed.
+            val changedInput = buildJsonObject { put("summary", "changed"); put("truncated", true) }
+            val changed = snapshot(JsonObject(compactItem + ("input" to changedInput)))
+            val invalidated = toolActivities(retainHydratedActivities(changed, loaded)).single()
+            assertTrue(invalidated.outputOmitted)
+            assertTrue(invalidated.images.isEmpty())
+            assertNull(invalidated.output)
+            val changedTimestamp = snapshot(JsonObject(compactItem + ("updatedAt" to JsonPrimitive("two"))))
+            assertTrue(toolActivities(retainHydratedActivities(changedTimestamp, loaded)).single().images.isEmpty())
+        }
+    }
+
     @Test fun outputContentAndViewedPathRevisionChangeReferenceIdentity() {
         val first = projection("""{"id":"i","type":"dynamic_tool","viewedImagePath":"/tmp/a.png","updatedAt":"one","output":{"type":"image","mimeType":"image/png","data":"ONE"}}""")
         val next = json(first.toString().replace("\"one\"", "\"two\"").replace("\"ONE\"", "\"TWO\""))

@@ -155,7 +155,14 @@ internal fun presentationItems(projection: JsonObject): List<JsonObject> {
 internal fun hydrateActivityProjection(projection: JsonObject, itemId: String, fullItem: JsonObject): JsonObject {
     val metadata = setOf("id", "threadId", "runId", "nodeId", "providerThreadId", "providerTurnId", "nativeItemRef",
         "parentItemId", "ordinal", "status", "title", "startedAt", "completedAt", "updatedAt", "sourceThreadId", "sourceItemId")
-    fun hydrate(item: JsonObject) = JsonObject(item + fullItem.filterKeys { it !in metadata } + mapOf("outputOmitted" to JsonPrimitive(false), "_trefoilDetailsLoaded" to JsonPrimitive(true)))
+    fun hydrate(item: JsonObject): JsonObject {
+        // Detail reads expand summarized input; retain its wire identity, including absent vs null.
+        val compactInput = item["_trefoilCompactInput"] as? JsonObject ?: JsonObject(item.filterKeys { it == "input" })
+        return JsonObject(item + fullItem.filterKeys { it !in metadata } + mapOf(
+            "outputOmitted" to JsonPrimitive(false), "_trefoilDetailsLoaded" to JsonPrimitive(true),
+            "_trefoilCompactInput" to compactInput,
+        ))
+    }
     return JsonObject(projection + buildMap {
         (projection["visibleTurnItems"] as? JsonArray)?.let { rows ->
             put("visibleTurnItems", JsonArray(rows.map { element ->
@@ -186,7 +193,8 @@ internal fun retainHydratedActivities(incoming: JsonObject, previous: JsonObject
     val identity = listOf("type", "sourceThreadId", "sourceItemId", "runId", "nodeId", "providerTurnId", "status", "startedAt", "completedAt", "updatedAt", "input", "fileName", "outputRevision", "revision", "viewedImagePath", "toolName")
     presentationItems(previous).filter { (it["_trefoilDetailsLoaded"] as? JsonPrimitive)?.booleanOrNull == true }.forEach { old ->
         val current = incomingItems[old.string("id")]
-        if (current != null && identity.all { old[it] == current[it] } &&
+        val compactInput = old["_trefoilCompactInput"] as? JsonObject ?: old
+        if (current != null && identity.all { (if (it == "input") compactInput else old)[it] == current[it] } &&
             ((current["outputOmitted"] as? JsonPrimitive)?.booleanOrNull == true || fileDetailsOmitted(current))) {
             next = hydrateActivityProjection(next, current.string("id"), old)
         }
