@@ -18,6 +18,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 
+internal const val BACKGROUND_CONNECTION_GRACE_MS = 60_000L
+internal const val RETAINED_CONNECTION_FRESHNESS_MS = 20_000L
+
 class TrefoilViewModel(application: Application) : AndroidViewModel(application) {
     private val client = T3Client(viewModelScope)
     val screenSessions = com.tajchert.trefoil.ui.screens.ScreenSessionCoordinator(viewModelScope, client)
@@ -50,6 +53,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     private var tunnel: SshTunnel? = null
     private var tunnelMonitor: Job? = null
     private var connectionJob: Job? = null
+    private var backgroundDisconnectJob: Job? = null
     private var selectedEnvironment: SavedEnvironment? = null
     private var resumeEnvironment: SavedEnvironment? = null
     private var foreground = true
@@ -94,6 +98,7 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun connectionAction(failure: String, kind: ConnectionKind = ConnectionKind.Saved, block: suspend () -> Unit) {
+        backgroundDisconnectJob?.cancel(); backgroundDisconnectJob = null
         val epoch = ++connectionEpoch
         autoConnectPending = false
         connectionJob?.cancel()
@@ -312,20 +317,34 @@ class TrefoilViewModel(application: Application) : AndroidViewModel(application)
         vaultMutex.withLock { save(_environments.value.filterNot { it.id == environment.id }) }
     }
     fun pause() {
+        if (!foreground) return
         screenSessions.pause()
         foreground = false
         probeJob?.cancel(); probeJob = null
         _machineProbes.update { probes -> probes.mapValues { (_, probe) -> if (probe == MachineProbe.Checking) MachineProbe.Unknown else probe } }
-        resumeEnvironment = if (state.value.connection in setOf(ConnectionStatus.Connected, ConnectionStatus.Connecting, ConnectionStatus.Reconnecting)) selectedEnvironment else null
+        resumeEnvironment = if (state.value.connection in setOf(ConnectionStatus.Connected, ConnectionStatus.Connecting, ConnectionStatus.Reconnecting))
+            selectedEnvironment ?: state.value.environment?.forStorage() else null
+        // Cancel pending handshakes/trust, but give an established socket and SSH tunnel time to stay live.
         if (sshFilePickerActive) { connectionEpoch++; connectionJob?.cancel(); _working.value = false } else cancelSsh()
-        viewModelScope.launch { connectionMutex.withLock { disconnectCurrent() } }
+        val epoch = connectionEpoch
+        backgroundDisconnectJob?.cancel()
+        backgroundDisconnectJob = viewModelScope.launch {
+            delay(BACKGROUND_CONNECTION_GRACE_MS)
+            connectionMutex.withLock {
+                // A resume, explicit disconnect or newer connection attempt supersedes this timeout.
+                if (!foreground && epoch == connectionEpoch) disconnectCurrent()
+            }
+        }
     }
     fun resume() {
         foreground = true
+        backgroundDisconnectJob?.cancel(); backgroundDisconnectJob = null
         screenSessions.resume()
         val environment = resumeEnvironment
         resumeEnvironment = null
-        if (environment != null && _sshLogin.value == null) connect(environment)
+        if (environment != null && _sshLogin.value == null &&
+            (state.value.connection != ConnectionStatus.Connected || state.value.environment?.id != environment.id ||
+                (client.millisSinceLastPong()?.let { it > RETAINED_CONNECTION_FRESHNESS_MS } != false))) connect(environment)
         probeMachines(skipId = environment?.id)
     }
 

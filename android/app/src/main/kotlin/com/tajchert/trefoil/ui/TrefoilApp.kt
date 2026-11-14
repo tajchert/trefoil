@@ -71,6 +71,9 @@ fun TrefoilApp(
         var screenFullscreen by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(state.environment?.id, screenViewer.target) { if (screenViewer.target == null) screenFullscreen = false }
         var showThread by rememberSaveable { mutableStateOf(false) }
+        LaunchedEffect(state.selectedThreadId, draft) {
+            if (state.selectedThreadId == null && draft == null) showThread = false
+        }
         var submittedSsh by remember { mutableStateOf(false) }
         var submittedPair by remember { mutableStateOf(false) }
         LaunchedEffect(connectionAttempt) {
@@ -155,6 +158,7 @@ fun TrefoilApp(
                                                     draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, sendFailed = sendFailed,
                                                     onBack = if (backParent != null) ({ select(backParent.id) }) else if (twoPane) null else ({ cancelDraft(); showThread = false }),
                                                     onOpenParent = parentThread?.let { p -> { select(p.id) } },
+                                                    onOpenAgents = if (roster != null) ({ showAgents = true }) else null,
                                                     subtitle = selectedThread?.takeIf { draft == null && it.relationshipToParent == "subagent" }?.let { t -> parentThread?.let { "Subagent of ${it.title}" } ?: "Subagent" },
                                                     actions = {
                                                         if (selectedThreadActionsVisible(twoPane, showThread, draft, state.selectedThreadId)) {
@@ -171,7 +175,7 @@ fun TrefoilApp(
                                     list(Modifier.width(listWidth).fillMaxHeight())
                                     VerticalDivider(color = c.line)
                                     detail(Modifier.weight(1f).fillMaxHeight())
-                                } else if (showThread) detail(Modifier.fillMaxSize())
+                                } else if (showThread && (state.selectedThreadId != null || draft != null)) detail(Modifier.fillMaxSize())
                                 else list(Modifier.fillMaxSize())
                             }
                         }

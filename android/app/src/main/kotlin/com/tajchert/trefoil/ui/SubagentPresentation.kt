@@ -49,7 +49,7 @@ internal fun subagentRoster(runs: List<ConversationRun>, subagents: List<Subagen
     val latestStartedRunHasAgents = latestStartedRun != null && eligible.any { it.runId == latestStartedRun.id }
     val runId = activeRun?.id ?: if (latestStartedRunHasAgents) latestStartedRun?.id else latestUpdated.runId
     val roster = eligible.filter { it.runId == runId || it.isActive || it.workflow != null }
-        .sortedWith(compareBy<Subagent> { subagentOrderKey(it) }.thenBy { it.id })
+        .sortedWith(compareBy<Subagent> { !it.isActive }.thenBy { subagentOrderKey(it) }.thenBy { it.id })
     if (roster.isEmpty()) return null
     val live = roster.count { it.isActive }
     val settled = roster.count { !it.isActive && it.isTerminal }
