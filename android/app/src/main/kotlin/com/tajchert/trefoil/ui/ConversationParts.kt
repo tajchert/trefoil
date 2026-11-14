@@ -136,11 +136,16 @@ internal fun CompletedWork(work: ConversationEntry.Work, canLoadActivity: Boolea
 
 @Composable
 internal fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Boolean = false, canLoadActivity: Boolean = false, onLoadActivity: (String) -> Unit = {}) {
-    var expanded by rememberSaveable(activities.first().id) { mutableStateOf(initiallyExpanded) }
+    if (activities.all { it.kind == "command_execution" }) {
+        CommandStack(activities, canLoadActivity, onLoadActivity)
+        return
+    }
     val c = Tf.colors
     val running = activities.any { it.isRunning }
     val attention = activities.any { it.needsAttention }
-    val visible = expanded || running || attention
+    val expandable = activities.size > 1 || activities.any { it.hasExpandableDetail() }
+    var expanded by rememberSaveable(activities.first().id) { mutableStateOf(initiallyExpanded || running || attention) }
+    val visible = expanded && expandable
     val label = when {
         attention -> "Activity needs attention"
         running -> "Working"
@@ -153,7 +158,7 @@ internal fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Bo
     val counts = remember(activities) { activityCounts(activities) }
     Column(Modifier.fillMaxWidth()) {
         OutlinedPanel {
-            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse activity" else "Expand activity") { expanded = !expanded }.padding(horizontal = 12.dp, vertical = 6.dp),
+            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).then(if (expandable) Modifier.clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse activity" else "Expand activity") { expanded = !expanded } else Modifier).padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 when {
                     running -> WorkingSpinner(size = 18.dp)
@@ -174,13 +179,48 @@ internal fun ActivityStack(activities: List<ToolActivity>, initiallyExpanded: Bo
                     Text("+$added", style = TrefoilType.mono, color = c.green)
                     Text("−$removed", style = TrefoilType.mono, color = c.red)
                 } else if (activities.size > 1) ActivityCountsRow(counts)
-                Icon(TfIcons.ChevronDown, if (expanded) "Collapse activity" else "Expand activity", Modifier.size(18.dp), tint = c.muted)
+                if (expandable) Icon(TfIcons.ChevronDown, if (expanded) "Collapse activity" else "Expand activity", Modifier.size(18.dp), tint = c.muted)
             }
             if (visible) activities.forEach { activity ->
                 key(activity.id) {
                     HorizontalDivider(color = c.line)
                     ActivityDetail(activity, canLoadActivity, onLoadActivity)
                 }
+            }
+        }
+    }
+}
+
+internal fun ToolActivity.hasExpandableDetail(): Boolean =
+    listOf(input, output, diffStr, oldStr, newStr, searchResults, failure).any { !it.isNullOrBlank() } ||
+        (detail.isNotBlank() && !((kind == "checkpoint" || title.equals("checkpoint", true)) && detail.trim().equals("completed", true))) ||
+        outputOmitted || detailsOmitted || exitCode != null
+
+private fun ToolActivity.hasCommandOutput(): Boolean =
+    listOf(output, diffStr, oldStr, newStr, searchResults, failure).any { !it.isNullOrBlank() } ||
+        detail.isNotBlank() || outputOmitted || detailsOmitted || exitCode != null
+
+@Composable
+private fun CommandStack(activities: List<ToolActivity>, canLoadActivity: Boolean, onLoadActivity: (String) -> Unit) {
+    val c = Tf.colors
+    val running = activities.any { it.isRunning }
+    val expandable = activities.any { !it.input.isNullOrBlank() || it.hasCommandOutput() || it.isRunning }
+    var expanded by rememberSaveable(activities.first().id) { mutableStateOf(running) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().then(if (expandable) Modifier.clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse commands" else "Expand commands") { expanded = !expanded } else Modifier).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (running) WorkingSpinner(size = 16.dp) else Icon(TfIcons.Terminal, null, Modifier.size(16.dp), tint = c.muted)
+            Text(if (running) "Running command…" else "Ran ${activities.size} command${if (activities.size == 1) "" else "s"}", Modifier.weight(1f), style = TrefoilType.meta, color = c.muted, maxLines = 1)
+            if (expandable) Icon(TfIcons.ChevronDown, if (expanded) "Collapse commands" else "Expand commands", Modifier.size(18.dp), tint = c.muted)
+        }
+        if (expanded && expandable) activities.forEach { activity ->
+            key(activity.id) {
+                var detailExpanded by rememberSaveable(activity.id) { mutableStateOf(false) }
+                val hasOutput = activity.hasCommandOutput()
+                Row(Modifier.fillMaxWidth().then(if (hasOutput) Modifier.clickable(role = Role.Button) { detailExpanded = !detailExpanded } else Modifier).padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (activity.isRunning) WorkingSpinner(size = 14.dp) else Icon(if (activity.needsAttention) TfIcons.Close else TfIcons.Check, null, Modifier.size(14.dp), tint = if (activity.needsAttention) c.red else c.green)
+                    Text(activity.input?.lineSequence()?.firstOrNull().orEmpty().ifBlank { activityHeadline(activity) }, style = TrefoilType.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (detailExpanded && hasOutput) ActivityDetail(activity, canLoadActivity, onLoadActivity)
             }
         }
     }

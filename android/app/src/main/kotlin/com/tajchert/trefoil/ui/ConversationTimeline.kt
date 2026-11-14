@@ -51,10 +51,10 @@ internal fun conversationTimeline(messages: List<ConversationMessage>, activitie
         } else if (item.activity != null) {
             val previous = result.lastOrNull() as? ConversationEntry.Activities
             val activity = item.activity
-            val separate = activity.needsAttention || activity.standalone
+            val separate = (activity.needsAttention && activity.kind != "command_execution") || activity.standalone
             val previousActivity = previous?.activities?.lastOrNull()
-            val previousSeparate = previousActivity?.let { it.needsAttention || it.standalone } == true
-            if (previous != null && !separate && !previousSeparate && activity.runId != null && previousActivity?.runId == activity.runId && previousActivity?.runAttemptId == activity.runAttemptId && (previousActivity?.kind == "subagent") == (activity.kind == "subagent") && (activity.kind != "subagent" || previousActivity?.providerTurnId == activity.providerTurnId)) {
+            val previousSeparate = previousActivity?.let { (it.needsAttention && it.kind != "command_execution") || it.standalone } == true
+            if (previous != null && !separate && !previousSeparate && activity.runId != null && previousActivity?.runId == activity.runId && previousActivity?.runAttemptId == activity.runAttemptId && (previousActivity?.kind == "command_execution") == (activity.kind == "command_execution") && (previousActivity?.kind == "subagent") == (activity.kind == "subagent") && (activity.kind != "subagent" || previousActivity?.providerTurnId == activity.providerTurnId)) {
                 result[result.lastIndex] = previous.copy(activities = previous.activities + item.activity)
             } else result += ConversationEntry.Activities(listOf(item.activity))
         }

@@ -5,6 +5,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationTimelineTest {
+    @Test fun commandsGroupOnlyAcrossConsecutiveCommandsInSameRun() {
+        val entries = conversationTimeline(listOf(ConversationMessage("m", "assistant", "Hi", ordinal = 3)), listOf(
+            ToolActivity("a", "Command", kind = "command_execution", status = "failed", runId = "r", ordinal = 0),
+            ToolActivity("b", "Command", kind = "command_execution", runId = "r", ordinal = 1),
+            ToolActivity("c", "Read", kind = "file_read", runId = "r", ordinal = 2),
+            ToolActivity("d", "Command", kind = "command_execution", runId = "r", ordinal = 4)))
+        assertEquals(listOf("activity:a", "activity:c", "message:m", "activity:d"), entries.map { it.key })
+        assertEquals(2, (entries.first() as ConversationEntry.Activities).activities.size)
+    }
+    @Test fun emptyAndCompletedCheckpointHaveNoExpandableDetail() {
+        assertFalse(ToolActivity("a", "Run command").hasExpandableDetail())
+        assertFalse(ToolActivity("b", "Checkpoint", detail = "completed").hasExpandableDetail())
+        assertTrue(ToolActivity("c", "Checkpoint", diffStr = "+change").hasExpandableDetail())
+    }
     @Test fun filesInCommentaryStayVisibleAfterSuccessfulRunFolds() {
         val entries = conversationTimeline(listOf(
             ConversationMessage("artifact", "assistant", "Path: `/fixture/output.apk`", runId = "r", ordinal = 1),
