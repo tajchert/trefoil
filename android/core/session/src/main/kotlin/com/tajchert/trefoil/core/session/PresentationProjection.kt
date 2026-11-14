@@ -15,6 +15,7 @@ internal fun providerInstances(config: JsonObject): List<ProviderInstance> = con
         instanceId = provider.string("instanceId"), driver = provider.string("driver"),
         displayName = provider.optionalText("displayName"), accentColor = provider.optionalText("accentColor"),
         enabled = (provider["enabled"] as? JsonPrimitive)?.booleanOrNull != false,
+        usageLimits = (provider["usageLimits"] as? JsonObject)?.let(::providerUsageLimits),
     )
 }
 
