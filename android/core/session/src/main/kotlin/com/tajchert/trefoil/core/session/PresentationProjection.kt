@@ -189,6 +189,8 @@ internal fun presentationItems(projection: JsonObject): List<JsonObject> {
         }
 }
 
+private fun JsonObject.detailsLoaded() = (this["_trefoilDetailsLoaded"] as? JsonPrimitive)?.booleanOrNull == true
+
 /** Replace only the fetched body; position, execution identity and current lifecycle remain authoritative. */
 internal fun hydrateActivityProjection(projection: JsonObject, itemId: String, fullItem: JsonObject): JsonObject {
     val metadata = setOf("id", "threadId", "runId", "nodeId", "providerThreadId", "providerTurnId", "nativeItemRef",
@@ -227,9 +229,13 @@ internal fun fileDetailsOmitted(item: JsonObject): Boolean = item.string("type")
 /** Keep fetched bodies while the server repeats the same stripped revision, never after an update. */
 internal fun retainHydratedActivities(incoming: JsonObject, previous: JsonObject): JsonObject {
     var next = incoming
+    // Most refreshes have no fetched bodies to keep: a raw scan skips rebuilding either projection's rows then.
+    val rawRows = (previous["visibleTurnItems"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.get("item") as? JsonObject } ?: previous.objects("turnItems")
+    if (rawRows.none { it.detailsLoaded() }) return incoming
+    val loaded = presentationItems(previous).filter { it.detailsLoaded() }
     val incomingItems = presentationItems(incoming).associateBy { it.string("id") }
     val identity = listOf("type", "sourceThreadId", "sourceItemId", "runId", "nodeId", "providerTurnId", "status", "startedAt", "completedAt", "updatedAt", "input", "fileName", "outputRevision", "revision", "viewedImagePath", "toolName")
-    presentationItems(previous).filter { (it["_trefoilDetailsLoaded"] as? JsonPrimitive)?.booleanOrNull == true }.forEach { old ->
+    loaded.forEach { old ->
         val current = incomingItems[old.string("id")]
         val compactInput = old["_trefoilCompactInput"] as? JsonObject ?: old
         if (current != null && identity.all { (if (it == "input") compactInput else old)[it] == current[it] } &&
@@ -263,8 +269,8 @@ private fun attemptResolver(projection: JsonObject): (JsonObject) -> String? {
     }
 }
 
-internal fun conversationMessages(projection: JsonObject): List<ConversationMessage> {
-    val items = presentationItems(projection)
+/** [items] is [presentationItems] of [projection], passed in when the caller already built it. */
+internal fun conversationMessages(projection: JsonObject, items: List<JsonObject> = presentationItems(projection)): List<ConversationMessage> {
     val resolveAttempt = attemptResolver(projection)
     val messageItems = items.filter { it.optionalText("messageId") != null }.associateBy { it.string("messageId") }
     val messages = projection.objects("messages")
@@ -351,9 +357,10 @@ private fun toolImageRevision(item: JsonObject): String {
     return java.security.MessageDigest.getInstance("SHA-256").digest(body.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 }
 
-internal fun toolActivities(projection: JsonObject): List<ToolActivity> {
+/** [items] is [presentationItems] of [projection], passed in when the caller already built it. */
+internal fun toolActivities(projection: JsonObject, items: List<JsonObject> = presentationItems(projection)): List<ToolActivity> {
     val resolveAttempt = attemptResolver(projection)
-    return presentationItems(projection)
+    return items
     .filter { it.string("type") !in setOf("message", "user_message", "assistant_message", "user_input_request", "approval_request") }
     .map { item ->
         val kind = item.string("type")

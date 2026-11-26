@@ -320,6 +320,36 @@ class RetainedSessionTest {
         }
     }
 
+    @Test fun revisitedThreadRepaintsItsCachedRowsReadOnlyAndAnUnchangedSnapshotKeepsTheirInstances() = runBlocking {
+        Fixture().use { f ->
+            f.shell(f.connect()); f.client.selectThread("working")
+            f.threadSnapshot(withTimeout(5000) { f.threads.receive() }, "Working reply")
+            val painted = f.client.state.value.messages
+            f.client.selectThread("open-0")
+            f.threadSnapshot(withTimeout(5000) { f.threads.receive() }, "Other reply")
+            f.client.selectThread("working")
+            // Shown from memory before the stream answers: the very rows shown last time, with writes, Steer and Stop off.
+            val cached = f.client.state.value
+            assertSame(painted, cached.messages)
+            assertFalse(cached.canWrite); assertFalse(cached.canSteer); assertFalse(cached.canStop)
+            f.threadSnapshot(withTimeout(5000) { f.threads.receive() }, "Working reply")
+            assertTrue(f.client.state.value.canWrite)
+            assertSame(painted, f.client.state.value.messages)
+        }
+    }
+
+    @Test fun forgettingAnEnvironmentDropsItsCachedThreads() = runBlocking {
+        Fixture().use { f ->
+            f.shell(f.connect()); f.client.selectThread("working")
+            f.threadSnapshot(withTimeout(5000) { f.threads.receive() }, "Working reply")
+            f.client.forgetEnvironment("env")
+            f.shell(f.connect())
+            f.client.selectThread("working")
+            assertTrue(f.client.state.value.messages.isEmpty())
+            assertFalse(f.client.state.value.canWrite)
+        }
+    }
+
     @Test fun conversationRunMetadataIsRetainedWithItsProjectionAndClearedForUncachedSelections() = runBlocking {
         Fixture().use { f ->
             f.shell(f.connect()); f.client.selectThread("working")

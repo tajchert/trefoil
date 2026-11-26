@@ -34,8 +34,9 @@ internal sealed interface ConversationEntry {
 /** Authoritative turn-item ordinals win; timestamps are only used when that order is unavailable. */
 internal fun conversationTimeline(messages: List<ConversationMessage>, activities: List<ToolActivity>): List<ConversationEntry> {
     data class Item(val message: ConversationMessage? = null, val activity: ToolActivity? = null) {
-        val ordinal get() = message?.ordinal ?: activity?.ordinal
-        val time get() = timelineInstant(message?.createdAt ?: activity?.startedAt)
+        val ordinal = message?.ordinal ?: activity?.ordinal
+        // Parsed once: the sorts and the legacy insertion below compare it many times.
+        val time = timelineInstant(message?.createdAt ?: activity?.startedAt)
     }
     // T3 `deriveTimelineEntriesFromVisibleTurnItems` never shows checkpoint items in the timeline.
     val all = messages.map { Item(message = it) } + activities.filter { it.kind != "checkpoint" }.map { Item(activity = it) }

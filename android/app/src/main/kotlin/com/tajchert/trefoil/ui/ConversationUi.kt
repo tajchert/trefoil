@@ -32,7 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -252,8 +252,10 @@ internal fun Conversation(
     LaunchedEffect(state.error) { if (state.error != null && submissionId == null) submitted = null }
     // Identical consecutive errors do not retrigger the effect above, so every failed send also emits here.
     LaunchedEffect(sendFailed) { sendFailed.collect { if (submissionId == null) submitted = null } }
+    val foldMemo = LocalTimelineFoldMemo.current
     val entries = remember(state.messages, state.activities, state.activeRunId, state.runs) {
-        foldConversationTimeline(conversationTimeline(state.messages, state.activities), state.activeRunId, state.runs)
+        foldMemo?.fold(state.messages, state.activities, state.activeRunId, state.runs)
+            ?: foldConversationTimeline(conversationTimeline(state.messages, state.activities), state.activeRunId, state.runs)
     }
     val roster = remember(state.runs, state.subagents, draft) { if (draft == null) subagentRoster(state.runs, state.subagents) else null }
     val streaming = state.messages.any { it.streaming }
@@ -274,10 +276,24 @@ internal fun Conversation(
     // Record what is on screen: the first load, rewinds, and live work that widened the window (so it stays put after).
     SideEffect { turnWindow.settled(turnCount, window).let { if (it != turnWindow) turnWindow = it } }
     val shown = window.visible
-    val list = rememberLazyListState()
+    var following by rememberSaveable { mutableStateOf(true) }
+    // At least the index of the list's last item (rows plus the fixed extras below); LazyColumn clamps it to the last one.
+    val endIndex = shown.size + liveTurn.orphanSubagents.size + state.requests.size + TIMELINE_EXTRA_ITEMS
+    // Opening or switching back to a thread that follows its end lays the list out once, already at the end, instead of at
+    // the top and again a frame later. A reader's scrolled-up position (not following) is restored as it was.
+    val list = rememberSaveable(saver = followingListSaver { endIndex.takeIf { following } }) { LazyListState(if (following) endIndex else 0) }
     val scope = rememberCoroutineScope()
     val nearBottom by remember { derivedStateOf { !list.canScrollForward || (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= list.layoutInfo.totalItemsCount - 2 } }
-    var following by rememberSaveable { mutableStateOf(true) }
+    // A thread opened without cached rows: its first rows land at the end in the measure that shows them, not a frame after
+    // the top. Applied before that measure (a side effect runs before layout) and only into an empty list, so no reader
+    // gesture is cancelled.
+    val awaitingRows = remember { booleanArrayOf(entries.isEmpty()) }
+    SideEffect {
+        if (awaitingRows[0] && entries.isNotEmpty()) {
+            awaitingRows[0] = false
+            if (following) list.requestScrollToItem(endIndex)
+        }
+    }
     LaunchedEffect(list) {
         snapshotFlow { list.isScrollInProgress to nearBottom }.collect { (scrolling, bottom) -> if (scrolling) following = bottom }
     }
@@ -311,6 +327,8 @@ internal fun Conversation(
     val workLabel = "Working" + if (workStartedAt != null) " ${formatWorkDuration(clock - workStartedAt)}" else ""
     val activeRun = state.runs.firstOrNull { it.id == state.activeRunId }
     val turnStartedAt = workStartedAt ?: validThreadInstant(activeRun?.workStartedAt ?: activeRun?.startedAt)
+    // Once per timeline change instead of a scan of every row for each composed message row.
+    val metadataIds = remember(entries, state.messages, state.activeRunId) { messageMetadataIds(entries, state.messages, state.activeRunId) }
     /** Reveals [TURN_WINDOW_PAGE] more turns and keeps the entry the reader was looking at in place (prepend anchoring). */
     fun loadEarlier() {
         val anchor = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key != LOAD_EARLIER_KEY }
@@ -380,11 +398,7 @@ internal fun Conversation(
                         }
                         val entryRow: @Composable (ConversationEntry) -> Unit = { entry ->
                             when (entry) {
-                                is ConversationEntry.Message -> MessageRow(entry.message, entry.stacked,
-                                    showMetadata = if (entry.message.role == "user") {
-                                        (entries.getOrNull(entries.indexOf(entry) + 1) as? ConversationEntry.Message)?.message?.role != "user"
-                                    } else !entry.message.streaming && (state.activeRunId == null || (entry.message.runId != null && entry.message.runId != state.activeRunId)) &&
-                                        entry.message.id == state.messages.lastOrNull { it.role == "assistant" && it.runId == entry.message.runId }?.id)
+                                is ConversationEntry.Message -> MessageRow(entry.message, entry.stacked, showMetadata = entry.message.id in metadataIds)
                                 is ConversationEntry.Activities -> ProseBlock {
                                     if (entry.isSubagentGroup) SubagentActivityRows(entry.activities, state.subagents, onOpenThread, onOpenAgents)
                                     else WorkGroup(entry.activities, live = state.activeRunId != null && entry.activities.first().runId == state.activeRunId, canLoadActivity = canLoadActivity, onLoadActivity = onLoadActivity)
@@ -397,11 +411,11 @@ internal fun Conversation(
                         // The active turn opens with its "Working for" header, right after the prompt that started it.
                         // The window always keeps the header's turn, so its index maps into the visible tail.
                         val headerAt = liveTurn.headerIndex?.minus(window.hiddenCount)?.coerceIn(0, shown.size)
-                        items(if (headerAt == null) shown else shown.subList(0, headerAt), key = { it.key }) { entryRow(it) }
+                        items(if (headerAt == null) shown else shown.subList(0, headerAt), key = { it.key }, contentType = ::timelineContentType) { entryRow(it) }
                         if (headerAt != null) {
                             val headerKey = state.activeRunId?.let(::workingHeaderKey)?.takeIf { key -> entries.none { it.key == key } } ?: "working-header"
                             item(key = headerKey) { ProseBlock { WorkingTurnHeader(turnStartedAt) } }
-                            items(shown.subList(headerAt, shown.size), key = { it.key }) { entryRow(it) }
+                            items(shown.subList(headerAt, shown.size), key = { it.key }, contentType = ::timelineContentType) { entryRow(it) }
                         }
                         items(liveTurn.orphanSubagents, key = { "subagent:${it.id}" }) { ProseBlock { SubagentTimelineRow(it, onOpenThread, onOpenAgents) } }
                         liveTurn.thinkingLabel?.let { label -> item(key = "thinking") { ProseBlock { ThinkingRow(label) } } }
@@ -856,6 +870,8 @@ private const val STALE_GRACE_MS = 1_500L
 
 
 private const val LOAD_EARLIER_KEY = "load-earlier"
+/** Items besides entries, subagents and requests: progress/empty, load earlier, working header, thinking, background work, bottom. */
+private const val TIMELINE_EXTRA_ITEMS = 6
 
 /** T3's history control: a full-width secondary button at the top of the list, explicit tap only. */
 @Composable

@@ -214,7 +214,8 @@ class T3Client(
     // Memory only: navigation/foreground refreshes retain content without writing transcripts to disk. A retained state
     // keeps its rows and `shellLoaded`, so reconnecting to it shows them at once; a new environment starts unloaded.
     private val environmentStates = linkedMapOf<String, ClientState>()
-    private val threadProjections = linkedMapOf<Pair<String, String>, JsonObject>()
+    // Recently viewed threads with their derived rows, so a revisit paints at once (memory only, bounded; see the class).
+    private val threadProjections = ThreadProjectionCache()
     private fun cacheState() {
         val current = state.value
         current.environment?.id?.let { id ->
@@ -230,7 +231,7 @@ class T3Client(
             environmentStates.remove(evicted)
             if (evicted != state.value.environment?.id) shellCheckpoints.remove(evicted)
             shellResume.forget(evicted)
-            threadProjections.keys.removeAll { it.first == evicted }
+            threadProjections.forgetEnvironment(evicted)
         }
     }
     private fun update(block: (ClientState) -> ClientState) = mutable.update(block)
@@ -1036,7 +1037,7 @@ class T3Client(
         if (state.value.connection != ConnectionStatus.Connected) {
             val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
             threadReady = false
-            if (cached != null) { applyProjection(cached, threadId); return@synchronized }
+            if (cached != null) { applyCachedThread(cached, threadId); return@synchronized }
             // While the connection comes up, the connect subscribes the selection (see above); offline, there is nothing to show.
             check(state.value.connection == ConnectionStatus.Connecting || state.value.connection == ConnectionStatus.Reconnecting) { "Connect to load this thread" }
             if (state.value.selectedThreadId != threadId) { projection = JsonObject(emptyMap()); showEmptySelection(threadId) }
@@ -1052,7 +1053,7 @@ class T3Client(
         visits.reset(threadId); visitTimer?.cancel()
         projection = JsonObject(emptyMap())
         val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
-        if (cached != null) applyProjection(cached, threadId)
+        if (cached != null) applyCachedThread(cached, threadId)
         else if (state.value.selectedThreadId == threadId) update { it.copy(canWrite = false, canRead = false) }
         else showEmptySelection(threadId)
         val epoch = generation
@@ -1296,15 +1297,47 @@ class T3Client(
     private fun applyProjection(incoming: JsonObject, threadId: String? = state.value.selectedThreadId, authoritative: Boolean = true) {
         if (authoritative) projectionRevision++
         val value = if (authoritative) retainHydratedActivities(incoming, projection) else incoming
+        showProjection(value, threadPresentation(value), threadId)
+    }
+    /**
+     * Repaints a recently viewed thread from memory: no JSON is parsed, so selecting it on the main thread costs a state
+     * copy. Its rows are stale until the thread's own stream answers; the caller has already cleared `threadReady`, so writes
+     * stay disabled until then. Caller holds [lifecycleLock].
+     */
+    private fun applyCachedThread(cached: CachedThread, threadId: String) {
+        projectionRevision++
+        showProjection(cached.projection, cached.presentation, threadId)
+    }
+    /** Publishes [value] (already derived into [derived]) as the selected thread and remembers both. Caller holds [lifecycleLock]. */
+    private fun showProjection(value: JsonObject, derived: ThreadPresentation, threadId: String?) {
         projection = value
         val current = state.value
+        // Unchanged rows keep their instances, so the timeline skips them; on a switch nothing matches and [derived] is shown as is.
+        val shown = if (current.selectedThreadId != threadId) derived else derived.copy(
+            messages = stableRows(current.messages, derived.messages) { it.id },
+            activities = stableRows(current.activities, derived.activities) { it.id },
+            requests = stableValue(current.requests, derived.requests), runs = stableValue(current.runs, derived.runs),
+            attempts = stableValue(current.attempts, derived.attempts), subagents = stableValue(current.subagents, derived.subagents),
+            backgroundWork = stableValue(current.backgroundWork, derived.backgroundWork), queuedMessages = stableValue(current.queuedMessages, derived.queuedMessages),
+        )
         val environmentId = current.environment?.id
-        if (environmentId != null && threadId != null) {
-            val key = environmentId to threadId
-            threadProjections.remove(key)
-            threadProjections[key] = value
-            while (threadProjections.size > 12) threadProjections.remove(threadProjections.keys.first())
-        }
+        if (environmentId != null && threadId != null) threadProjections.put(environmentId to threadId, CachedThread(value, shown))
+        // Steer and Stop are live facts: a cached projection shown while offline offers neither.
+        val live = current.connection == ConnectionStatus.Connected
+        update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, canRead = it.canRead && threadReady, messages = shown.messages,
+            activities = shown.activities, requests = shown.requests, activeRunId = shown.activeRunId,
+            runs = shown.runs, attempts = shown.attempts, subagents = shown.subagents,
+            backgroundWork = shown.backgroundWork,
+            queuedMessages = shown.queuedMessages, queueHeld = shown.queueHeld,
+            canSteer = live && shown.steerable, canStop = live && shown.stoppable,
+            selectedRuntimeMode = shown.runtimeMode,
+            selectedModel = selectedModel(shown.modelSelection, it.models),
+            selectedModelOptions = shown.modelOptions,
+            selectedProviderLocked = shown.providerLocked) }
+        reconcilePendingModelSelections(threadId)
+    }
+    /** Derives the [ClientState] slice of one projection. Pure; parses each row once. */
+    private fun threadPresentation(value: JsonObject): ThreadPresentation {
         val items = presentationItems(value)
         val promotion = steerPromotion(value)
         val requests = value.objects("runtimeRequests").filter { it.string("status") == "pending" }.map { request ->
@@ -1322,19 +1355,15 @@ class T3Client(
         val thread = value.obj("thread")
         val agents = subagents(value)
         val background = pendingBackgroundWork(value)
-        // Steer and Stop are live facts: a cached projection shown while offline offers neither.
-        val live = current.connection == ConnectionStatus.Connected
-        update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, canRead = it.canRead && threadReady, messages = conversationMessages(value),
-            activities = toolActivities(value), requests = requests, activeRunId = active,
-            runs = conversationRuns(value), attempts = runAttempts(value), subagents = agents,
-            backgroundWork = background,
+        return ThreadPresentation(
+            messages = conversationMessages(value, items), activities = toolActivities(value, items), requests = requests, activeRunId = active,
+            runs = conversationRuns(value), attempts = runAttempts(value), subagents = agents, backgroundWork = background,
             queuedMessages = queuedMessages(value, promotion), queueHeld = queueHeld(value),
-            canSteer = live && canSteer(value, promotion, items), canStop = live && canStopThread(active, background, agents),
-            selectedRuntimeMode = RuntimeMode.fromWire(thread.string("runtimeMode")),
-            selectedModel = selectedModel(thread["modelSelection"] as? JsonObject, it.models),
-            selectedModelOptions = modelOptionValues(thread.obj("modelSelection")["options"]),
-            selectedProviderLocked = providerLocked(value)) }
-        reconcilePendingModelSelections(threadId)
+            steerable = canSteer(value, promotion, items), stoppable = canStopThread(active, background, agents),
+            runtimeMode = RuntimeMode.fromWire(thread.string("runtimeMode")),
+            modelSelection = thread["modelSelection"] as? JsonObject,
+            modelOptions = modelOptionValues(thread.obj("modelSelection")["options"]),
+            providerLocked = providerLocked(value))
     }
     /** T3 `thread.modelSelection {instanceId, model}`; prefers the server catalog entry for its label. */
     private fun selectedModel(selection: JsonObject?, models: List<ModelOption>): ModelOption? {
@@ -1795,9 +1824,7 @@ class T3Client(
             // Seed the cache so selecting the new thread shows the first message before its stream syncs.
             val environmentId = state.value.environment?.id
             if (epoch == generation && environmentId != null && projection != null) {
-                val key = environmentId to threadId
-                threadProjections.remove(key); threadProjections[key] = projection
-                while (threadProjections.size > 12) threadProjections.remove(threadProjections.keys.first())
+                threadProjections.put(environmentId to threadId, CachedThread(projection, threadPresentation(projection)))
             }
         }
         threadId
@@ -2146,7 +2173,7 @@ class T3Client(
         environmentStates.remove(environmentId)
         shellCheckpoints.remove(environmentId)
         environmentId?.let(shellResume::forget)
-        threadProjections.keys.removeAll { it.first == environmentId }
+        threadProjections.forgetEnvironment(environmentId)
         environmentId?.let(tokens::forget)
     }
     /**

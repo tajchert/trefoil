@@ -178,6 +178,8 @@ fun TrefoilApp(
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
+        // Folded timelines of recently shown threads, for this environment only (memory only; see TimelineFoldMemo).
+        val timelineFolds = remember(state.environment?.id) { TimelineFoldMemo() }
         val shellContentState = rememberSaveableStateHolder()
         var adding by rememberSaveable { mutableStateOf(false) }
         var shortcutsOpen by rememberSaveable { mutableStateOf(false) }
@@ -568,7 +570,7 @@ fun TrefoilApp(
                         .then(if (twoPane) Modifier.paneGroup(detailPaneTitle(destination, detailTitle), PaneOrder.Detail).then(trackFocus(PaneFocus.Conversation)) else Modifier)) {
                         if (!twoPane || split) ConnectionBanner(state, onReconnect)
                         Box(Modifier.weight(1f)) {
-                            conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) draftComposerKey(draft) else state.selectedThreadId}") {
+                            CompositionLocalProvider(LocalTimelineFoldMemo provides timelineFolds) { conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) draftComposerKey(draft) else state.selectedThreadId}") {
                                 if (twoPane && draft == null && state.selectedThreadId == null) EmptyDetail(
                                     needsYou = if (state.connection == ConnectionStatus.Connected) needsYouThreads else emptyList(),
                                     newThreadEnabled = navModel.entries.newThreadEnabled, onOpenThread = select, onNewThread = { creatingProject = null; creating = true },
@@ -606,7 +608,7 @@ fun TrefoilApp(
                                         ShowThreadListButton(otherNeedsYou, showList)
                                         if (backParent != null) ParentBackButton(otherNeedsYou) { select(backParent.id) }
                                     } }) else null)
-                            }
+                            } }
                         }
                     }
                 }
