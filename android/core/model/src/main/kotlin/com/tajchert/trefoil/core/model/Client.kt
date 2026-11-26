@@ -212,6 +212,8 @@ data class ThreadDraft(
     val commandId: String = java.util.UUID.randomUUID().toString(),
     /** Explicit provider options (id to String or Boolean), sent as `modelSelection.options`. */
     val modelOptions: ModelOptionValues = emptyMap(),
+    /** Issue to link once the launched thread exists (start thread from issue); in memory only. */
+    val issueLink: ThreadIssueLink? = null,
 )
 enum class ConnectionStatus { Disconnected, Connecting, Connected, Reconnecting, Error }
 data class ClientState(
@@ -495,7 +497,7 @@ interface TrefoilClient {
     /** `issues.detail` for one issue. Read-only; failures throw [IssueException]. */
     suspend fun issueDetail(ref: IssueRef): IssueDetail = throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
     /** Older comments from [cursor]: the page and the next cursor (null when none). Read-only; failures throw [IssueException]. */
-    suspend fun issueComments(ref: IssueRef, cursor: String): Pair<List<IssueComment>, String?> =
+    suspend fun issueComments(ref: IssueRef, cursor: String): IssueCommentsPage =
         throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
     /** Threads linking [key] (`issues.linkedThreads`, when [ClientState.issueLinkedThreadsSupported]). Read-only. */
     suspend fun issueLinkedThreads(key: IssueKey): List<IssueLinkedThread> =

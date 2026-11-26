@@ -33,7 +33,7 @@ class ShellCacheTest {
             "ThreadSummary" to ThreadSummary.serializer().descriptor.elementNames.toList(),
             "CachedShellCursor" to CachedShellCursor.serializer().descriptor.elementNames.toList(),
         )
-        assertEquals("Bump ShellCacheCodec.VERSION when the persisted fields change", 2, ShellCacheCodec.VERSION)
+        assertEquals("Bump ShellCacheCodec.VERSION when the persisted fields change", 3, ShellCacheCodec.VERSION)
         assertEquals("Persisted fields changed: bump ShellCacheCodec.VERSION, then update this list", mapOf(
             "Project" to listOf("id", "title", "path"),
             "ThreadSummary" to listOf("id", "projectId", "title", "status", "createdAt", "updatedAt", "latestUserMessageAt",
@@ -45,7 +45,7 @@ class ShellCacheTest {
                 "deletedAt", "activeProviderThreadId", "activityRunStatusPresent", "snoozedAt", "pendingRequestId",
                 "pendingRequestCreatedAt", "pendingRequestBlocking", "pendingGuestMessageCount", "interactionMode",
                 "hasActionableProposedPlan", "latestUserAuthoredMessageAtPresent", "completionHeldBackgroundWork",
-                "latestRunStopRequested", "latestRunBackgroundWake", "pendingRequestUserOnly", "workflowStep", "monitorHoldsWakeCompletion"),
+                "latestRunStopRequested", "latestRunBackgroundWake", "pendingRequestUserOnly", "workflowStep", "monitorHoldsWakeCompletion", "issues"),
             "CachedShellCursor" to listOf("serverVersion", "databaseMigration", "sequence", "snapshotAtMillis"),
         ), persisted)
     }

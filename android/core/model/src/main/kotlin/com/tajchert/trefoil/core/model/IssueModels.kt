@@ -16,8 +16,8 @@ data class IssueKey(val tracker: String, val host: String, val scope: String, va
 
 /** A thread's link to an issue (shell `issues[]`); server-authoritative. */
 @Serializable
-data class ThreadIssueLink(val key: IssueKey, val projectId: String, val url: String, val source: String,
-    val linkedAt: String?, val displayKey: String, val title: String)
+data class ThreadIssueLink(val key: IssueKey, val projectId: String, val url: String, val source: String = "manual",
+    val linkedAt: String? = null, val displayKey: String, val title: String)
 
 /** Addresses one issue in a project for `issues.detail` / `issues.comments`; [host] null lets the server pick. */
 data class IssueRef(val projectId: String, val tracker: String, val host: String?, val scope: String, val key: String)
@@ -97,3 +97,6 @@ enum class IssueFailure { NotSupported, NotConnected, Unavailable, NotFound, Rat
 
 /** Typed issue failure; [retryAtMillis] is set for [IssueFailure.RateLimited] when the server says when to retry. */
 class IssueException(val failure: IssueFailure, message: String, val retryAtMillis: Long? = null) : Exception(message)
+
+/** One page of older comments from `issues.comments`; [nextCursor] null when no older page exists. */
+data class IssueCommentsPage(val comments: List<IssueComment>, val nextCursor: String?)

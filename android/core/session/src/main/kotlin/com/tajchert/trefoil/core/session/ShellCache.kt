@@ -107,7 +107,7 @@ object ShellCacheCodec {
      * added, removed or renamed: a v1 file read by a later build would give a new field its default while keeping the
      * cursor, so the resumed rows would never be corrected. ShellCacheTest's golden field list guards this.
      */
-    const val VERSION = 2
+    const val VERSION = 3
     /** Larger snapshots are not cached (about 4 MB of JSON is thousands of threads). */
     const val MAX_ENCODED_BYTES = 4 * 1024 * 1024
 
