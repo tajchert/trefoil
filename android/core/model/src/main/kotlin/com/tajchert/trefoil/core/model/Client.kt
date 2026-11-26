@@ -1,6 +1,7 @@
 package com.tajchert.trefoil.core.model
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
@@ -303,6 +304,16 @@ data class ClientState(
     val inspector: InspectorThread? = null,
     /** Server `environment.capabilities.sideChats`; false when not reported. Gates starting side chats, not opening them. */
     val sideChatsSupported: Boolean = false,
+    /** Selected thread's projection `checkpoints` with a non-null `appRunOrdinal`, in turn order; see [TrefoilClient.loadTurnDiff]. */
+    val checkpoints: List<ThreadCheckpoint> = emptyList(),
+    /** Selected thread's projection `pullRequests` links (without `stack-dismissed` ones), in wire order. */
+    val threadPullRequests: List<ThreadPullRequest> = emptyList(),
+    /** Server `environment.capabilities.pullRequests`; false when not reported. Gates every `pullRequests.*` call. */
+    val pullRequestsSupported: Boolean = false,
+    /** Server `environment.capabilities.pullRequestChecks`; false when not reported. Gates `pullRequests.checks`. */
+    val pullRequestChecksSupported: Boolean = false,
+    /** Session grants `source-control:write`, which PR mutations (`runAction`, `comment`) require. */
+    val canWriteSourceControl: Boolean = false,
 )
 
 private val ACTIVE_RUN_STATUSES = setOf("preparing", "starting", "running", "waiting")
@@ -447,6 +458,28 @@ interface TrefoilClient {
     fun closeInspector() {}
     /** Forks the selected thread into a side chat, sends [question] there, and returns the new thread id. */
     suspend fun startSideChat(question: String): String { error("Side chats are unavailable") }
+    /**
+     * Reads and parses (off the main thread) the selected thread's diff for one turn of [ClientState.checkpoints]:
+     * `getFullThreadDiff` for turn 1, `getTurnDiff {n-1, n}` otherwise. Read-only; cached in memory per environment.
+     */
+    suspend fun loadTurnDiff(turnCount: Int): DiffDocument { error("Turn diffs are unavailable") }
+    /**
+     * The panel of one pull request. While collected, the session keeps `pullRequests.subscribeRefreshes` open and
+     * revalidates `detail`/`checks`; the default is an empty, never-answered panel.
+     */
+    fun prPanel(key: PullRequestKey): StateFlow<PrPanelState> = MutableStateFlow(PrPanelState())
+    /** Re-reads `detail` (and `checks` when supported) for [key]. Read-only; a no-op when not live. */
+    suspend fun refreshPullRequest(key: PullRequestKey) {}
+    /** Reads one page of the PR diff (`POST /api/pull-requests/diff`); [cursor] null reads the first page. */
+    suspend fun loadPullRequestDiff(key: PullRequestKey, cursor: String?): PrDiffPage { error("Pull request diffs are unavailable") }
+    /**
+     * Sends `pullRequests.runAction` once; merge sends `expectedHeadSha` and [mergeMethod]. Update-branch uses the
+     * server's default update method. Never retried or replayed: an uncertain outcome shows in [prPanel] as
+     * [PrActionOutcome.Unknown] and reconciles from `detail {allowStale: false}`.
+     */
+    suspend fun runPullRequestAction(key: PullRequestKey, action: PrAction, mergeMethod: PrMergeMethod? = null) { error("Pull request actions are unavailable") }
+    /** Sends `pullRequests.comment` once; never retried or replayed. */
+    suspend fun commentOnPullRequest(key: PullRequestKey, body: String) { error("Pull request comments are unavailable") }
     suspend fun reconnect()
     fun close()
 }
