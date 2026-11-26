@@ -487,8 +487,12 @@ fun TrefoilApp(
                 // fresh. Folding to a window without a docked panel closes the stream but keeps the target, so docking again reopens it.
                 val inspectorKind = inspectorThreadId?.let { id -> state.threads.firstOrNull { it.id == id }?.sideThreadKind() ?: state.inspector?.takeIf { it.threadId == id }?.kind } ?: SideThreadKind.Subagent
                 val inspectorShown = docked && panelTab == SidePanelTab.Thread && inspectorThreadId != null
-                val inspectorStreamId = inspectorThreadId.takeIf { inspectorShown && shellFresh(state) }
-                LaunchedEffect(inspectorStreamId) { if (inspectorStreamId != null) onOpenInspector(inspectorStreamId) else onCloseInspector() }
+                // A stale shell only pauses the stream (the session keeps the last rows, marked not ready); hiding the tab closes it.
+                val inspectorFresh = shellFresh(state)
+                LaunchedEffect(inspectorShown, inspectorThreadId, inspectorFresh) {
+                    val id = inspectorThreadId
+                    if (!inspectorShown || id == null) onCloseInspector() else if (inspectorFresh) onOpenInspector(id)
+                }
                 // Leaves the inspector for the tab it was opened from (when that tab still exists) or closes the panel.
                 val leaveInspector: () -> Unit = {
                     val from = inspectorFrom?.let { name -> panelTabs.firstOrNull { it.name == name } }?.takeIf { it != SidePanelTab.Thread && it !in panelDisabled }

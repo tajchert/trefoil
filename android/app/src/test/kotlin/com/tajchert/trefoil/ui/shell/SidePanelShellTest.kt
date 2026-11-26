@@ -464,14 +464,16 @@ class SidePanelShellTest {
     // Resizing the window under Robolectric swaps the shell's content branches and trips a duplicate saveable key in the harness, so the fold itself
     // is covered by sidePanelPresentation (FullScreen neither docks nor sheets the Thread tab) and this test covers its stream half: a stream that must
     // close (stale connection) keeps the target, and the same target opens again when the shell is fresh.
-    @Test fun aStreamThatMustCloseKeepsTheTargetAndOpensItAgain() {
+    @Test fun aStaleShellKeepsThePaneAndResubscribesWhenFresh() {
         setApp(inspecting, preopened)
         panel("Subagent").assertExists()
         assertEquals(listOf("child"), opened)
         val closedBefore = inspectorClosed
         state.value = inspecting.copy(connection = ConnectionStatus.Reconnecting, shellLive = false)
         compose.waitForIdle()
-        assertTrue("stream closed while stale", inspectorClosed > closedBefore)
+        // A stale shell keeps the pane and its last rows; the session pauses the stream itself.
+        assertEquals("stream not closed while stale", closedBefore, inspectorClosed)
+        panel("Subagent").assertExists()
         assertEquals(listOf("child"), opened)
         state.value = inspecting
         compose.waitForIdle()
