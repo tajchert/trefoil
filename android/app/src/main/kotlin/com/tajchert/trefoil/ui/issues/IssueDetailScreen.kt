@@ -63,8 +63,12 @@ internal sealed interface IssueActivityItem {
 
 /** Comments and events by time, oldest first; equal or unparseable times keep comments before events. */
 internal fun issueActivity(detail: IssueDetail): List<IssueActivityItem> =
-    (detail.comments.map { IssueActivityItem.Comment(it) } + detail.events.map { IssueActivityItem.Event(it) })
-        .sortedBy { runCatching { Instant.parse(it.createdAt).toEpochMilli() }.getOrDefault(Long.MAX_VALUE) }
+    (detail.comments.distinctBy { it.id }.map { IssueActivityItem.Comment(it) } + detail.events.distinctBy { it.id }.map { IssueActivityItem.Event(it) })
+        .sortedBy { parseIssueInstant(it.createdAt)?.toEpochMilli() ?: Long.MAX_VALUE }
+
+/** ISO-8601 instant with `Z` or a numeric offset (GitLab and self-hosted trackers send offsets); null when unparseable. */
+internal fun parseIssueInstant(value: String?): Instant? =
+    value?.let { runCatching { java.time.OffsetDateTime.parse(it).toInstant() }.getOrNull() }
 
 internal fun issueEventText(event: IssueEvent): String {
     val who = event.actor?.login ?: "Someone"
@@ -83,7 +87,7 @@ internal fun issueEventText(event: IssueEvent): String {
 }
 
 private fun formatTime(value: String?, zone: ZoneId): String =
-    runCatching { TimeFormat.format(Instant.parse(value).atZone(zone)) }.getOrDefault("")
+    parseIssueInstant(value)?.let { TimeFormat.format(it.atZone(zone)) } ?: ""
 
 /**
  * Stateless issue detail: toolbar, header, labels, assignees, body, Activity (comments and events by time, oldest first),
@@ -169,7 +173,7 @@ private fun DetailBody(state: IssueDetailUiState, detail: IssueDetail, actions: 
         }
         if (detail.linkedPullRequests.isNotEmpty()) {
             item("prs-title") { Section("LINKED PULL REQUESTS") }
-            items(detail.linkedPullRequests, key = { "pr:" + it.url }) { PullRequestRow(it, openUrl) }
+            items(detail.linkedPullRequests.distinctBy { it.url }, key = { "pr:" + it.url }) { PullRequestRow(it, openUrl) }
         }
         if (state.linkedThreadsSupported && state.linkedThreads.isNotEmpty()) item("threads") {
             LinkedThreadsSection(state.linkedThreads, actions.onOpenThread)
