@@ -278,6 +278,9 @@ private fun AnnotatedString.Builder.appendInline(text: String, c: TrefoilColors,
     append(text.substring(cursor))
 }
 
+/** What a markdown fragment shows as text, without styling or links: the exact characters [appendInline] puts on screen. */
+internal fun inlinePlainText(text: String): String = buildAnnotatedString { appendInline(text, TrefoilLight, 13.sp, Color.Transparent) {} }.text
+
 @Composable
 private fun rememberInline(text: String, codeSize: TextUnit = 13.sp, codeBg: Color = Tf.colors.s2): AnnotatedString {
     val c = Tf.colors

@@ -126,7 +126,7 @@ class TrefoilViewModel internal constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
     /** Reply drafts with content reduced to their first line (the thread-row preview); unchanged while typing past it. */
     val replyDraftPreviews: StateFlow<Map<ComposerDraftKey, ComposerDraft>> = composerDraftStore.drafts
-        .map { all -> all.filterKeys { it is ComposerDraftKey.Reply }.mapValues { (_, d) -> d.copy(text = d.text.lineSequence().map { it.trim() }.first { it.isNotEmpty() }, updatedAtMillis = 0) } }
+        .map { all -> all.filterKeys { it is ComposerDraftKey.Reply }.mapValues { (_, d) -> d.copy(text = assistantCitationsToPlainText(d.text).lineSequence().map { it.trim() }.first { it.isNotEmpty() }, updatedAtMillis = 0) } }
         .distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
     /** The client every composer send goes through: it counts the mutation and clears the accepted reply's draft. */
     private val composerClient = ComposerDraftSettlingClient(MutationTrackingClient(client, mutationsInFlight), composerDraftStore)

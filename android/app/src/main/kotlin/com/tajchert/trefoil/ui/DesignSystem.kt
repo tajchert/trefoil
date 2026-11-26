@@ -126,6 +126,8 @@ object TfIcons {
     /** File with plus: changes / diff. */
     val Changes by lazy { strokeIcon("changes", "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5M12 11v6M9 14h6") }
     val Edit by lazy { strokeIcon("edit", "M4 20h4L19 9l-4-4L4 16z") }
+    /** Quotation marks: an assistant citation. */
+    val Quote by lazy { strokeIcon("quote", "M10 7H6a1 1 0 0 0-1 1v4h5zM10 12c0 2.5-1 4-3.5 4.5", "M19 7h-4a1 1 0 0 0-1 1v4h5zM19 12c0 2.5-1 4-3.5 4.5") }
     /** Stacked lines: settled / archive shelf. */
     val Settled by lazy { strokeIcon("settled", "M4 7h16M6 12h12M9 17h6") }
     val Link by lazy { strokeIcon("link", "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1") }

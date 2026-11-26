@@ -1,0 +1,19 @@
+<resources>
+    <!-- assistant citations -->
+    <string name="citation_label">Quoted from a response</string>
+    <string name="citation_quote_description">Quoted from a response: %1$s</string>
+    <string name="citation_cite_action">Cite part of this response</string>
+    <string name="citation_sheet_title">Cite response</string>
+    <string name="citation_sheet_hint">Touch and hold the text, then drag to select the part to quote.</string>
+    <string name="citation_selected_count">%1$d of %2$d characters selected</string>
+    <string name="citation_comment_label">Comment (optional)</string>
+    <string name="citation_add">Add quote</string>
+    <string name="citation_cancel">Cancel</string>
+    <string name="citation_save">Save</string>
+    <string name="citation_remove">Remove quote</string>
+    <string name="citation_edit_title">Quote</string>
+    <string name="citation_go_to_message">Go to message</string>
+    <string name="citation_error_too_long">A quote can be at most %1$d characters.</string>
+    <string name="citation_error_comment_too_long">A comment can be at most %1$d characters.</string>
+    <string name="citation_error_no_room">There is no room for another quote in this draft.</string>
+</resources>

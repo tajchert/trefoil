@@ -80,6 +80,7 @@ import androidx.compose.ui.unit.sp
 import com.tajchert.trefoil.R
 import com.tajchert.trefoil.core.model.*
 import com.tajchert.trefoil.core.session.ComposerDraftKey
+import com.tajchert.trefoil.core.session.ComposerDraftStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -326,11 +327,39 @@ internal fun Conversation(
     // One stable callback, so the row does not recompose on every streaming delta.
     val latestLoadEarlier by rememberUpdatedState(::loadEarlier)
     val onLoadEarlier = remember { { latestLoadEarlier() } }
+    // Citing: the assistant message whose "Cite" sheet is open, and the one stable object the rows read their citation actions from.
+    val citeEnvironment = state.environment?.id
+    val citeThread = state.selectedThreadId
+    var citingMessageId by rememberSaveable(citeEnvironment, composerKey) { mutableStateOf<String?>(null) }
+    val canCite = draft == null && citeEnvironment != null && citeThread != null && thread?.isProviderNativeSubagentThread() != true
+    fun citedMessageIndex(citation: AssistantCitation): Int? {
+        if (citation.environmentId != citeEnvironment || citation.threadId != citeThread) return null
+        val headerAt = liveTurn.headerIndex?.minus(window.hiddenCount)?.coerceIn(0, shown.size)
+        return citationScrollIndex(shown, citation.messageId, if (window.hasEarlier) 1 else 0, headerAt)
+    }
+    val latestCitedIndex by rememberUpdatedState(::citedMessageIndex)
+    val assistantCiting = remember(canCite) {
+        AssistantCiting(
+            onCite = if (canCite) ({ message -> citingMessageId = message.id }) else null,
+            canGoTo = { latestCitedIndex(it) != null },
+            goTo = { citation -> latestCitedIndex(citation)?.let { index -> following = false; scope.launch { list.animateScrollToItem(index) } } },
+        )
+    }
     // The layout follows the width of the pane this conversation is given, never the window: a pane under 600dp is the phone UI.
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val layout = remember(maxWidth) { conversationLayoutFor(maxWidth.value) }
         val compactHeight = LocalCompactHeight.current
-        CompositionLocalProvider(LocalFileDownloadUi provides fileDownloadUi, LocalContentColor provides c.text, LocalConversationLayout provides layout) {
+        CompositionLocalProvider(LocalFileDownloadUi provides fileDownloadUi, LocalContentColor provides c.text, LocalConversationLayout provides layout, LocalAssistantCiting provides assistantCiting) {
+            val citedMessage = citingMessageId?.let { id -> state.messages.find { it.id == id && it.role == "assistant" && !it.streaming } }
+            if (citedMessage != null && citeEnvironment != null && citeThread != null) {
+                CiteSheet(remember(citedMessage.text) { renderedAssistantText(citedMessage.text) }, { citingMessageId = null }) { selector, comment ->
+                    val citation = AssistantCitation(citeEnvironment, citeThread, citedMessage.id, selector.text, selector.start.toLong(), selector.end.toLong(), selector.prefix, selector.suffix, comment)
+                    when (val added = addCitation(text, citation, ComposerDraftStore.MAX_TEXT)) {
+                        is CitationAdded.Text -> { if (!added.duplicate) editText(added.text); citingMessageId = null; null }
+                        is CitationAdded.Refused -> added.reason
+                    }
+                }
+            }
             Column(Modifier.fillMaxSize()) {
                 ConversationHeader(
                     title = if (draft != null) "New thread" else thread?.title?.ifBlank { "Untitled conversation" } ?: "Conversation",
@@ -488,7 +517,7 @@ private fun HeaderLayout(modifier: Modifier, navigation: @Composable () -> Unit,
 
 @Composable
 internal fun ConversationComposer(
-    state: ClientState, draft: ThreadDraft?, text: String, onText: (String) -> Unit, waiting: Boolean, stopPending: Boolean,
+    state: ClientState, draft: ThreadDraft?, fullText: String, onFullText: (String) -> Unit, waiting: Boolean, stopPending: Boolean,
     onSetRuntimeMode: (RuntimeMode) -> Unit, onSetModel: (ModelOption) -> Unit, onSetModelOption: (String, Any) -> Unit, onSetModelFavorite: (ModelKey, Boolean) -> Unit = { _, _ -> },
     stop: () -> Unit, onSend: (FollowUpMode?) -> Unit, canWriteNow: Boolean = state.canWrite, queueBusy: Boolean = false,
     onCancelQueued: (String) -> Unit, onSteerQueued: (String) -> Unit, onResumeQueue: () -> Unit,
@@ -498,7 +527,13 @@ internal fun ConversationComposer(
     val compactHeight = LocalCompactHeight.current
     val layout = LocalConversationLayout.current
     val noticeStyle = TrefoilType.meta.copy(fontSize = 12.sp, color = c.muted)
-    val button = resolveComposerButton(state, draft != null, text, waiting, stopPending)
+    // The draft holds the user's words and the quotes of assistant responses in one string (so it persists and sends as it is);
+    // the field edits the words, the chips show the quotes. A quote alone is a message.
+    val split = remember(fullText) { splitCitationDraft(fullText) }
+    val text = split.body
+    val onText: (String) -> Unit = { onFullText(joinCitationDraft(it, split.citations)) }
+    var openCitation by remember { mutableStateOf<AssistantCitation?>(null) }
+    val button = resolveComposerButton(state, draft != null, fullText, waiting, stopPending)
     // The field edits a TextFieldValue (selection, IME composition) that follows the caller's text: a change made elsewhere
     // (a settled send clears it, a restored draft fills it) replaces the value and puts the cursor at the end.
     // Only the caret is saved, never the text (that is the caller's draft), so a rotation or fold keeps the cursor where it was.
@@ -527,7 +562,7 @@ internal fun ConversationComposer(
         }
     }
     // Prompt suggestion: a ghost in the empty field's placeholder slot. Accepting writes it into the draft (never sends); see PromptSuggestionHint.kt.
-    val candidate = promptSuggestionCandidate(state, draft != null, text, waiting, canWriteNow, promptSuggestions.dismissed)
+    val candidate = promptSuggestionCandidate(state, draft != null, fullText, waiting, canWriteNow, promptSuggestions.dismissed)
     val hint = rememberSettledPromptSuggestion(candidate, promptSuggestions.appearDelayMs)
     val ghostOn = hint.shown
     val reducedMotion = rememberAnimationsOff()
@@ -584,12 +619,18 @@ internal fun ConversationComposer(
     val fieldIndent by animateDpAsState(if (ghostOn) PromptSuggestionIndent else 0.dp, tween(if (reducedMotion) 0 else 180), label = "suggestion-indent")
     val fieldColor = lerp(c.muted, c.text, solidify.value)
     val placeholderAlpha by animateFloatAsState(if (ghostOn) 0f else 1f, tween(if (reducedMotion) 0 else if (ghostOn) 220 else 120), label = "placeholder-alpha")
+    openCitation?.takeIf { it in split.citations }?.let { citation ->
+        CitationEditDialog(citation, { openCitation = null },
+            onSave = { updated -> openCitation = null; onFullText(replaceCitation(fullText, citation, updated, ComposerDraftStore.MAX_TEXT)) },
+            onRemove = { openCitation = null; onFullText(removeCitation(fullText, citation)) })
+    }
     ReadingDock(phoneHorizontal = 12.dp, top = if (compactHeight) 2.dp else 4.dp, bottom = if (compactHeight) 8.dp else 16.dp) {
         if (!state.canWrite) Text("Read only · reconnect to continue", Modifier.padding(start = 6.dp, bottom = 6.dp), style = noticeStyle)
         if (waiting) Text("Waiting for server confirmation…", Modifier.padding(start = 6.dp, bottom = 6.dp), style = noticeStyle)
         if (draft == null && (state.queuedMessages.isNotEmpty() || state.queueHeld)) QueuedMessagesStrip(state, canWriteNow && !queueBusy, onCancelQueued, onSteerQueued, onResumeQueue)
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = c.s1, contentColor = c.text, border = BorderStroke(1.dp, c.line)) {
             Column {
+                if (split.citations.isNotEmpty()) CitationChips(split.citations, { openCitation = it }, { onFullText(removeCitation(fullText, it)) })
                 BasicTextField(
                     value = value, onValueChange = ::edited, maxLines = if (compactHeight) 2 else 6,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = fieldColor), cursorBrush = SolidColor(c.accent),
@@ -613,7 +654,7 @@ internal fun ConversationComposer(
                 Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 6.dp, top = if (layout.wide) 2.dp else 4.dp, bottom = if (layout.wide) 4.dp else 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     ComposerPickers(state, draft, onSetRuntimeMode, onSetModel, onSetModelOption, onSetModelFavorite, Modifier.weight(1f))
                     // Wide: the two follow-up deliveries are visible next to the button instead of behind its long press.
-                    if (layout.wide && button.offersAlternate && text.isNotBlank()) FollowUpChoice(button.action, state.canSteer, button.enabled, onSend)
+                    if (layout.wide && button.offersAlternate && fullText.isNotBlank()) FollowUpChoice(button.action, state.canSteer, button.enabled, onSend)
                     PrimaryComposerButton(button, state.canSteer, stop, onSend)
                 }
             }

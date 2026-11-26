@@ -28,8 +28,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import com.tajchert.trefoil.R
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,7 +57,12 @@ internal fun MessageRow(message: ConversationMessage, stacked: Boolean, showMeta
         if (user) {
             Surface(shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp), color = c.s2, contentColor = c.text,
                 modifier = if (layout.wide) Modifier.widthIn(max = layout.bubbleMax.dp) else Modifier.fillMaxWidth(.86f)) {
-                SelectionContainer { Text(rememberLinkified(message.text), Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp)) }
+                // A message that quotes an assistant response shows the quote as a block, never the raw `t3-citation://` link.
+                val citations = remember(message.text) { collectAssistantCitations(message.text) }
+                SelectionContainer {
+                    if (citations.isEmpty()) Text(rememberLinkified(message.text), Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp))
+                    else CitedUserText(message.text, citations, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+                }
             }
         } else {
             MarkdownContent(message.text, Modifier.fillMaxWidth())
@@ -69,7 +76,13 @@ internal fun MessageRow(message: ConversationMessage, stacked: Boolean, showMeta
                 val time = messageTime(message.updatedAt ?: message.createdAt)
                 time?.let { Text((if (!user) "T3 · " else "") + it, Modifier.padding(top = 6.dp, end = if (user) 4.dp else 0.dp), style = TrefoilType.meta.copy(fontSize = 12.sp), color = c.muted) }
                 // Wide column: with no timestamp in front, pull the 48dp button left so its glyph lines up with the prose edge (the hit area keeps its size).
-                if (!user) Box(if (layout.wide && time == null) Modifier.offset(x = (-16).dp) else Modifier) { TfIconButton(Icons.Default.ContentCopy, "Copy response", { clipboard.setText(AnnotatedString(message.text)) }, iconSize = 15.dp, tint = c.muted) }
+                if (!user) Box(if (layout.wide && time == null) Modifier.offset(x = (-16).dp) else Modifier) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TfIconButton(Icons.Default.ContentCopy, "Copy response", { clipboard.setText(AnnotatedString(message.text)) }, iconSize = 15.dp, tint = c.muted)
+                        val onCite = LocalAssistantCiting.current.onCite
+                        if (onCite != null && message.text.isNotBlank()) TfIconButton(TfIcons.Quote, stringResource(R.string.citation_cite_action), { onCite(message) }, iconSize = 15.dp, tint = c.muted)
+                    }
+                }
             }
         }
     }
