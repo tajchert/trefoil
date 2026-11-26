@@ -36,5 +36,7 @@ class ThreadIssueChipsTest {
         assertFalse(isOpenableIssueUrl("intent://scan/#Intent;end"))
         assertFalse(isOpenableIssueUrl("https://"))
         assertFalse(isOpenableIssueUrl("github.com/acme"))
+        assertFalse(isOpenableIssueUrl("https:foo"))
+        assertFalse(isOpenableIssueUrl("http:/x"))
     }
 }

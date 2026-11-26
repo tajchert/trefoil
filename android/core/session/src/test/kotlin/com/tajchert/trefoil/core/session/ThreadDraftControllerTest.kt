@@ -405,6 +405,7 @@ class ThreadDraftControllerTest {
         h.client.onLink = { _, _ -> gate.await() }
         h.controller.retryIssueLink(); h.controller.retryIssueLink(); runCurrent()
         assertEquals(3, h.client.links.size)
+        assertNull("Hidden while the retry is in flight", h.controller.issueLinkNotice.value)
         gate.complete(Unit); runCurrent()
         assertNull(h.controller.issueLinkNotice.value)
         h.controller.retryIssueLink(); runCurrent()

@@ -186,6 +186,8 @@ class ThreadDraftController(
         val pending = _issueLinkNotice.value ?: return
         if (linking) return
         if (client.state.value.environment?.id != pending.environmentId) { _issueLinkNotice.value = null; return }
+        // Cleared while in flight, so a repeated rejection emits the notice again.
+        _issueLinkNotice.value = null
         sendLink(pending)
     }
     fun dismissIssueLinkNotice() { _issueLinkNotice.value = null; uncertainLink = null; awaitingLink = null }

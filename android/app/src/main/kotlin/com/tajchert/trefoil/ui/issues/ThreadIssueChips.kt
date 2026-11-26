@@ -55,8 +55,8 @@ internal fun issueSourceLabel(source: String): String = if (source == "agent") "
 
 /** Only http and https links are opened from an issue row; anything else is dropped. */
 internal fun isOpenableIssueUrl(url: String): Boolean {
-    val scheme = url.substringBefore(':', "").lowercase()
-    return (scheme == "http" || scheme == "https") && url.length > scheme.length + 3
+    val prefix = listOf("http://", "https://").firstOrNull { url.startsWith(it, ignoreCase = true) } ?: return false
+    return url.substring(prefix.length).isNotBlank()
 }
 
 /**
