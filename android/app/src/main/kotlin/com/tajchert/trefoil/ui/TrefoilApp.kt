@@ -614,7 +614,7 @@ fun TrefoilApp(
                         ShellBack.ClosePanel -> closePanelToToggle()
                         ShellBack.ToParent -> backParent?.let { select(it.id) }
                         ShellBack.ToList -> { cancelDraft(); showThread = false }
-                        ShellBack.ToIssueList -> issueDetailOpen = false
+                        ShellBack.ToIssueList -> { issueDetailOpen = false; if (issueFromPanel) closePanel() }
                         null -> Unit
                     }
                 }
@@ -813,7 +813,7 @@ fun TrefoilApp(
                     IssuesScreen(issues.list, state.projects, issues.detail.ref?.takeIf { issueOpen && issues.detail.environmentId == environmentId }, issueListActions, m)
                 }
                 val issueDetail: @Composable (Modifier) -> Unit = { m ->
-                    if (issueOpen) IssueDetailContent(issues.detail, issueDetailActions { if (issuesTwoPane) navigate(ShellDestination.Threads) else issueDetailOpen = false }, m, issueLinkExtras)
+                    if (issueOpen) IssueDetailContent(issues.detail, issueDetailActions { if (issuesTwoPane) navigate(ShellDestination.Threads) else { issueDetailOpen = false; if (issueFromPanel) closePanel() } }, m, issueLinkExtras)
                     else Box(m, contentAlignment = Alignment.Center) { Text("Select an issue", style = TrefoilType.preview, color = Tf.colors.muted) }
                 }
                 // Every destination but the thread list and the conversation; each fills the modifier it is given.

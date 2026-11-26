@@ -12,7 +12,8 @@ data class IssueLinkTarget(val ref: IssueRef, val key: IssueKey)
 /**
  * Resolves a tapped chat URL to an issue the server has already named. Pure: no network, no logging, no Android.
  * Rules, in order: a selected-thread link with the same normalized URL; an in-memory list entry with the same
- * normalized URL; an issue-shaped URL whose host and scope exactly match a cached scope. A lookalike host or a
+ * normalized URL; an issue-shaped URL whose host and scope exactly match a cached scope (a hostless scope is paired only
+ * with the hosts of its own tracker in [trackerHosts], keyed by tracker). A lookalike host or a
  * different port matches nothing.
  */
 object IssueLinkResolver {
@@ -33,7 +34,7 @@ object IssueLinkResolver {
         threadLinks: List<ThreadIssueLink>,
         listEntries: List<IssueSummary>,
         scopes: List<IssueScope>,
-        trackerHosts: List<String> = emptyList(),
+        trackerHosts: Map<String, List<String>> = emptyMap(),
     ): IssueLinkTarget? {
         val parsed = parse(url) ?: return null
         val normalized = parsed.normalized
@@ -47,10 +48,10 @@ object IssueLinkResolver {
 
     private class Candidate(val projectId: String, val tracker: String, val host: String, val scope: String)
 
-    private fun candidates(entries: List<IssueSummary>, scopes: List<IssueScope>, trackerHosts: List<String>): List<Candidate> {
+    private fun candidates(entries: List<IssueSummary>, scopes: List<IssueScope>, trackerHosts: Map<String, List<String>>): List<Candidate> {
         val out = ArrayList<Candidate>()
         for (s in scopes) {
-            val hosts = if (s.host.isNullOrBlank()) trackerHosts else listOf(s.host!!)
+            val hosts = if (s.host.isNullOrBlank()) trackerHosts[s.tracker].orEmpty() else listOf(s.host!!)
             for (h in hosts) if (h.isNotBlank()) out += Candidate(s.projectId, s.tracker, h.trim(), s.scope.trim())
         }
         for (e in entries) {

@@ -18,7 +18,7 @@ class IssueLinkResolverTest {
 
     private fun resolve(
         url: String, links: List<ThreadIssueLink> = emptyList(), entries: List<IssueSummary> = emptyList(),
-        scopes: List<IssueScope> = this.scopes, hosts: List<String> = emptyList(),
+        scopes: List<IssueScope> = this.scopes, hosts: Map<String, List<String>> = emptyMap(),
     ) = IssueLinkResolver.resolve(url, links, entries, scopes, hosts)
 
     private fun summary(url: String, key: String = "7", scope: String = "acme/app", host: String = "github.com") = IssueSummary(
@@ -113,8 +113,15 @@ class IssueLinkResolverTest {
         val url = "https://ghe.corp/acme/app/issues/3"
         val hostless = IssueScope("p6", "github", null, "acme/app")
         assertNull(resolve(url, scopes = listOf(hostless)))
-        assertEquals("ghe.corp", resolve(url, scopes = listOf(hostless), hosts = listOf("ghe.corp"))?.ref?.host)
-        assertNull(resolve("https://github.com/acme/app/issues/3", scopes = listOf(hostless), hosts = listOf("ghe.corp")))
+        assertEquals("ghe.corp", resolve(url, scopes = listOf(hostless), hosts = mapOf("github" to listOf("ghe.corp")))?.ref?.host)
+        assertNull(resolve("https://github.com/acme/app/issues/3", scopes = listOf(hostless), hosts = mapOf("github" to listOf("ghe.corp"))))
+    }
+
+    @Test fun hostlessScopeOnlyMatchesHostsOfItsOwnTracker() {
+        val hostless = IssueScope("p6", "github", null, "acme/app")
+        val hosts = mapOf("github" to listOf("github.com"), "gitlab" to listOf("gitlab.corp"))
+        assertEquals("github.com", resolve("https://github.com/acme/app/issues/3", scopes = listOf(hostless), hosts = hosts)?.ref?.host)
+        assertNull(resolve("https://gitlab.corp/acme/app/issues/3", scopes = listOf(hostless), hosts = hosts))
     }
 
     @Test fun nonHttpSchemeIsNull() {

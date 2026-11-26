@@ -67,7 +67,7 @@ class IssuesController(
     fun resolveLink(environmentId: String, url: String, threadLinks: List<ThreadIssueLink>): IssueLinkTarget? {
         val shown = mutable.value.takeIf { it.environmentId == environmentId }?.entries.orEmpty()
         val rows = shown + cache.filterKeys { it.environmentId == environmentId }.values.flatMap { it.entries }
-        val hosts = trackersFor(environmentId).map { it.host }
+        val hosts = trackersFor(environmentId).groupBy({ it.tracker }, { it.host })
         return IssueLinkResolver.resolve(url, threadLinks, rows, scopesFor(environmentId), hosts)
     }
 
