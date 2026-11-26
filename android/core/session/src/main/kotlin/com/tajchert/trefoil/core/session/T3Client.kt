@@ -79,7 +79,7 @@ class T3Client(
     /** How long [startSideChat] waits for the shell to list the forked side chat before giving up; tests lower it. */
     private val sideChatShellWaitMillis: Long = 10_000,
     /** Parses turn diffs off the main thread; see [loadTurnDiff]. */
-    private val diffParser: DiffParser = PendingDiffParser,
+    private val diffParser: DiffParser = UnifiedDiffParserAdapter,
 ) : TrefoilClient {
     private val authorizer = tokens.authorizer
     private var renewJob: Job? = null

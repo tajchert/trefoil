@@ -158,4 +158,4 @@ internal fun prSnapshot(value: JsonObject): PrSnapshot? {
 }
 
 /** Placeholder until the T2 parser lands: one document with no rows. */
-internal val PendingDiffParser = DiffParser { _ -> DiffDocument.Empty } // TODO(T2): UnifiedDiffParser.parseRepositories
+internal val UnifiedDiffParserAdapter = DiffParser { UnifiedDiffParser.parseRepositories(it) }
