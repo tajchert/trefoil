@@ -116,6 +116,7 @@ class UsageClientTest {
                             val id = frame.string("id")
                             when (frame.string("tag")) {
                                 "server.getConfig" -> success(webSocket, id, """{"providers":[]}""")
+                                "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
                                 "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
                                 "server.refreshProviders" -> refreshes.trySend(webSocket to id)
                                 "server.getUsageSummary" -> {

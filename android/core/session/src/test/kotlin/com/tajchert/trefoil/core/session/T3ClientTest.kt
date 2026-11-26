@@ -62,7 +62,7 @@ class T3ClientTest {
    server.enqueue(json("""{"authenticated":true,"permissions":["orchestration:operate"]}"""))
    server.enqueue(json("""{"ticket":"fixture-ticket"}"""))
    server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-     override fun onMessage(webSocket: WebSocket, text: String) { if (text.contains("server.getConfig")) requested.complete(Unit) }
+     override fun onMessage(webSocket: WebSocket, text: String) { if (text.contains("subscribeServerConfig")) requested.complete(Unit) }
      override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
    }))
    try {
@@ -162,6 +162,7 @@ class T3ClientTest {
        val id = frame.string("id")
        when (frame.string("tag")) {
          "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+         "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
          "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
          "orchestration.subscribeThread" -> { threadStream.complete(id); webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":$projection},{"kind":"event","sequence":0,"event":{"type":"future.additive"}},{"kind":"synchronized"}]}""") }
          "orchestration.getThreadProjection" -> reads.trySend(id)
@@ -203,6 +204,7 @@ class T3ClientTest {
        val id = frame.string("id")
        when (frame.string("tag")) {
          "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+         "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
          "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
          "orchestration.subscribeThread" -> { threadStream.complete(id); webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":$projection},{"kind":"synchronized"}]}""") }
          "orchestration.getThreadProjection" -> reads.trySend(id)
@@ -244,6 +246,7 @@ class T3ClientTest {
        val id = frame.string("id")
        when (frame.string("tag")) {
          "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+         "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
          "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
          "orchestration.subscribeThread" -> { threadStream.complete(id); webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":$projection},{"kind":"synchronized"}]}""") }
          "orchestration.getThreadProjection" -> reads.trySend(id)
@@ -282,6 +285,7 @@ class T3ClientTest {
        fun chunk(value: String) { webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[$value]}""") }
        when (request.string("tag")) {
          "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[{"instanceId":"codex","driver":"codex","displayName":"Fixture Codex","accentColor":"#123456","enabled":true,"models":[{"slug":"test","name":"Test"}]},{"instanceId":"historical-account","driver":"claudeAgent","displayName":"Previous account","enabled":false,"models":[{"slug":"hidden","name":"Hidden"}]}]}}}""")
+         "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[{"instanceId":"codex","driver":"codex","displayName":"Fixture Codex","accentColor":"#123456","enabled":true,"models":[{"slug":"test","name":"Test"}]},{"instanceId":"historical-account","driver":"claudeAgent","displayName":"Previous account","enabled":false,"models":[{"slug":"hidden","name":"Hidden"}]}]}}]}""")
          "orchestration.subscribeShell" -> chunk("""{"kind":"snapshot","snapshot":{"snapshotSequence":1,"projects":[{"id":"p","title":"Project","workspaceRoot":"/tmp/p"}],"threads":[{"id":"t","projectId":"p","title":"Thread","status":"idle"}],"archivedThreads":[]}}, {"kind":"synchronized"}""")
          "orchestration.subscribeThread" -> chunk("""{"kind":"snapshot","snapshotSequence":2,"projection":{"thread":{"id":"t"},"runs":[{"id":"run","status":"waiting","requestedAt":"2026-11-06T10:00:00Z","activeAttemptId":"attempt"}],"attempts":[{"id":"attempt","runId":"run","status":"running","attemptOrdinal":1,"reason":"initial"}],"messages":[{"id":"m","role":"assistant","text":"Hello","streaming":true}],"turnItems":[{"id":"item","type":"user_input_request","requestId":"optional","questions":[{"id":"q","question":"Optional?","options":[],"required":false}]}],"runtimeRequests":[{"id":"optional","kind":"user_input","status":"pending","responseCapability":{"type":"live"}},{"id":"unsupported","kind":"auth_refresh","status":"pending","responseCapability":{"type":"not_resumable"}}]}}, {"kind":"synchronized"}""")
          "orchestration.dispatchCommand" -> { synchronized(mutations) { mutations.add(request.obj("payload")) }
@@ -348,6 +352,7 @@ class T3ClientTest {
        val id = frame.string("id")
        when (frame.string("tag")) {
          "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+         "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
          "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
        }
      }

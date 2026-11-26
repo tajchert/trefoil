@@ -33,9 +33,10 @@ class PortForwardSessionTest {
         val acks = Channel<String>(Channel.UNLIMITED)
         @Volatile var rejectDiscovery = false
         @Volatile var capabilities = """{"previewTunnelSetting":true}"""
-        /** Extra top-level `server.getConfig` members, each with a leading comma: `,"settings":{...}`. */
+        /** Extra top-level first-config members, each with a leading comma: `,"settings":{...}`. */
         @Volatile var configExtra = ""
         val configStream = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
+        private val configStreams = java.util.concurrent.ConcurrentHashMap<String, WebSocket>()
         init {
             server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse = when {
@@ -52,12 +53,14 @@ class PortForwardSessionTest {
                         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
                         override fun onMessage(webSocket: WebSocket, text: String) {
                             val frame = EffectRpc.decode(text).single()
-                            if (frame.string("_tag") == "Ack") { acks.trySend(frame.string("requestId")); return }
+                            // The first snapshot's ack hands the stream to the test, so its own acks count only its events.
+                            if (frame.string("_tag") == "Ack") { val acked = frame.string("requestId"); configStreams.remove(acked)?.let { configStream.trySend(it to acked) } ?: acks.trySend(acked); return }
                             if (frame.string("_tag") != "Request") return
                             val id = frame.string("id")
                             when (frame.string("tag")) {
                                 "server.getConfig" -> complete(webSocket, id, """{"providers":[],"environment":{"capabilities":$capabilities}$configExtra}""")
-                                "subscribeServerConfig" -> configStream.trySend(webSocket to id)
+                                // The first snapshot is the connection's config; the test sends later events on the stream.
+                                "subscribeServerConfig" -> { configStreams[id] = webSocket; chunk(webSocket, id, """{"version":1,"type":"snapshot","config":{"providers":[],"environment":{"capabilities":$capabilities}$configExtra}}""") }
                                 "orchestration.subscribeShell" -> { shells.trySend(webSocket to id); chunk(webSocket, id, """{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}""") }
                                 "subscribeDiscoveredLocalServers" -> {
                                     discoveryCalls.incrementAndGet()

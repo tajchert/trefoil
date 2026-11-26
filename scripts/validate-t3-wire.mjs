@@ -25,7 +25,8 @@ const port = await new Promise((res, rej) => {
 const token = randomBytes(32).toString('hex');
 const origin = `http://127.0.0.1:${port}`;
 // Deliberately do not inherit T3, provider, telemetry, or cloud credentials.
-const child = spawn(process.execPath, [resolve(t3Root, 'apps/server/src/bin.ts'),
+// Node flags given to this script (e.g. an --import resolve hook) apply to the server too.
+const child = spawn(process.execPath, [...process.execArgv, resolve(t3Root, 'apps/server/src/bin.ts'),
   '--mode', 'web', '--host', '127.0.0.1', '--port', String(port),
   '--base-dir', resolve(root, 'state'), '--no-browser', '--dev-url', 'http://127.0.0.1:9'], {
   cwd: root,
@@ -130,6 +131,35 @@ try {
       modelCount++;
     }
   }
+  // Trefoil's first config: the subscribeServerConfig snapshot with T3 mobile's opt-ins (ServerConfigStream.kt).
+  // Both subscriptions run side by side for a few seconds; bytes count the config JSON (snapshot) and all stream values.
+  const SLIM = { workspaceSnapshotsOnDemand: true, providerCatalogsOnDemand: true, providerCatalogDigests: true, providerStatusDeltas: true };
+  const bytes = value => Buffer.byteLength(JSON.stringify(value));
+  for (const [id, payload] of [['config-legacy', {}], ['config-slim', SLIM]]) socket.send(JSON.stringify({ _tag: 'Request', id, tag: 'subscribeServerConfig', payload, headers: [] }));
+  const legacyFirst = await waitFor(event => event._tag === 'Chunk' && event.requestId === 'config-legacy');
+  const slimFirst = await waitFor(event => event._tag === 'Chunk' && event.requestId === 'config-slim');
+  await delay(3000);
+  for (const id of ['config-legacy', 'config-slim']) socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: id }));
+  const streamBytes = id => events.filter(event => event._tag === 'Chunk' && event.requestId === id).reduce((sum, event) => sum + bytes(event.values), 0);
+  assert.equal(slimFirst.values[0]?.type, 'snapshot', 'the slim stream starts with a snapshot');
+  const legacy = legacyFirst.values[0].config;
+  const slim = slimFirst.values[0].config;
+  const configBytes = { getConfig: bytes(config), legacySnapshot: bytes(legacy), slimSnapshot: bytes(slim),
+    legacyStream3s: streamBytes('config-legacy'), slimStream3s: streamBytes('config-slim') };
+  assert.equal(slim.environment?.environmentId, config.environment.environmentId, 'slim snapshot environment');
+  assert.equal(slim.environment?.serverVersion, config.environment.serverVersion, 'slim snapshot serverVersion (shell resume origin)');
+  assert.deepEqual(slim.environment?.capabilities, config.environment.capabilities, 'slim snapshot capabilities');
+  assert.equal(slim.settings?.defaultRuntimeMode, config.settings.defaultRuntimeMode, 'slim snapshot defaultRuntimeMode');
+  assert.ok(Array.isArray(slim.directEndpoints), 'slim snapshot directEndpoints');
+  // Provider probes may finish between requests, so compare identity and shape, not live status.
+  assert.deepEqual(slim.providers.map(p => p.instanceId), config.providers.map(p => p.instanceId), 'slim snapshot keeps every provider');
+  for (const provider of slim.providers) {
+    const full = config.providers.find(candidate => candidate.instanceId === provider.instanceId);
+    assert.ok(Array.isArray(provider.models) && provider.models.every(m => typeof m.slug === 'string' && typeof m.name === 'string'), 'slim snapshot models');
+    assert.equal(Array.isArray(provider.supportedRuntimeModes), Array.isArray(full.supportedRuntimeModes), 'slim snapshot runtime modes');
+    assert.equal(Object.hasOwn(provider, 'usageLimits'), Object.hasOwn(full, 'usageLimits'), 'slim snapshot usage limits');
+    assert.equal(provider.workspaceSnapshots, undefined, 'workspace snapshots stay on demand');
+  }
   // Exact envelopes emitted by core/protocol/EffectRpc.kt.
   socket.send(JSON.stringify({ _tag: 'Request', id: 'shell', tag: 'orchestration.subscribeShell', payload: { requestCompletionMarker: true }, headers: [] }));
   const chunk = await waitFor(event => event._tag === 'Chunk' && event.requestId === 'shell');
@@ -174,7 +204,7 @@ try {
   assert.ok(Array.isArray(rejected.cause) && rejected.cause.every(reason => reason._tag === 'Fail'), 'typed rejection is a Fail cause array');
   const resent = await rpc('orchestration.launchThread', { ...launch, commandId: 'wire-launch-2', threadId: 'wire-thread-2' });
   assert.equal(resent._tag, 'Success', 'a corrected resend may reuse the rejected ids');
-  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection.`);
+  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; config bytes ${JSON.stringify(configBytes)}.`);
 } finally {
   socket?.close();
   child.kill('SIGTERM');

@@ -44,11 +44,11 @@ class RetainedSessionTest {
                             if (frame.string("_tag") == "Ack") { acks.trySend(frame.string("requestId")); return }
                             if (frame.string("_tag") != "Request") return
                             when (frame.string("tag")) {
-                                "server.getConfig" -> if (holdConfiguration) { configurations.trySend(webSocket to id); Unit } else webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+                                "subscribeServerConfig" -> if (holdConfiguration) { configurations.trySend(webSocket to id); Unit } else webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
                                 "orchestration.subscribeShell" -> { shellPayload = frame.obj("payload"); shells.trySend(webSocket to id) }
                                 "orchestration.subscribeThread" -> { subscriptions.incrementAndGet(); threads.trySend(webSocket to id) }
                                 "orchestration.getTurnItem" -> itemReads.trySend(webSocket to frame)
-                                "subscribeServerConfig", "subscribeDiscoveredLocalServers" -> Unit
+                                "subscribeDiscoveredLocalServers" -> Unit
                                 "orchestration.dispatchCommand" -> {
                                     commands.trySend(frame.obj("payload"))
                                     if (!holdCommands) webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"sequence":1}}}""")
@@ -293,7 +293,7 @@ class RetainedSessionTest {
             f.client.selectThread("open-0")
             assertEquals("Open reply", f.client.state.value.messages.single().text)
             assertFalse(f.client.state.value.canWrite)
-            config.first.send("""{"_tag":"Exit","requestId":"${config.second}","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+            config.first.send("""{"_tag":"Chunk","requestId":"${config.second}","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
             f.shell(withTimeout(5000) { reconnect.await() })
             f.threadSnapshot(withTimeout(5000) { f.threads.receive() }, "Fresh open reply")
             assertEquals("open-0", f.client.state.value.selectedThreadId)

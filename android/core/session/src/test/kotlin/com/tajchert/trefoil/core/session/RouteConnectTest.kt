@@ -74,7 +74,8 @@ class RouteConnectTest {
                 when (frame.string("tag")) {
                     "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":$config}}""")
                     "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
-                    "subscribeServerConfig" -> configStream.complete(id)
+                    // The first snapshot is the connection's config; tests send later events on the stream.
+                    "subscribeServerConfig" -> { webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":$config}]}"""); configStream.complete(id) }
                     "orchestration.subscribeThread" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":{"thread":{"id":"t"},"messages":[],"runs":[],"turnItems":[],"runtimeRequests":[]}},{"kind":"synchronized"}]}""")
                     "orchestration.dispatchCommand" -> {
                         dispatched.trySend(id)

@@ -29,7 +29,7 @@ class ShellRefreshTest {
         val server = MockWebServer(); server.dispatcher = LinkStateTolerantQueue(); server.start()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val client = T3Client(scope, requestTimeoutMillis = 1_500)
-        val requests = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+        val requests = java.util.concurrent.CopyOnWriteArrayList<Pair<String, String>>()
         var ws: WebSocket? = null
         var shells = 0
         val listener = object : WebSocketListener() {
@@ -42,6 +42,7 @@ class ShellRefreshTest {
                 if (frame.string("_tag") != "Request") return
                 when (frame.string("tag")) {
                     "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+                    "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
                     "orchestration.subscribeShell" -> shell(shells++, id)?.let { webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[$it]}""") }
                 }
             }

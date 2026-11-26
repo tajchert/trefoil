@@ -33,6 +33,7 @@ class OversizedFrameTest {
                             val id = frame.string("id")
                             when (frame.string("tag")) {
                                 "server.getConfig" -> complete(webSocket, id, """{"providers":[],"environment":{"capabilities":{}},"settings":{}}""")
+                                "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[],"environment":{"capabilities":{}},"settings":{}}}]}""")
                                 "orchestration.subscribeShell" -> chunk(webSocket, id, """{"kind":"snapshot","snapshot":{"snapshotSequence":10,"projects":[{"id":"p","title":"P","workspaceRoot":"/w"}],"threads":[{"id":"small","projectId":"p","title":"Small"},{"id":"big","projectId":"p","title":"Big"}${if (bigShell) ""","pad":"$PAD"""" else ""}]}},{"kind":"synchronized"}""")
                                 "orchestration.subscribeThread" -> {
                                     val threadId = frame.obj("payload").string("threadId")

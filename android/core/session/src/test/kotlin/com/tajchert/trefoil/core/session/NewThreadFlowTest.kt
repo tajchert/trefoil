@@ -54,6 +54,7 @@ class NewThreadFlowTest {
         if (custom(webSocket, id, tag, payload)) return
         when (tag) {
           "server.getConfig" -> webSocket.send(success(id, config))
+          "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":$config}]}""")
           "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[{"id":"p","title":"Project","workspaceRoot":"/fixture/p"}],"threads":[${shellThreads()}],"archivedThreads":[]}},{"kind":"synchronized"}]}""")
           "orchestration.subscribeThread" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":${projections[payload.string("threadId")]}},{"kind":"synchronized"}]}""")
           "orchestration.getThreadProjection" -> webSocket.send(success(id, projections.getValue(payload.string("threadId"))))
@@ -492,7 +493,7 @@ class NewThreadFlowTest {
     server.enqueue(json("""{"authenticated":true,"permissions":["orchestration:operate"]}"""))
     server.enqueue(json("""{"ticket":"fixture-ticket"}"""))
     server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-      override fun onMessage(webSocket: WebSocket, text: String) { if (text.contains("server.getConfig")) requested.complete(Unit) }
+      override fun onMessage(webSocket: WebSocket, text: String) { if (text.contains("subscribeServerConfig")) requested.complete(Unit) }
       override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
     }))
     try {

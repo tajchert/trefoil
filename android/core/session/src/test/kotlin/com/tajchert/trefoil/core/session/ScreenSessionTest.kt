@@ -48,6 +48,7 @@ class ScreenSessionTest {
                             val id = frame.string("id")
                             when (frame.string("tag")) {
                                 "server.getConfig" -> complete(webSocket, id, """{"providers":[],"environment":{"capabilities":{"serverBrowser":true}}}""")
+                                "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[],"environment":{"capabilities":{"serverBrowser":true}}}}]}""")
                                 "orchestration.subscribeShell" -> chunk(webSocket, id, """{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}""")
                                 "orchestration.subscribeThread" -> { threadEvents.trySend(webSocket to id); chunk(webSocket, id, """{"kind":"snapshot","projection":{"thread":{"id":"t"},"messages":[],"turnItems":[],"runs":[],"runtimeRequests":[]}},{"kind":"synchronized"}""") }
                                 "preview.list" -> if (holdList) { heldLists.trySend(webSocket to id) } else complete(webSocket, id, browsers)

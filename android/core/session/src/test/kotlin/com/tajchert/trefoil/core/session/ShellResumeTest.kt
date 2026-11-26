@@ -140,9 +140,13 @@ class ShellResumeTest {
         @Volatile var sessionDown = false
         /** When set, the WebSocket ticket request waits for it: the connect is in progress and has not planned the shell. */
         @Volatile var ticketHold: java.util.concurrent.CountDownLatch? = null
-        /** When false, `server.getConfig` requests wait in [heldConfigs] for [answerConfig]. */
+        /** When false, first-config requests (`subscribeServerConfig`, or `server.getConfig`) wait in [heldConfigs] for [answerConfig]. */
         @Volatile var answerConfigs = true
         val heldConfigs = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
+        /** Request ids of `subscribeServerConfig` streams, answered with a snapshot chunk instead of an Exit. */
+        val configStreams: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        /** An older server: `subscribeServerConfig` is rejected, so the first config comes from `server.getConfig`. */
+        @Volatile var rejectConfigStream = false
         /** Socket request tags and HTTP paths in arrival order. */
         val log = java.util.concurrent.CopyOnWriteArrayList<String>()
         init {
@@ -168,6 +172,7 @@ class ShellResumeTest {
                             }
                             log.add(frame.string("tag"))
                             when (frame.string("tag")) {
+                                "subscribeServerConfig" -> if (rejectConfigStream) webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Failure","cause":[{"_tag":"Die","defect":"Unknown request tag"}]}}""") else { configStreams += id; if (answerConfigs) answerConfig(webSocket to id) else heldConfigs.trySend(webSocket to id) }
                                 "server.getConfig" -> if (answerConfigs) answerConfig(webSocket to id) else heldConfigs.trySend(webSocket to id)
                                 "orchestration.subscribeShell" -> shells.trySend(Triple(webSocket, id, frame.obj("payload")))
                             }
@@ -180,7 +185,9 @@ class ShellResumeTest {
         }
         fun answerConfig(request: Pair<WebSocket, String>) {
             val environment = serverVersion?.let { """"environment":{"environmentId":"$environmentId","serverVersion":"$it","databaseMigration":40,"capabilities":{}},""" }.orEmpty()
-            request.first.send("""{"_tag":"Exit","requestId":"${request.second}","exit":{"_tag":"Success","value":{$environment"providers":[]}}}""")
+            val config = """{$environment"providers":[]}"""
+            if (request.second in configStreams) request.first.send("""{"_tag":"Chunk","requestId":"${request.second}","values":[{"version":1,"type":"snapshot","config":$config}]}""")
+            else request.first.send("""{"_tag":"Exit","requestId":"${request.second}","exit":{"_tag":"Success","value":$config}}""")
         }
         fun environment() = SavedEnvironment(environmentId, "Fixture", server.url("/").toString(), "fixture-token")
         suspend fun connect(): Triple<WebSocket, String, JsonObject> { client.connect(environment()); return nextShell() }
@@ -340,7 +347,8 @@ class ShellResumeTest {
             val shell = f.nextShell()
             assertNull(shell.afterSequence)
             val config = withTimeout(5000) { f.heldConfigs.receive() }
-            assertTrue("The config is asked first", f.log.indexOf("server.getConfig") < f.log.indexOf("orchestration.subscribeShell"))
+            assertTrue("The config is asked first", f.log.indexOf("subscribeServerConfig") < f.log.indexOf("orchestration.subscribeShell"))
+            assertFalse("The stream snapshot is the first config", "server.getConfig" in f.log)
             f.chunk(shell, """${Fixture.shell(10, Fixture.project, Fixture.thread("a"))}, {"kind":"synchronized"}""")
             val early = f.client.state.value
             assertEquals(ConnectionStatus.Connecting, early.connection)
@@ -350,10 +358,24 @@ class ShellResumeTest {
             withTimeout(5000) { connecting.await() }
             val live = withTimeout(5000) { f.client.state.first { it.canWrite } }
             assertTrue(live.canWriteThreads && live.threadActionsConfigured && live.connection == ConnectionStatus.Connected)
-            withTimeout(5000) { while ("subscribeServerConfig" !in f.log || "/api/connect/link-state" !in f.log) delay(10) }
+            withTimeout(5000) { while ("/api/connect/link-state" !in f.log) delay(10) }
             // The early snapshot's cursor took its origin from the config, so the next connect resumes.
             f.client.disconnect(); f.answerConfigs = true
             assertEquals(10L, f.connect().afterSequence)
+        }
+    }
+
+    @Test fun aServerRejectingTheConfigStreamGivesTheFirstConfigThroughGetConfig() = runBlocking {
+        Fixture().use { f ->
+            f.rejectConfigStream = true
+            f.chunk(f.connect(), """${Fixture.shell(10, Fixture.project, Fixture.thread("a"))}, {"kind":"synchronized"}""")
+            withTimeout(5000) { f.client.state.first { it.canWrite } }
+            assertTrue("server.getConfig" in f.log)
+            assertTrue(f.log.indexOf("subscribeServerConfig") < f.log.indexOf("server.getConfig"))
+            // The origin still came from the config, so the next connect resumes.
+            f.client.disconnect()
+            assertEquals(10L, f.connect().afterSequence)
+            assertEquals(ConnectionStatus.Connected, f.client.state.value.connection)
         }
     }
 
@@ -361,7 +383,7 @@ class ShellResumeTest {
         Fixture().use { f ->
             f.chunk(f.connect(), """${Fixture.shell(10, Fixture.project, Fixture.thread("a"))}, {"kind":"synchronized"}""")
             // This connection's own hints arrive first, so none of them count against the next one.
-            withTimeout(5000) { while ("subscribeServerConfig" !in f.log || "/api/connect/link-state" !in f.log) delay(10) }
+            withTimeout(5000) { while ("/api/connect/link-state" !in f.log) delay(10) }
             f.client.disconnect(); f.log.clear(); f.answerConfigs = false
             val connecting = async { f.client.connect(f.environment()) }
             val config = withTimeout(5000) { f.heldConfigs.receive() }
@@ -372,9 +394,11 @@ class ShellResumeTest {
             assertEquals(10L, resumed.afterSequence)
             withTimeout(5000) { connecting.await() }
             delay(200)
-            assertFalse("No route hints before the shell is synchronized", "subscribeServerConfig" in f.log || "/api/connect/link-state" in f.log)
+            assertFalse("No link-state read before the shell is synchronized", "/api/connect/link-state" in f.log)
+            assertEquals("One config stream per connection, no second config", 1, f.log.count { it == "subscribeServerConfig" || it == "server.getConfig" })
             f.chunk(resumed, """{"kind":"synchronized"}""")
-            withTimeout(5000) { while ("subscribeServerConfig" !in f.log || "/api/connect/link-state" !in f.log) delay(10) }
+            withTimeout(5000) { while ("/api/connect/link-state" !in f.log) delay(10) }
+            assertEquals(1, f.log.count { it == "subscribeServerConfig" || it == "server.getConfig" })
             assertTrue(f.client.state.value.canWrite)
         }
     }

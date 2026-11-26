@@ -46,6 +46,7 @@ class SubagentStopTest {
         fun success(value: String) = webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":$value}}""")
         when (frame.string("tag")) {
           "server.getConfig" -> success("""{"providers":[],"environment":{"capabilities":$capabilities}}""")
+          "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[],"environment":{"capabilities":$capabilities}}}]}""")
           "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
           "orchestration.subscribeThread" -> { threadStream.complete(id); webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":$projection},{"kind":"synchronized"}]}""") }
           // Parent refreshes stay unanswered so a stale projection stays stale.

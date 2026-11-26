@@ -70,6 +70,7 @@ class FollowUpQueueTest {
         fun success(value: String) = webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":$value}}""")
         when (frame.string("tag")) {
           "server.getConfig" -> success("""{"providers":[],"environment":{"capabilities":$capabilities}}""")
+          "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[],"environment":{"capabilities":$capabilities}}}]}""")
           "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}]}""")
           "orchestration.subscribeThread" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":$projection},{"kind":"synchronized"}]}""")
           "orchestration.getThreadProjection" -> { val threadId = frame.obj("payload").string("threadId"); reads.trySend(threadId); if (threadId == "child") scope.launch { childGate?.await(); success(child) } }

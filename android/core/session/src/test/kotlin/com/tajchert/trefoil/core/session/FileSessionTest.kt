@@ -36,6 +36,7 @@ class FileSessionTest {
                             val id = frame.string("id")
                             when (frame.string("tag")) {
                                 "server.getConfig" -> complete(webSocket, id, """{"providers":[]}""")
+                                "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
                                 "orchestration.subscribeShell" -> chunk(webSocket, id, """{"kind":"snapshot","snapshot":{"projects":[],"threads":[]}},{"kind":"synchronized"}""")
                                 "orchestration.subscribeThread" -> chunk(webSocket, id, """{"kind":"snapshot","projection":{"thread":{"id":"${frame.obj("payload").string("threadId")}"},"messages":[],"turnItems":[],"runs":[],"runtimeRequests":[]}},{"kind":"synchronized"}""")
                                 "assets.createUrl" -> if (holdAsset) held.trySend(webSocket to id) else complete(webSocket, id, """{"relativeUrl":"/api/assets/signed/app.apk","expiresAt":4102444800000}""")

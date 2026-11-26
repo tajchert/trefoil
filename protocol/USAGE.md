@@ -20,7 +20,7 @@ The memory-only summary cache lasts 60 seconds per environment, range, time zone
 and until-day and serves provisional reads only; `awaitRefresh` reads (explicit
 Refresh, provisional follow-up) always ask the server. Changing environments clears the cache.
 
-`server.getConfig` providers contain `usageLimits`, including checked time, windows
+Config providers (first `subscribeServerConfig` snapshot, else `server.getConfig`; kept current by `providerStatuses`/`providerStatusDeltas`) contain `usageLimits`, including checked time, windows
 and unavailable notices. `server.refreshProviders {}` requires `orchestration:read`
 and returns `{providers:[...]}`. It replaces provider limits only after a valid
 reply. Concurrent refreshes share one request; automatic refreshes are skipped for

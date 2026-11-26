@@ -10,7 +10,9 @@ import kotlinx.serialization.json.*
 private fun JsonObject.optionalText(key: String): String? = string(key).takeIf { it.isNotBlank() }
 private fun JsonObject.ordinal(): Int? = (get("ordinal") as? JsonPrimitive)?.intOrNull
 
-internal fun providerInstances(config: JsonObject): List<ProviderInstance> = config.objects("providers").map { provider ->
+internal fun providerInstances(config: JsonObject): List<ProviderInstance> = providerInstances(config.objects("providers"))
+
+internal fun providerInstances(providers: List<JsonObject>): List<ProviderInstance> = providers.map { provider ->
     ProviderInstance(
         instanceId = provider.string("instanceId"), driver = provider.string("driver"),
         displayName = provider.optionalText("displayName"), accentColor = provider.optionalText("accentColor"),

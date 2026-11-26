@@ -111,7 +111,7 @@ class T3Client(
     private var shellFullWanted = false
     /** Test seam: runs once the config is parsed, just before the connection is published. */
     @Volatile internal var beforeConnectPublished: (() -> Unit)? = null
-    /** Shell origin of the live connection from its `server.getConfig`; what [resyncThreads] resumes against. */
+    /** Shell origin of the live connection from its first server config; what [resyncThreads] resumes against. */
     private var liveShellOrigin: ShellOrigin? = null
     private var threadReady = false
     private var authorized = false
@@ -176,12 +176,19 @@ class T3Client(
     /** Last `directEndpoints` reported for the live connection (null: not reported); snapshots emit only on change. */
     private var directEndpoints: List<DirectEndpointHint>? = null
     private var configSubscription: String? = null
+    /** The live connection's first `subscribeServerConfig` snapshot while [firstServerConfig] waits for it. */
+    private var firstConfig: CompletableDeferred<JsonObject>? = null
+    /** Whether the connection published its first config; config stream events wait in [earlyConfigEvents] until then. */
+    private var configPublished = false
+    private val earlyConfigEvents = mutableListOf<JsonObject>()
+    /** The live connection's providers as the config stream last reported them: the base of `providerStatusDeltas`. */
+    private var configProviders: List<JsonObject> = emptyList()
     /** The live connection's preview-tunnel config, kept current by [serverConfigEvent]. Guarded by [lifecycleLock]. */
     private var tunnelConfig = PreviewTunnelConfig()
     private var linkStateJob: Job? = null
     /** [startRouteHints] for the live connection, run at its first shell `synchronized` marker. */
     private var pendingRouteHints: (() -> Unit)? = null
-    /** Whether the first (getConfig + link-state) hint went out; earlier snapshots only update [directEndpoints]. */
+    /** Whether the first (first config + link-state) hint went out; earlier snapshots only update [directEndpoints]. */
     private var initialHintSent = false
     /** Mutations between their first local check and their outcome; see [isIdleForRouteSwitch]. */
     private val mutationsInFlight = java.util.concurrent.atomic.AtomicInteger()
@@ -325,6 +332,8 @@ class T3Client(
     private class RequestInterrupted : IllegalStateException("Server interrupted the request; the outcome is uncertain")
     /** No reply in time. Deliberately not a CancellationException, so callers cannot swallow it as cancellation. */
     internal class RequestTimedOut : IllegalStateException("Server did not answer in time; the outcome is uncertain")
+    /** The config stream was rejected or ended before its first snapshot: the connect asks `server.getConfig` instead. */
+    private class ConfigStreamUnavailable : IllegalStateException("Server config stream unavailable")
     /** Credential-free: the public descriptor never receives a token. */
     private suspend fun descriptor(base: HttpUrl, timeoutMillis: Long? = null, enqueued: Boolean = false): JsonObject = fetch(Request.Builder().url(base.resolve("/.well-known/t3/environment")!!).build(), timeoutMillis, enqueued).also {
         if (it["orchestrationProtocolVersion"]?.jsonPrimitive?.intOrNull != 2) throw PairingException("This environment does not support orchestration protocol 2")
@@ -537,7 +546,7 @@ class T3Client(
                 }
             } }
             // Without a cursor that could resume these rows, the shell snapshot does not depend on the config: ask for both
-            // at once (config first, so its small reply leads). With one, the config's origin decides whether the cursor
+            // at once (config first, so its small snapshot leads). With one, the config's origin decides whether the cursor
             // still resumes, so the shell waits for it.
             val early = synchronized(lifecycleLock) {
                 check(epoch == generation) { "Connection was cancelled" }
@@ -545,7 +554,7 @@ class T3Client(
                 !shellResume.mayResume(environment.id, ShellRows(state.value.projects, state.value.threads))
             }
             val config = coroutineScope {
-                val reply = async(start = CoroutineStart.UNDISPATCHED) { rpc("server.getConfig", buildJsonObject {}, epoch).jsonObject }
+                val reply = async(start = CoroutineStart.UNDISPATCHED) { firstServerConfig(epoch, environment.id) }
                 if (early) subscribeShellBeforeOrigin(epoch, environment.id)
                 reply.await()
             }
@@ -557,10 +566,7 @@ class T3Client(
             // The capability only says the server honors `enablePreviewTunnel` (absent where the tunnel cannot be switched off);
             // whether the tunnel is off comes from the config's effective value.
             val tunnel = PreviewTunnelConfig().withConfig(config)
-            val models = config.objects("providers").filter { it["enabled"]?.jsonPrimitive?.booleanOrNull != false }.flatMap { provider ->
-                val modes = supportedRuntimeModes(provider)
-                provider.objects("models").map { catalogModelOption(provider.string("instanceId"), modes, it) }
-            }
+            val models = catalogModels(config.objects("providers"))
             val defaultMode = RuntimeMode.fromWire(config.obj("settings").string("defaultRuntimeMode"))
             val (defaultModel, projectDefaults) = newThreadDefaults(config["settings"] as? JsonObject)
             val preferences = modelPreferences(config["settings"] as? JsonObject, ModelPreferences())
@@ -574,6 +580,7 @@ class T3Client(
                 promptSuggestionsEnabled = suggestions
                 authorized = mayOperate; previewAuthorized = mayPreview; settingsAuthorized = mayWriteSettings; serverPreferences = preferences; serverBrowser = browserCapable
                 directEndpoints = endpoints; tunnelConfig = tunnel; liveShellOrigin = origin; shellResume.originKnown(origin)
+                configProviders = config.objects("providers")
                 // An early shell synchronized before its origin was known has a checkpoint without its cursor.
                 if (shellSynced) checkpointShell(marker = false)
                 update { it.copy(connection = ConnectionStatus.Connected, threadActionsConfigured = true, activeRoute = route, canReadUsage = mayReadUsage, models = models, providers = providers, defaultRuntimeMode = defaultMode, defaultModelSelection = defaultModel, projectDefaults = projectDefaults, modelPreferences = preferences, threadStopSupported = threadStop, previewTunnelSetting = tunnel.capability, previewTunnelDisabled = tunnel.disabled,
@@ -582,6 +589,11 @@ class T3Client(
                 // link; they wait for the shell's synchronized marker.
                 pendingRouteHints = { startRouteHints(epoch, environment, base) }
                 syncPromptSuggestion()
+                // Without a live config stream (rejected, or ended), nothing keeps the setting and policy current.
+                if (configSubscription == null) configStreamLost()
+                // Stream events that followed the first snapshot apply on top of it, in order.
+                configPublished = true
+                earlyConfigEvents.toList().also { earlyConfigEvents.clear() }.forEach { serverConfigEvent(epoch, environment.id, it) }
             }
             if (!early) subscribeShell(epoch, environment.id, origin)
             // An early shell may already be synchronized; writes still needed Connected, so re-evaluate them now.
@@ -621,15 +633,29 @@ class T3Client(
     }
 
     /**
-     * Route hints of the live connection: one [RouteHints] with `server.getConfig` `directEndpoints` and the
-     * link-state tunnel, then one per `subscribeServerConfig` snapshot whose `directEndpoints` change. The config
-     * stream is optional (its end never fails the session) and dies with the connection, like the link-state read.
-     * Started at the connection's first shell `synchronized` marker (see [shellLive]), never before.
+     * The connection's first server config: the first `subscribeServerConfig` snapshot (T3 mobile's `initialConfig`),
+     * so the full config never travels twice. The stream stays open for later updates (see [serverConfigEvent]); it
+     * is optional, so its later end never fails the session. A server that rejects or ends it before the snapshot
+     * answers `server.getConfig` instead, and the stream then counts as lost.
+     */
+    private suspend fun firstServerConfig(epoch: Long, environmentId: String): JsonObject {
+        val first = CompletableDeferred<JsonObject>()
+        synchronized(lifecycleLock) {
+            check(epoch == generation) { "Connection was cancelled" }
+            firstConfig = first; configPublished = false; earlyConfigEvents.clear()
+            configSubscription = subscribe("subscribeServerConfig", SERVER_CONFIG_SUBSCRIPTION_INPUT) { event -> serverConfigEvent(epoch, environmentId, event) }
+        }
+        val snapshot = try { withTimeoutOrNull(requestTimeoutMillis) { first.await() } ?: throw RequestTimedOut() } catch (_: ConfigStreamUnavailable) { null }
+        return snapshot ?: rpc("server.getConfig", buildJsonObject {}, epoch).jsonObject
+    }
+
+    /**
+     * Route hints of the live connection: one [RouteHints] with the first config's `directEndpoints` and the link-state
+     * tunnel, then one per `subscribeServerConfig` snapshot whose `directEndpoints` change. The link-state read dies
+     * with the connection. Started at the connection's first shell `synchronized` marker (see [shellLive]), never before.
      */
     private fun startRouteHints(epoch: Long, environment: SavedEnvironment, base: HttpUrl) = synchronized(lifecycleLock) {
         if (epoch != generation) return@synchronized
-        configSubscription = runCatching { subscribe("subscribeServerConfig", buildJsonObject {}) { event -> serverConfigEvent(epoch, environment.id, event) } }.getOrNull()
-        if (configSubscription == null) configStreamLost()
         linkStateJob = scope.launch {
             val tunnel = linkState(base, environment)
             synchronized(lifecycleLock) {
@@ -639,12 +665,21 @@ class T3Client(
     }
 
     /**
-     * A `snapshot` feeds the route hints, the preview-tunnel config and the model preferences; a `settingsUpdated` event
-     * only the latter two (it carries no policy, so the last snapshot's policy stands). Every other event is ignored. A snapshot without
-     * `directEndpoints` says nothing and keeps the last hint.
+     * The first `snapshot` is the connection's first config ([firstServerConfig]); events after it wait until that config
+     * is published. Later, a `snapshot` feeds the route hints, the preview-tunnel config, the model preferences and the
+     * providers; a `settingsUpdated` event the tunnel config and preferences (it carries no policy, so the last snapshot's
+     * policy stands); `providerStatuses` and `providerStatusDeltas` the providers. Every other event is ignored. A
+     * snapshot without `directEndpoints` says nothing and keeps the last hint.
      */
     private fun serverConfigEvent(epoch: Long, environmentId: String, event: JsonObject) {
         if (epoch != generation) return
+        firstConfig?.takeUnless { it.isCompleted }?.let { first ->
+            // The server sends its snapshot first; nothing before it can apply yet.
+            if (event.string("type") == "snapshot") (event["config"] as? JsonObject)?.let(first::complete) ?: first.completeExceptionally(IllegalStateException("Invalid server config"))
+            return
+        }
+        if (!configPublished) { earlyConfigEvents += event; return }
+        streamProviders(event, configProviders)?.let(::applyConfigProviders)
         when (event.string("type")) {
             "settingsUpdated" -> ((event["payload"] as? JsonObject)?.get("settings") as? JsonObject)?.let { applyTunnelConfig(tunnelConfig.withSettings(it)); applyModelPreferences(it); applyPromptSuggestionsSetting(promptSuggestionsSetting(it)) }
             "snapshot" -> (event["config"] as? JsonObject)?.let { applyTunnelConfig(tunnelConfig.withConfig(it)); applyModelPreferences(it["settings"] as? JsonObject); applyPromptSuggestionsSetting(promptSuggestionsSetting(it["settings"] as? JsonObject)) }
@@ -654,6 +689,16 @@ class T3Client(
         if (endpoints == directEndpoints) return
         directEndpoints = endpoints
         if (initialHintSent) hints.tryEmit(RouteHints(environmentId, endpoints, TunnelHint.Unknown))
+    }
+
+    /** Publishes the catalog and provider instances of the config stream's [providers]. Caller holds [lifecycleLock]. */
+    private fun applyConfigProviders(providers: List<JsonObject>) {
+        if (providers == configProviders) return
+        configProviders = providers
+        val models = catalogModels(providers)
+        val instances = providerInstances(providers)
+        update { it.copy(models = models, providers = instances,
+            selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
     }
 
     /**
@@ -805,8 +850,9 @@ class T3Client(
                 if (exit.string("_tag") == "Success") result?.complete(exit["value"] ?: JsonNull)
                 else result?.completeExceptionally(if (exitInterruptedOnly(exit)) RequestInterrupted() else ServerRejected())
                 if (streams.remove(id) != null) {
-                    // Route hints are optional: an older server rejecting the config stream, or its end, leaves the session alone.
-                    if (id == configSubscription) { configSubscription = null; configStreamLost() }
+                    // The config stream is optional: rejected before its snapshot, the connect asks `server.getConfig`; its
+                    // later end leaves the session alone.
+                    if (id == configSubscription) { configSubscription = null; firstConfig?.takeUnless { it.isCompleted }?.completeExceptionally(ConfigStreamUnavailable()); configStreamLost() }
                     // Prompt suggestions are optional too: an end or rejection clears the value, without a retry.
                     else if (id == suggestionSubscription) { suggestionSubscription = null; suggestionGeneration++; if (state.value.promptSuggestion != null) update { it.copy(promptSuggestion = null) } }
                     else if (id == discoverySubscription) discoveryEnded(exit)
@@ -854,7 +900,8 @@ class T3Client(
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
     }
-    private fun resetRoute() { endDiscovery(); tunnelConfig = PreviewTunnelConfig(); activeBase = null; liveShellOrigin = null; pendingRouteHints = null; directEndpoints = null; initialHintSent = false; configSubscription = null; linkStateJob?.cancel(); linkStateJob = null; renewJob?.cancel(); renewJob = null
+    private fun resetRoute() { endDiscovery(); tunnelConfig = PreviewTunnelConfig(); activeBase = null; liveShellOrigin = null; pendingRouteHints = null; directEndpoints = null; initialHintSent = false; configSubscription = null
+        firstConfig?.completeExceptionally(IllegalStateException("Connection was cancelled")); firstConfig = null; configPublished = false; earlyConfigEvents.clear(); configProviders = emptyList(); linkStateJob?.cancel(); linkStateJob = null; renewJob?.cancel(); renewJob = null
         // The socket is gone with its streams; the next connection reads the setting again.
         promptSuggestionsEnabled = false; stopPromptSuggestion() }
     override suspend fun disconnect() = disconnectNow()

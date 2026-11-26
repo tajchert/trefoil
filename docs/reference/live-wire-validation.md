@@ -46,6 +46,13 @@ Verified against T3 commit `46449b5379a0089f4ef3ce85bce10a1d28beb4cb` on
   each provider's `models` is an array of objects with `slug` (identity), `name`
   (display label), `isCustom`, and nullable `capabilities`. The isolated instance
   returned 11 providers and 22 models; counts are informational and not pinned.
+- `subscribeServerConfig` with Trefoil's slim opt-ins starts with a snapshot whose
+  environment, capabilities, `settings.defaultRuntimeMode`, `directEndpoints` and
+  providers (models with `slug`/`name`, runtime modes, usage limits; no
+  `workspaceSnapshots`) match `server.getConfig`. On the 2026-11-26 upstream head,
+  getConfig plus a legacy subscription sent 42,624 + 141,343 bytes in the first
+  3 s; the slim subscription alone sent 64,347 (first snapshot 42,663). Credentialed
+  providers with slash commands and skills widen the gap.
 
 The request and signal envelopes match `core/protocol/EffectRpc.kt`. This harness
 checks the wire format against a live server independently of Android. It does

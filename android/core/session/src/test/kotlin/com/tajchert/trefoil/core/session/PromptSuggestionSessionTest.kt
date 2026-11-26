@@ -21,11 +21,15 @@ class PromptSuggestionSessionTest {
         val suggestions = Channel<Request>(Channel.UNLIMITED)
         val interrupts = Channel<String>(Channel.UNLIMITED)
         val configStream = Channel<Request>(Channel.UNLIMITED)
-        /** Set: `server.getConfig` reports this build, so the shell cursor can resume (with `afterSequence`). */
+        /** Set: the first config reports this build, so the shell cursor can resume (with `afterSequence`). */
         @Volatile var serverVersion: String? = null
         /** Resumed shell subscriptions wait here for the test to answer them; a fresh one is answered at once. */
         @Volatile var holdResumedShell = false
         val resumedShells = Channel<Request>(Channel.UNLIMITED)
+        fun config(): String {
+            val version = serverVersion?.let { ""","environmentId":"env","serverVersion":"$it"""" }.orEmpty()
+            return """{"providers":[],"environment":{"capabilities":{}$version},"settings":$settings}"""
+        }
         init {
             server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse = when {
@@ -40,11 +44,9 @@ class PromptSuggestionSessionTest {
                             if (frame.string("_tag") != "Request") return
                             val id = frame.string("id")
                             when (frame.string("tag")) {
-                                "server.getConfig" -> {
-                                    val version = serverVersion?.let { ""","environmentId":"env","serverVersion":"$it"""" }.orEmpty()
-                                    complete(webSocket, id, """{"providers":[],"environment":{"capabilities":{}$version},"settings":$settings}""")
-                                }
-                                "subscribeServerConfig" -> configStream.trySend(Request(webSocket, id, frame.obj("payload")))
+                                "server.getConfig" -> complete(webSocket, id, config())
+                                // The first snapshot is the connection's config; the test sends later events on the stream.
+                                "subscribeServerConfig" -> { chunk(webSocket, id, """{"version":1,"type":"snapshot","config":${config()}}"""); configStream.trySend(Request(webSocket, id, frame.obj("payload"))) }
                                 "orchestration.subscribeShell" -> if (holdResumedShell && frame.obj("payload")["afterSequence"] != null) resumedShells.trySend(Request(webSocket, id, frame.obj("payload")))
                                     else chunk(webSocket, id, """{"kind":"snapshot","snapshot":{"snapshotSequence":10,"projects":[{"id":"p","title":"P","workspaceRoot":"/w"}],"threads":[{"id":"t1","projectId":"p","title":"One"},{"id":"t2","projectId":"p","title":"Two"}]}},{"kind":"synchronized"}""")
                                 "orchestration.subscribeThread" -> {
