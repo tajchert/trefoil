@@ -142,6 +142,11 @@ internal fun Conversation(
      * can write: no composer, no Stop or steer, no quick replies and no approval buttons (a pending request shows as a notice).
      */
     readOnlyNotice: String? = null,
+    /** `/side <question>`: whether a start is in flight, its result, and the calls; see [sideChatQuestion]. */
+    sideChat: SideChatUi = SideChatUi(),
+    /** A thread reference waiting to be put into this conversation's composer ("Add to chat"); [onThreadReferenceInserted] once it was handled. */
+    threadReferenceInsert: ThreadReferenceInsert? = null,
+    onThreadReferenceInserted: () -> Unit = {},
 ) {
     val c = Tf.colors
     val readOnly = readOnlyNotice != null
@@ -173,7 +178,9 @@ internal fun Conversation(
         if (composerDrafts.loaded && !edited && text.isBlank()) editorKey?.let { composerDrafts.get(it)?.text }?.takeIf { it.isNotBlank() }?.let { text = it }
     }
     var editRevision by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf(0) }
-    fun editText(value: String) { text = value; edited = true; editRevision++; if (composerDrafts.loaded) editorKey?.let { composerDrafts.updateText(it, value) } }
+    // The last `/side` failure (or a reference that did not fit), shown above the composer until the text is edited again.
+    var sideNotice by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf<String?>(null) }
+    fun editText(value: String) { text = value; edited = true; editRevision++; sideNotice = null; if (composerDrafts.loaded) editorKey?.let { composerDrafts.updateText(it, value) } }
     var submitted by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf<String?>(null) }
     // Every message and queued message present at submission: a confirmation must be something new (an older identical one moving into the timeline is not).
     var idsAtSend by rememberSaveable(state.environment?.id, composerKey) { mutableStateOf(arrayListOf<String>()) }
@@ -219,6 +226,52 @@ internal fun Conversation(
             submitMessage(submission, (route as? SendRoute.FollowUp)?.mode)
         }
         return true
+    }
+    // Side chats of this thread: the chips above the composer, and how a reference in the draft or in a sent message finds its chat.
+    val environmentId = state.environment?.id
+    val sideChats = remember(state.threads, state.selectedThreadId, draft) {
+        state.selectedThreadId?.takeIf { draft == null }?.let { sideChatsOf(state.threads, it) }.orEmpty()
+    }
+    val referenceLinks = remember(sideChats, onOpenThread, readOnly) {
+        val byContextId = sideChats.associateBy { toComposerContextId("thread", it.id) }
+        ThreadReferenceLinks({ reference -> byContextId[reference.contextId] }, onOpenThread.takeIf { !readOnly })
+    }
+    // `/side`: one start at a time. The view model answers with a result for the thread that asked; it settles here only if this composer is still
+    // that thread's, otherwise it waits (a composer restored later finds it). A result that is never consumed is replaced by the next start.
+    var sideSubmitted by rememberSaveable(environmentId, composerKey) { mutableStateOf(false) }
+    var sideRevision by rememberSaveable(environmentId, composerKey) { mutableStateOf(0) }
+    val openSideChat by rememberUpdatedState(onOpenThread)
+    fun startSideChat(question: String) {
+        if (sideChat.inFlight || readOnly || draft != null) return
+        sideNotice = null
+        sideSubmitted = true
+        sideRevision = editRevision
+        sideChat.start(question)
+    }
+    // A flag restored from saved state that this process knows nothing about (process death) will never be answered. Checked once.
+    LaunchedEffect(environmentId, composerKey) { if (sideSubmitted && !sideChat.inFlight && sideChat.result == null) sideSubmitted = false }
+    LaunchedEffect(sideChat.result, sideSubmitted) {
+        val result = sideChat.result
+        if (!sideSubmitted || result == null || result.environmentId != environmentId || result.parentThreadId != state.selectedThreadId) return@LaunchedEffect
+        sideSubmitted = false
+        when (result) {
+            is SideChatResult.Started -> {
+                if (editRevision == sideRevision) editText("") // text typed since is kept
+                openSideChat?.invoke(result.threadId)
+            }
+            is SideChatResult.Failed -> sideNotice = result.message // the text stays so it can be sent again
+        }
+        sideChat.consume()
+    }
+    // "Add to chat": the reference goes into this thread's draft once, after the stored draft has loaded, and only into the composer it was meant for.
+    val noRoomForReference = stringResource(R.string.thread_reference_error_no_room)
+    LaunchedEffect(threadReferenceInsert, composerDrafts.loaded, draft != null) {
+        val insert = threadReferenceInsert ?: return@LaunchedEffect
+        if (draft != null || readOnly || !composerDrafts.loaded || insert.environmentId != environmentId || insert.parentThreadId != state.selectedThreadId) return@LaunchedEffect
+        val current = if (!edited && text.isBlank()) editorKey?.let { composerDrafts.get(it)?.text }.orEmpty() else text
+        val next = addThreadReference(current, insert.reference, ComposerDraftStore.MAX_TEXT)
+        if (next == null) sideNotice = noRoomForReference else if (next != current) editText(next)
+        onThreadReferenceInserted()
     }
     // Survives recomposition and configuration change so the seed is never submitted twice.
     var seedHandled by rememberSaveable(seedPrompt) { mutableStateOf(false) }
@@ -373,7 +426,7 @@ internal fun Conversation(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val layout = remember(maxWidth) { conversationLayoutFor(maxWidth.value) }
         val compactHeight = LocalCompactHeight.current
-        CompositionLocalProvider(LocalFileDownloadUi provides fileDownloadUi, LocalContentColor provides c.text, LocalConversationLayout provides layout, LocalAssistantCiting provides assistantCiting) {
+        CompositionLocalProvider(LocalFileDownloadUi provides fileDownloadUi, LocalContentColor provides c.text, LocalConversationLayout provides layout, LocalAssistantCiting provides assistantCiting, LocalThreadReferenceLinks provides referenceLinks) {
             val citedMessage = citingMessageId?.let { id -> state.messages.find { it.id == id && it.role == "assistant" && !it.streaming } }
             if (citedMessage != null && citeEnvironment != null && citeThread != null) {
                 CiteSheet(remember(citedMessage.text) { renderedAssistantText(citedMessage.text) }, { citingMessageId = null }) { selector, comment ->
@@ -440,9 +493,12 @@ internal fun Conversation(
                 Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
                     if (readOnlyNotice != null) { ReadOnlyInspectorBar(readOnlyNotice); return@Column }
                     QuickReplies(state.requests, canSend, respond)
-                    if (thread != null && thread.isProviderNativeSubagentThread()) ReadOnlySubagentBar(thread, clock, onOpenParent)
+                    val providerSubagent = thread != null && thread.isProviderNativeSubagentThread()
+                    if (!providerSubagent && onOpenThread != null && sideChats.isNotEmpty()) ReadingDock(phoneHorizontal = 12.dp, top = 4.dp) { SideChatsRow(sideChats, onOpenThread) }
+                    if (providerSubagent) ReadOnlySubagentBar(thread!!, clock, onOpenParent)
                     else ConversationComposer(state, draft, text, ::editText, submitted != null, stopPending, onSetRuntimeMode, onSetModel, onSetModelOption, onSetModelFavorite,
-                        stop = interrupt, onSend = { mode -> submit(text, mode) }, canWriteNow = rawState.canWrite, queueBusy = stopKey(state.environment?.id, state.selectedThreadId) in queueOperationKeys, onCancelQueued = onCancelQueued, onSteerQueued = onSteerQueued, onResumeQueue = onResumeQueue, promptSuggestions = promptSuggestions)
+                        stop = interrupt, onSend = { mode -> submit(text, mode) }, canWriteNow = rawState.canWrite, queueBusy = stopKey(state.environment?.id, state.selectedThreadId) in queueOperationKeys, onCancelQueued = onCancelQueued, onSteerQueued = onSteerQueued, onResumeQueue = onResumeQueue, promptSuggestions = promptSuggestions,
+                        sideInFlight = sideChat.inFlight, sideNotice = sideNotice, onStartSideChat = ::startSideChat)
                 }
             }
         }
@@ -543,6 +599,8 @@ internal fun ConversationComposer(
     stop: () -> Unit, onSend: (FollowUpMode?) -> Unit, canWriteNow: Boolean = state.canWrite, queueBusy: Boolean = false,
     onCancelQueued: (String) -> Unit, onSteerQueued: (String) -> Unit, onResumeQueue: () -> Unit,
     promptSuggestions: PromptSuggestionUi = PromptSuggestionUi(),
+    /** `/side`: a start is in flight; the last failure to show; and how to start one with the question the composer holds. */
+    sideInFlight: Boolean = false, sideNotice: String? = null, onStartSideChat: (String) -> Unit = {},
 ) {
     val c = Tf.colors
     val compactHeight = LocalCompactHeight.current
@@ -550,11 +608,16 @@ internal fun ConversationComposer(
     val noticeStyle = TrefoilType.meta.copy(fontSize = 12.sp, color = c.muted)
     // The draft holds the user's words and the quotes of assistant responses in one string (so it persists and sends as it is);
     // the field edits the words, the chips show the quotes. A quote alone is a message.
-    val split = remember(fullText) { splitCitationDraft(fullText) }
-    val text = split.body
-    val onText: (String) -> Unit = { onFullText(joinCitationDraft(it, split.citations)) }
+    // Thread references (side chats named in the draft) sit between the quotes and the words, see [splitComposerText].
+    val split = remember(fullText) { splitComposerText(fullText) }
+    val text = split.words
+    val onText: (String) -> Unit = { onFullText(joinComposerText(it, split.citations, split.references)) }
     var openCitation by remember { mutableStateOf<AssistantCitation?>(null) }
-    val button = resolveComposerButton(state, draft != null, fullText, waiting, stopPending)
+    // `/side <question>` starts a side chat instead of sending a message: its own Send, never a steer or a queue.
+    val sideQuestion = sideChatQuestion(fullText, state, draft != null)
+    val button = if (sideQuestion != null) ComposerButton(ComposerPrimary.Send, state.canWrite && sideQuestion.isNotBlank() && !sideInFlight && !waiting)
+        else resolveComposerButton(state, draft != null, fullText, waiting, stopPending)
+    val send: (FollowUpMode?) -> Unit = { mode -> if (sideQuestion != null) onStartSideChat(sideQuestion) else onSend(mode) }
     // The field edits a TextFieldValue (selection, IME composition) that follows the caller's text: a change made elsewhere
     // (a settled send clears it, a restored draft fills it) replaces the value and puts the cursor at the end.
     // Only the caret is saved, never the text (that is the caller's draft), so a rotation or fold keeps the cursor where it was.
@@ -575,7 +638,7 @@ internal fun ConversationComposer(
             ComposerEnterDecision.Ignore -> false
             ComposerEnterDecision.Swallow -> true
             // Ctrl+Shift+Enter while a turn runs sends the way the primary button does not (Steer <-> Queue); with no alternate it is the primary send.
-            ComposerEnterDecision.Send -> { onSend((if (key.ctrl && key.shift) alternateFollowUp(button, state.canSteer) else null) ?: button.action.followUp); true }
+            ComposerEnterDecision.Send -> { send((if (key.ctrl && key.shift) alternateFollowUp(button, state.canSteer) else null) ?: button.action.followUp); true }
             ComposerEnterDecision.Newline -> {
                 if (key.isDown) edited(value.withLineBreak())
                 true
@@ -652,10 +715,13 @@ internal fun ConversationComposer(
     ReadingDock(phoneHorizontal = 12.dp, top = if (compactHeight) 2.dp else 4.dp, bottom = if (compactHeight) 8.dp else 16.dp) {
         if (!state.canWrite) Text("Read only · reconnect to continue", Modifier.padding(start = 6.dp, bottom = 6.dp), style = noticeStyle)
         if (waiting) Text("Waiting for server confirmation…", Modifier.padding(start = 6.dp, bottom = 6.dp), style = noticeStyle)
+        if (sideNotice != null) Text(sideNotice, Modifier.padding(start = 6.dp, bottom = 6.dp).testTag("side-chat-notice"), style = noticeStyle.copy(color = c.red))
+        else if (sideQuestion != null) Text(stringResource(if (sideInFlight) R.string.side_chat_starting else R.string.side_chat_hint), Modifier.padding(start = 6.dp, bottom = 6.dp).testTag("side-chat-hint"), style = noticeStyle)
         if (draft == null && (state.queuedMessages.isNotEmpty() || state.queueHeld)) QueuedMessagesStrip(state, canWriteNow && !queueBusy, onCancelQueued, onSteerQueued, onResumeQueue)
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = c.s1, contentColor = c.text, border = BorderStroke(1.dp, c.line)) {
             Column {
                 if (split.citations.isNotEmpty()) CitationChips(split.citations, { openCitation = it }, { onFullText(removeCitation(fullText, it)) })
+                if (split.references.isNotEmpty()) ThreadReferenceChips(split.references, { onFullText(removeThreadReference(fullText, it.contextId)) })
                 BasicTextField(
                     value = value, onValueChange = ::edited, maxLines = if (compactHeight) 2 else 6,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = fieldColor), cursorBrush = SolidColor(c.accent),
@@ -679,8 +745,8 @@ internal fun ConversationComposer(
                 Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 6.dp, top = if (layout.wide) 2.dp else 4.dp, bottom = if (layout.wide) 4.dp else 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     ComposerPickers(state, draft, onSetRuntimeMode, onSetModel, onSetModelOption, onSetModelFavorite, Modifier.weight(1f))
                     // Wide: the two follow-up deliveries are visible next to the button instead of behind its long press.
-                    if (layout.wide && button.offersAlternate && fullText.isNotBlank()) FollowUpChoice(button.action, state.canSteer, button.enabled, onSend)
-                    PrimaryComposerButton(button, state.canSteer, stop, onSend)
+                    if (layout.wide && button.offersAlternate && fullText.isNotBlank()) FollowUpChoice(button.action, state.canSteer, button.enabled, send)
+                    PrimaryComposerButton(button, state.canSteer, stop, send)
                 }
             }
         }

@@ -60,7 +60,8 @@ internal fun MessageRow(message: ConversationMessage, stacked: Boolean, showMeta
                 // A message that quotes an assistant response shows the quote as a block, never the raw `t3-citation://` link.
                 val citations = remember(message.text) { collectAssistantCitations(message.text) }
                 SelectionContainer {
-                    if (citations.isEmpty()) Text(rememberLinkified(message.text), Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp))
+                    // A thread reference shows as a chip with its label, never the `t3-context:` link (see UserWords).
+                    if (citations.isEmpty()) UserWords(message.text, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
                     else CitedUserText(message.text, citations, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
                 }
             }

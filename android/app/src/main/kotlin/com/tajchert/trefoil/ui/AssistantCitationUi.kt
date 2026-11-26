@@ -111,7 +111,7 @@ internal fun CitedUserText(text: String, matches: List<AssistantCitationMatch>, 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         parts.forEach { part ->
             when (part) {
-                is CitationPart.Words -> Text(rememberLinkified(part.text), style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp))
+                is CitationPart.Words -> UserWords(part.text)
                 is CitationPart.Quote -> CitationQuoteBlock(part.citation, if (citing.canGoTo(part.citation)) ({ citing.goTo(part.citation) }) else null)
             }
         }

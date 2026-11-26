@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.tajchert.trefoil.core.model.*
 import com.tajchert.trefoil.ui.ComposerSubmission
 import com.tajchert.trefoil.ui.SendOutcome
+import com.tajchert.trefoil.ui.SideChatResult
+import com.tajchert.trefoil.ui.SideChatState
 import com.tajchert.trefoil.ui.QueueOperationGuard
 import com.tajchert.trefoil.ui.StopGuard
 import com.tajchert.trefoil.ui.queueSignature
@@ -831,6 +833,30 @@ class TrefoilViewModel internal constructor(
             // Outcome first, so there is never a moment when the id is in neither set.
             _sendOutcomes.update { it + (submission.id to if (failure == null) SendOutcome.Accepted else SendOutcome.Failed) }
             _sendsInFlight.update { it - submission.id }
+        }
+    }
+    private val _sideChat = MutableStateFlow(SideChatState())
+    /** `/side`: whether a side chat is being started (one at a time) and how the last start came out, until its composer consumes it. */
+    internal val sideChat: StateFlow<SideChatState> = _sideChat.asStateFlow()
+    internal fun consumeSideChatResult() = _sideChat.update { it.copy(result = null) }
+    /**
+     * Starts a side chat of the selected thread with [question] and reports the outcome in [sideChat]. Never replayed: a second call while one
+     * is in flight is ignored, and an uncertain outcome is shown as such rather than retried.
+     */
+    internal fun startSideChat(question: String) {
+        val current = client.state.value
+        val environmentId = current.environment?.id ?: return
+        val parentId = current.selectedThreadId ?: return
+        val idle = _sideChat.value
+        if (idle.inFlight || !_sideChat.compareAndSet(idle, SideChatState(inFlight = true))) return
+        viewModelScope.launch {
+            val result = try {
+                SideChatResult.Started(environmentId, parentId, mutationsInFlight.tracked { client.startSideChat(question) })
+            }
+            catch (e: CancellationException) { coroutineContext.ensureActive(); SideChatResult.Failed(environmentId, parentId, UNCERTAIN_MESSAGE) }
+            catch (_: UncertainOutcomeException) { SideChatResult.Failed(environmentId, parentId, UNCERTAIN_MESSAGE) }
+            catch (e: Exception) { SideChatResult.Failed(environmentId, parentId, e.message ?: "Could not start the side chat.") }
+            _sideChat.value = SideChatState(inFlight = false, result = result)
         }
     }
     /**

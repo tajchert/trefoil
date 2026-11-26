@@ -1,0 +1,13 @@
+<resources>
+    <!-- side chats and thread references -->
+    <string name="side_chats_row_description">Side chats</string>
+    <string name="side_chat_untitled">Side chat</string>
+    <string name="side_chat_chip_description">Side chat: %1$s</string>
+    <string name="side_chat_chip_description_status">Side chat: %1$s, %2$s</string>
+    <string name="side_chat_open">Open side chat</string>
+    <string name="side_chat_hint">Send starts a side chat with this question.</string>
+    <string name="side_chat_starting">Starting side chat…</string>
+    <string name="thread_reference_description">Thread: %1$s</string>
+    <string name="thread_reference_remove">Remove thread reference</string>
+    <string name="thread_reference_error_no_room">There is no room for another reference in this draft.</string>
+</resources>

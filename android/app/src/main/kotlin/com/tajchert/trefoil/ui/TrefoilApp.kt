@@ -176,6 +176,7 @@ fun TrefoilApp(
     onRefresh: () -> Unit = {},
     composerDrafts: ComposerDraftUi = ComposerDraftUi(),
     promptSuggestions: PromptSuggestionUi = PromptSuggestionUi(),
+    sideChat: SideChatUi = SideChatUi(),
     portBrowser: PortBrowserState? = null,
     onOpenPortInApp: (Int) -> Unit = {},
     onOpenPortExternal: (Int) -> Unit = {},
@@ -221,6 +222,8 @@ fun TrefoilApp(
         // belongs to. Saved with the panel; the stream itself is opened and closed by the effect below, never saved.
         var inspectorThreadId by rememberSaveable { mutableStateOf(start.inspectorThreadId) }
         var inspectorFrom by rememberSaveable { mutableStateOf(start.inspectorFrom) }
+        // "Add to chat" from the Thread tab: a reference for the selected thread's composer, until that composer has taken it.
+        var referenceInsert by remember { mutableStateOf<ThreadReferenceInsert?>(null) }
         var inspectorParent by rememberSaveable { mutableStateOf(start.inspectorThreadId?.let { state.selectedThreadId }) }
         val dropInspector: () -> Unit = { inspectorThreadId = null; inspectorFrom = null; if (sidePanelTabName == SidePanelTab.Thread.name) sidePanelTabName = null }
         if (environmentId != null && panelEnvironment != environmentId) { panelEnvironment = environmentId; sidePanelTabName = null; dropInspector() }
@@ -622,6 +625,7 @@ fun TrefoilApp(
                                     newThreadEnabled = navModel.entries.newThreadEnabled, onOpenThread = select, onNewThread = { creatingProject = null; creating = true },
                                     leading = if (listHidden) ({ ShowThreadListButton(otherNeedsYou, showList) }) else null,
                                 ) else Conversation(state, onSend, onStop, onRespond, submitMessage = onSubmitMessage, sendOutcomes = sendOutcomes, sendsInFlight = sendsInFlight, onConsumeSendOutcome = onConsumeSendOutcome, stopPendingKeys = stopPendingKeys, queueOperationKeys = queueOperationKeys, onCancelQueued = onCancelQueued, onSteerQueued = onSteerQueued, onResumeQueue = onResumeQueue, onLoadActivity = onLoadActivity, composerDrafts = composerDrafts, promptSuggestions = promptSuggestions, fileDownloadUi = fileDownloadUi,
+                                    sideChat = sideChat, threadReferenceInsert = referenceInsert, onThreadReferenceInserted = { referenceInsert = null },
                                     draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, onSetModelOption = onSetModelOption, onSetModelFavorite = onSetModelFavorite, sendFailed = sendFailed,
                                     onBack = if (backParent != null) ({ select(backParent.id) }) else if (twoPane) null else ({ cancelDraft(); showThread = false }),
                                     onOpenParent = parentThread?.let { p -> { select(p.id) } },
@@ -708,7 +712,9 @@ fun TrefoilApp(
                                         SidePanelTab.Agents -> roster?.let { SidePanelAgents(it, state.providers, state.models, steadyWrite, openSideThread, onStopSubagent, Modifier.fillMaxSize()) }
                                         // The read-only inspector of a subagent or side chat; its header actions are offered to the tab bar while it shows.
                                         SidePanelTab.Thread -> inspectorThreadId?.let { id ->
-                                            PanelActionsEffect(panelHost, true, listOf(PanelAction(InspectorIcons.Maximize, "Maximize thread", true) { maximizeInspector(id) }))
+                                            val addToChat = addToChatReference(state, id)
+                                            PanelActionsEffect(panelHost, true, listOfNotNull(PanelAction(InspectorIcons.Maximize, "Maximize thread", true) { maximizeInspector(id) },
+                                                addToChat?.let { insert -> PanelAction(TfIcons.Link, "Add to chat", true) { referenceInsert = insert } }))
                                             InspectorThreadPane(state, id, inspectorKind, onRetry = { onOpenInspector(id) }, onMaximize = { maximizeInspector(id) }, onClose = leaveInspector, modifier = Modifier.fillMaxSize())
                                         }
                                     }

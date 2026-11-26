@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.remember
 import com.tajchert.trefoil.ui.ComposerDraftUi
 import com.tajchert.trefoil.ui.PromptSuggestionUi
+import com.tajchert.trefoil.ui.SideChatUi
 import com.tajchert.trefoil.ui.TrefoilApp
 import com.tajchert.trefoil.notifications.AgentAlertNotifier
 import com.tajchert.trefoil.notifications.OpenThreadRequest
@@ -212,6 +213,8 @@ class MainActivity : ComponentActivity() {
                     model::discardComposerDraft, model::restoreComposerDraft, model::moveComposerDraft, model::updateComposerDraftText, draftsLoaded)
             }
             val dismissedSuggestions by model.dismissedPromptSuggestions.collectAsStateWithLifecycle()
+            val sideChatState by model.sideChat.collectAsStateWithLifecycle()
+            val sideChatUi = remember(sideChatState) { SideChatUi(sideChatState.inFlight, sideChatState.result, model::startSideChat, model::consumeSideChatResult) }
             val promptSuggestionUi = remember(dismissedSuggestions) { PromptSuggestionUi(dismissedSuggestions, model::dismissPromptSuggestion) }
             ProvideWindowFold { TrefoilApp(
                 onThreadShown = model::setThreadShown,
@@ -248,6 +251,7 @@ class MainActivity : ComponentActivity() {
                 onRefresh = model::refresh,
                 composerDrafts = composerDraftUi,
                 promptSuggestions = promptSuggestionUi,
+                sideChat = sideChatUi,
                 onUndoSettlement = model::undoSettlement,
                 onLoadActivity = model::loadActivity,
                 screenViewer = screenViewer,

@@ -30,6 +30,10 @@ import com.tajchert.trefoil.ui.TrefoilTheme
 import com.tajchert.trefoil.ui.LocalFixedClock
 import com.tajchert.trefoil.ui.SubagentTimelineRowContent
 import com.tajchert.trefoil.ui.ThinkingRow
+import com.tajchert.trefoil.ui.ConversationComposer
+import com.tajchert.trefoil.ui.MessageRow
+import com.tajchert.trefoil.ui.joinComposerText
+import com.tajchert.trefoil.ui.threadReferenceFor
 import com.tajchert.trefoil.ui.WorkGroup
 import com.tajchert.trefoil.ui.WorkingTurnHeader
 import com.tajchert.trefoil.ui.subagentTimelineRow
@@ -368,3 +372,63 @@ fun Conversation_SystemNotices_Light() = Frame { SystemNotices() }
 @Preview(showBackground = true, widthDp = 400, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun Conversation_SystemNotices_Dark() = Frame(dark = true) { SystemNotices() }
+
+// ---------- Side chats and thread references ----------
+
+private fun sideChat(id: String, title: String, createdAt: String, pendingRequestKind: String? = null) =
+    ScreenshotFixtures.thread(id, title, pendingRequestKind = pendingRequestKind).copy(parentThreadId = fx.thread.id, sideChat = true, createdAt = createdAt, latestUserMessageAt = createdAt)
+
+private val SideChats = listOf(
+    sideChat("side-1", "Why the retry?", "2026-01-01T09:40:00Z"),
+    sideChat("side-2", "Cap at three attempts", "2026-01-01T09:50:00Z", pendingRequestKind = "approval"),
+    sideChat("side-3", "Mobile client limits", "2026-01-01T09:55:00Z", pendingRequestKind = "user_input"),
+)
+
+private fun sideChatsState() = fx.chatState().let { it.copy(sideChatsSupported = true, threads = it.threads + SideChats) }
+
+/** The chips of the open thread's side chats above the composer, newest first; the two waiting ones carry an approval and an input dot. */
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400, heightDp = 800)
+@Composable
+fun Conversation_SideChatsRow_Light() = Screen(sideChatsState())
+
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400, heightDp = 800, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun Conversation_SideChatsRow_Dark() = Screen(sideChatsState(), dark = true)
+
+private val References = listOf(threadReferenceFor("side-1", "Why the retry?"), threadReferenceFor("side-2", "Cap at three attempts"))
+
+@Composable
+private fun ReferenceComposer(dark: Boolean) = Frame(dark) {
+    ConversationComposer(sideChatsState(), null, joinComposerText("Compare the two approaches.", emptyList(), References), {}, false, false, {}, {}, { _, _ -> }, stop = {}, onSend = {},
+        onCancelQueued = {}, onSteerQueued = {}, onResumeQueue = {})
+}
+
+/** Thread references in the composer: one removable chip each above the words, in the same row style as the quotes. */
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400)
+@Composable
+fun Conversation_ReferenceChips_Light() = ReferenceComposer(dark = false)
+
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun Conversation_ReferenceChips_Dark() = ReferenceComposer(dark = true)
+
+@Composable
+private fun SentReferences(dark: Boolean) = Frame(dark) {
+    val text = "Merge ${References[0].marker()} with ${References[1].marker()} and keep the shorter wording."
+    Column(Modifier.padding(16.dp)) { MessageRow(ConversationMessage("user-ref", "user", text), stacked = false, showMetadata = false) }
+}
+
+/** A sent message that names threads: a chip with each label where the link was, never the raw `t3-context:` link. */
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400)
+@Composable
+fun Conversation_SentReferences_Light() = SentReferences(dark = false)
+
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun Conversation_SentReferences_Dark() = SentReferences(dark = true)
