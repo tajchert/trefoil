@@ -22,6 +22,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,7 @@ import com.tajchert.trefoil.core.model.PrAction
 import com.tajchert.trefoil.core.model.PrActionKind
 import com.tajchert.trefoil.core.model.PrActionOutcome
 import com.tajchert.trefoil.core.model.PrMergeMethod
+import com.tajchert.trefoil.core.model.PullRequestKey
 import com.tajchert.trefoil.ui.Tf
 import com.tajchert.trefoil.ui.TrefoilType
 import com.tajchert.trefoil.ui.adaptive.focusRing
@@ -53,27 +55,38 @@ internal class PrActionHandlers(
     val onComment: (String) -> Unit,
 )
 
-/** Actions section content. [busy] is true while a request of this screen is still being handed to the session. */
+/**
+ * Actions section content. [busy] is true while a send for this pull request is in flight: every button and the merge confirmation are off.
+ * The merge dialog and the comment draft are per [prKey]: they never carry over to another pull request or thread.
+ */
 @Composable
 internal fun PullRequestActionsSection(
     model: PrActionsModel, pending: PendingPrAction?, localError: String?, busy: Boolean, handlers: PrActionHandlers,
-    modifier: Modifier = Modifier, initialMergeDialog: Boolean = false,
+    modifier: Modifier = Modifier, initialMergeDialog: Boolean = false, prKey: PullRequestKey? = null,
+) {
+    key(prKey) { ActionsSectionBody(model, pending, localError, busy, handlers, modifier, initialMergeDialog) }
+}
+
+@Composable
+private fun ActionsSectionBody(
+    model: PrActionsModel, pending: PendingPrAction?, localError: String?, busy: Boolean, handlers: PrActionHandlers,
+    modifier: Modifier, initialMergeDialog: Boolean,
 ) {
     val c = Tf.colors
     val pendingText = pendingText(pending)
+    val sendOk = !busy
     var confirmMerge by rememberSaveable { mutableStateOf(initialMergeDialog) }
     Column(modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (pendingText != null) PendingBanner(pendingText)
         if (localError != null) Text(localError, style = TrefoilType.meta, color = c.red)
         if (model.disabledReason != null) Text(model.disabledReason, style = TrefoilType.meta, color = c.muted,)
-        val sendOk = !busy
         ActionButton("Merge", model.merge && sendOk, primary = true) { confirmMerge = true }
         ActionButton("Update branch", model.updateBranch && sendOk) { handlers.onRun(PrAction.UpdateBranch, null) }
         if (model.showReady) ActionButton("Ready for review", model.ready && sendOk) { handlers.onRun(PrAction.Ready, null) }
         else ActionButton("Convert to draft", model.draft && sendOk) { handlers.onRun(PrAction.Draft, null) }
         CommentComposer(enabled = model.comment && sendOk, pending = pending, onSend = handlers.onComment)
     }
-    if (confirmMerge && model.merge) MergeDialog(model, onDismiss = { confirmMerge = false }) { method -> confirmMerge = false; handlers.onRun(PrAction.Merge, method) }
+    if (confirmMerge && model.merge) MergeDialog(model, confirmEnabled = sendOk, onDismiss = { confirmMerge = false }) { method -> confirmMerge = false; handlers.onRun(PrAction.Merge, method) }
     else if (confirmMerge) confirmMerge = false
 }
 
@@ -126,7 +139,7 @@ private fun CommentComposer(enabled: Boolean, pending: PendingPrAction?, onSend:
 }
 
 @Composable
-private fun MergeDialog(model: PrActionsModel, onDismiss: () -> Unit, onConfirm: (PrMergeMethod) -> Unit) {
+private fun MergeDialog(model: PrActionsModel, confirmEnabled: Boolean, onDismiss: () -> Unit, onConfirm: (PrMergeMethod) -> Unit) {
     val c = Tf.colors
     val methods = model.mergeMethods
     var picked by rememberSaveable { mutableStateOf(defaultMergeMethod(methods)?.wire) }
@@ -155,7 +168,7 @@ private fun MergeDialog(model: PrActionsModel, onDismiss: () -> Unit, onConfirm:
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { method?.let(onConfirm) }, enabled = method != null) { Text("Merge") } },
+        confirmButton = { TextButton(onClick = { method?.let(onConfirm) }, enabled = method != null && confirmEnabled) { Text("Merge") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

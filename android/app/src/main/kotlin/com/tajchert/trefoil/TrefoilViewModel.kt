@@ -11,6 +11,7 @@ import com.tajchert.trefoil.ui.SideChatResult
 import com.tajchert.trefoil.ui.SideChatState
 import com.tajchert.trefoil.ui.QueueOperationGuard
 import com.tajchert.trefoil.ui.StopGuard
+import com.tajchert.trefoil.ui.pr.PullRequestSender
 import com.tajchert.trefoil.ui.queueSignature
 import com.tajchert.trefoil.ui.stopKey
 import com.tajchert.trefoil.core.session.EnvironmentProbe
@@ -1069,8 +1070,20 @@ class TrefoilViewModel internal constructor(
     fun prPanel(key: PullRequestKey): StateFlow<PrPanelState> = client.prPanel(key)
     suspend fun refreshPullRequest(key: PullRequestKey) = client.refreshPullRequest(key)
     suspend fun loadPullRequestDiff(key: PullRequestKey, cursor: String?): PrDiffPage = client.loadPullRequestDiff(key, cursor)
-    suspend fun runPullRequestAction(key: PullRequestKey, action: PrAction, method: PrMergeMethod?) = client.runPullRequestAction(key, action, method)
-    suspend fun commentOnPullRequest(key: PullRequestKey, body: String) = client.commentOnPullRequest(key, body)
+    /**
+     * Pull request mutations run on [viewModelScope] through [PullRequestSender], so closing the panel, switching threads or rotating never
+     * cancels a send (a cancelled send would be recorded as an unknown outcome) and a second tap for the same pull request is dropped.
+     */
+    private val pullRequestSender = PullRequestSender(
+        viewModelScope,
+        sendAction = { key, action, method -> client.runPullRequestAction(key, action, method) },
+        sendComment = { key, body -> client.commentOnPullRequest(key, body) },
+    )
+    val pullRequestBusy: StateFlow<Set<PullRequestKey>> get() = pullRequestSender.busy
+    val pullRequestErrors: StateFlow<Map<PullRequestKey, String>> get() = pullRequestSender.errors
+    fun runPullRequestAction(key: PullRequestKey, action: PrAction, method: PrMergeMethod?) { pullRequestSender.run(key, action, method) }
+    fun commentOnPullRequest(key: PullRequestKey, body: String) { pullRequestSender.comment(key, body) }
+    fun dismissPullRequestError(key: PullRequestKey) = pullRequestSender.dismissError(key)
     /** Persists the opt-in for agent notifications; turning it off removes the ones in the shade (the driver sees the flow change). */
     fun setAgentNotifications(enabled: Boolean) {
         prefs.edit().putBoolean(AGENT_NOTIFICATIONS, enabled).apply()

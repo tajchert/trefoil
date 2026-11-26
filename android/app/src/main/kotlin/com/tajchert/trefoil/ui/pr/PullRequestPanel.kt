@@ -70,10 +70,8 @@ import com.tajchert.trefoil.ui.adaptive.TfAdaptiveSheet
 import com.tajchert.trefoil.ui.adaptive.TfIconButton
 import com.tajchert.trefoil.ui.adaptive.focusRing
 import com.tajchert.trefoil.ui.adaptive.handPointer
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 
 /*
  * Pull request panel of the selected thread: Overview, Checks, Files and Actions. It paints the thread link's snapshot first, then the
@@ -89,8 +87,14 @@ class PullRequestUi(
     /** `TrefoilClient.refreshPullRequest`: prefetch / revalidate; a no-op when not live. */
     val refresh: suspend (PullRequestKey) -> Unit = {},
     val loadDiff: suspend (PullRequestKey, String?) -> PrDiffPage = { _, _ -> error("Pull request diffs are unavailable") },
-    val runAction: suspend (PullRequestKey, PrAction, PrMergeMethod?) -> Unit = { _, _, _ -> error("Pull request actions are unavailable") },
-    val comment: suspend (PullRequestKey, String) -> Unit = { _, _ -> error("Pull request comments are unavailable") },
+    /** Fire-and-forget: the session sends it on a scope that outlives the panel; a second call for a busy [PullRequestKey] is dropped. */
+    val runAction: (PullRequestKey, PrAction, PrMergeMethod?) -> Unit = { _, _, _ -> },
+    val comment: (PullRequestKey, String) -> Unit = { _, _ -> },
+    /** Pull requests with a send in flight (disables every action for them, also after the panel is reopened). */
+    val busy: StateFlow<Set<PullRequestKey>> = MutableStateFlow(emptySet()),
+    /** The last refusal before sending, per pull request. */
+    val errors: StateFlow<Map<PullRequestKey, String>> = MutableStateFlow(emptyMap()),
+    val dismissError: (PullRequestKey) -> Unit = {},
 )
 
 /** Sections of the panel, saved by name. */
@@ -119,53 +123,40 @@ internal fun PullRequestPanel(state: ClientState, ui: PullRequestUi, onClose: ((
     var selected by rememberSaveable(state.selectedThreadId) { mutableStateOf(0) }
     val link = links[selected.coerceIn(0, links.lastIndex)]
     val key = link.key
-    val flow = remember(ui, key) { ui.panel(key) }
+    val environmentId = state.environment?.id
+    val flow = remember(ui, environmentId, key) { ui.panel(key) }
     val panel by flow.collectAsStateWithLifecycle()
     val live = state.connection == ConnectionStatus.Connected
-    // Opening the panel revalidates once (and again after a reconnect); the session ignores it while not live.
-    LaunchedEffect(key, live) { if (live) runCatching { ui.refresh(key) } }
+    // `ui.panel(key)` already reads when live and unwatched, so only a reconnect (not live -> live) revalidates here; the session
+    // ignores it while not live.
+    val wasLive = remember(ui, environmentId, key) { booleanArrayOf(live) }
+    LaunchedEffect(key, live) {
+        if (shouldRefreshOnLive(wasLive[0], live)) runCatching { ui.refresh(key) }
+        wasLive[0] = live
+    }
 
     val scope = rememberCoroutineScope()
     val loadDiff = rememberUpdatedState(ui.loadDiff)
     // A new head commit is a new diff: the loaded pages go away with the loader.
     val headSha = panel.detail?.headSha
-    val loader = remember(key, headSha) { PrFilesLoader(scope) { cursor -> loadDiff.value(key, cursor) } }
+    val loader = remember(environmentId, key, headSha) { PrFilesLoader(scope) { cursor -> loadDiff.value(key, cursor) } }
     DisposableEffect(loader) { onDispose { loader.cancel() } }
     var section by rememberSaveable { mutableStateOf(PrSection.Overview.name) }
     val current = PrSection.entries.firstOrNull { it.name == section } ?: PrSection.Overview
     val wantsFiles = current == PrSection.Files && panel.detail?.canViewDiff == true
     LaunchedEffect(loader, wantsFiles, live) { if (wantsFiles && live) loader.ensure() }
 
-    var busy by remember(key) { mutableStateOf(false) }
-    var localError by remember(key) { mutableStateOf<String?>(null) }
-    val runAction = rememberUpdatedState(ui.runAction)
-    val comment = rememberUpdatedState(ui.comment)
-    val handlers = remember(key, scope) {
-        PrActionHandlers(
-            onRun = { action, method ->
-                localError = null; busy = true
-                scope.launch {
-                    try { runAction.value(key, action, method) }
-                    catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { localError = e.message?.takeIf { it.isNotBlank() } ?: "The action could not be sent." }
-                    finally { busy = false }
-                }
-            },
-            onComment = { body ->
-                localError = null; busy = true
-                scope.launch {
-                    try { comment.value(key, body) }
-                    catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { localError = e.message?.takeIf { it.isNotBlank() } ?: "The comment could not be sent." }
-                    finally { busy = false }
-                }
-            },
-        )
+    val busyKeys by ui.busy.collectAsStateWithLifecycle()
+    val errors by ui.errors.collectAsStateWithLifecycle()
+    // A refusal is shown while this pull request's panel is open; leaving the panel clears it (a send in flight is not affected).
+    DisposableEffect(ui, key) { onDispose { ui.dismissError(key) } }
+    val handlers = remember(ui, key) {
+        PrActionHandlers(onRun = { action, method -> ui.runAction(key, action, method) }, onComment = { body -> ui.comment(key, body) })
     }
     val nowMillis = remember(panel.lastUpdatedMillis, live) { System.currentTimeMillis() }
     val env = PrPanelEnv(
         live = live, nowMillis = nowMillis, actions = prActionsModel(panel, state, key.number), files = loader.state,
-        checksSupported = state.pullRequestChecksSupported, localError = localError, busy = busy,
+        checksSupported = state.pullRequestChecksSupported, localError = errors[key], busy = key in busyKeys,
     )
     PullRequestPanelContent(
         link = link, panel = panel, env = env, section = current, onSection = { section = it.name }, handlers = handlers,
@@ -232,7 +223,7 @@ internal fun PullRequestPanelContent(
                         onLoadMore = onLoadMore, onRetry = onRetryFiles,
                     )
                     PrSection.Actions -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        PullRequestActionsSection(env.actions, panel.pendingAction, env.localError, env.busy, handlers)
+                        PullRequestActionsSection(env.actions, panel.pendingAction, env.localError, env.busy, handlers, prKey = link?.key)
                     }
                 }
             }
@@ -507,3 +498,6 @@ internal fun PullRequestChip(links: List<ThreadPullRequest>, live: Boolean, ui: 
     val model = remember(links) { prChipModel(links) } ?: return
     PullRequestChipContent(model, onClick)
 }
+
+/** Whether the panel revalidates now: only when the session turns live after the panel was open (a reconnect), not on first entry. */
+internal fun shouldRefreshOnLive(wasLive: Boolean, live: Boolean): Boolean = live && !wasLive

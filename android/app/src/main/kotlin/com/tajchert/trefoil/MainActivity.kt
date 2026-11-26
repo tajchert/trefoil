@@ -203,7 +203,12 @@ class MainActivity : ComponentActivity() {
             val keepConnected by model.keepConnected.collectAsStateWithLifecycle()
             val hideTestFiles by model.hideTestFiles.collectAsStateWithLifecycle()
             val changesUi = remember(hideTestFiles) { ChangesUi(model::loadTurnDiff, hideTestFiles, model::setHideTestFiles) }
-            val pullRequestUi = remember { PullRequestUi(model::prPanel, model::refreshPullRequest, model::loadPullRequestDiff, model::runPullRequestAction, model::commentOnPullRequest) }
+            val pullRequestUi = remember {
+                PullRequestUi(
+                    model::prPanel, model::refreshPullRequest, model::loadPullRequestDiff, model::runPullRequestAction, model::commentOnPullRequest,
+                    model.pullRequestBusy, model.pullRequestErrors, model::dismissPullRequestError,
+                )
+            }
             val agentNotifications by model.agentNotifications.collectAsStateWithLifecycle()
             val openedThread by model.openedThread.collectAsStateWithLifecycle()
             val portBrowser by model.portForwards.browser.collectAsStateWithLifecycle()
