@@ -18,14 +18,14 @@ fun splitCitationDraft(text: String): CitationDraft {
     val matches = collectAssistantCitations(text)
     if (matches.isEmpty()) return CitationDraft(text, emptyList())
     val citations = matches.map { it.citation }
-    val leading = matches.withIndex().all { (index, match) -> if (index == 0) match.start == 0 else match.start == matches[index - 1].end + 1 && text[match.start - 1] == '\n' }
-    if (leading) {
-        val rest = text.substring(matches.last().end)
-        return CitationDraft(if (rest.startsWith("\n\n")) rest.substring(2) else rest, citations)
-    }
+    // The composer's own layout: markers from the start, one per line, then a blank line before the body.
+    var leading = 0
+    while (leading < matches.size && matches[leading].start == (if (leading == 0) 0 else matches[leading - 1].end + 1) &&
+        (leading == 0 || text[matches[leading].start - 1] == '\n')) leading++
+    var cursor = if (leading == 0) 0 else matches[leading - 1].end.let { end -> if (text.startsWith("\n\n", end)) end + 2 else end }
+    if (leading == matches.size) return CitationDraft(text.substring(cursor), citations)
     val body = StringBuilder()
-    var cursor = 0
-    for (match in matches) { body.append(text, cursor, match.start); cursor = match.end }
+    for (match in matches.drop(leading)) { body.append(text, cursor, match.start); cursor = match.end }
     return CitationDraft(body.append(text, cursor, text.length).toString(), citations)
 }
 

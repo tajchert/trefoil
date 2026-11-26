@@ -621,7 +621,11 @@ internal fun ConversationComposer(
     val placeholderAlpha by animateFloatAsState(if (ghostOn) 0f else 1f, tween(if (reducedMotion) 0 else if (ghostOn) 220 else 120), label = "placeholder-alpha")
     openCitation?.takeIf { it in split.citations }?.let { citation ->
         CitationEditDialog(citation, { openCitation = null },
-            onSave = { updated -> openCitation = null; onFullText(replaceCitation(fullText, citation, updated, ComposerDraftStore.MAX_TEXT)) },
+            onSave = { updated ->
+                // A comment that does not fit leaves the text unchanged; keep the dialog open rather than drop the edit.
+                val next = replaceCitation(fullText, citation, updated, ComposerDraftStore.MAX_TEXT)
+                if (next != fullText || updated == citation) { openCitation = null; onFullText(next) }
+            },
             onRemove = { openCitation = null; onFullText(removeCitation(fullText, citation)) })
     }
     ReadingDock(phoneHorizontal = 12.dp, top = if (compactHeight) 2.dp else 4.dp, bottom = if (compactHeight) 8.dp else 16.dp) {
@@ -746,7 +750,7 @@ internal fun QueuedMessagesStrip(state: ClientState, canWrite: Boolean, onCancel
                 state.queuedMessages.forEach { queued ->
                     Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(TfIcons.Queue, null, Modifier.size(16.dp), tint = c.muted)
-                        Text(queued.text, Modifier.weight(1f).padding(horizontal = 8.dp), style = TrefoilType.preview, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(assistantCitationsToPlainText(queued.text), Modifier.weight(1f).padding(horizontal = 8.dp), style = TrefoilType.preview, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         TextButton(onClick = { onSteer(queued.runId) }, enabled = canWrite && queued.canSendNow) { Text("Send now") }
                         TfIconButton(TfIcons.Close, "Remove queued message", { onCancel(queued.runId) }, Modifier.size(40.dp), enabled = canWrite, iconSize = 18.dp)
                     }

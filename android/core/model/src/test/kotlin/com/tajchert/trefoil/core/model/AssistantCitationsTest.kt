@@ -253,6 +253,13 @@ class AssistantCitationsTest {
         assertEquals(CitationDraft("\n\nbody", listOf(a)), splitCitationDraft(joinCitationDraft("\n\nbody", listOf(a))))
     }
 
+    @Test fun aPastedMarkerAfterLayoutMarkersKeepsTheSeparatorOutOfTheBody() {
+        val a = AssistantCitation("env", "thread", "m1", "first quote", 0, 11, "", "")
+        val b = AssistantCitation("env", "thread", "m2", "second quote", 0, 12, "", "")
+        val text = joinCitationDraft("foo ${serializeAssistantCitation(b)} bar", listOf(a))
+        assertEquals(CitationDraft("foo  bar", listOf(a, b)), splitCitationDraft(text))
+    }
+
     @Test fun aPastedMarkerIsLiftedOutOfTheBody() {
         val a = citation
         val split = splitCitationDraft("see ${serializeAssistantCitation(a)} here")
