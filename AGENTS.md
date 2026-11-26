@@ -18,6 +18,8 @@ Baseline profile: `:baselineprofile` generates `app/src/release/generated/baseli
 
 Instrumented tests (`app/src/androidTest`, currently the HTML render WebView) need a running emulator: `./gradlew :app:connectedDebugAndroidTest`.
 
+Diff parser and review-order tests live in `:core:model:test`, PR and diff session tests in `:core:session:test`, and diff, Changes and PR-panel screenshots in `*DiffScreenshotsKt`, `*ChangesScreenshotsKt`, `*PullRequestScreenshotsKt`.
+
 Focused thread image coverage belongs in `:core:model:test`, `:core:session:test`, and `:app:testDebugUnitTest`; use fixtures or an isolated T3 instance, never real user threads. This repository has no configured formatter or code generator. Follow neighboring Kotlin formatting and run `git diff --check`. Debug builds do not normally run R8.
 
 ## Agent workflow

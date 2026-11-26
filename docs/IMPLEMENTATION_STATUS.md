@@ -18,7 +18,7 @@ against an actual provider run. No developer threads were modified.
 
 Remaining product work: incremental native event reducers (current full refresh
 uses more bandwidth), bounded history pagination, rich Markdown, attachments,
-diffs/checkpoints, terminals, steer, relay sign-in (needs T3's account system), remote push notifications,
+working-tree diffs, terminals, steer, relay sign-in (needs T3's account system), remote push notifications,
 access-token renewal and full provider request UX. QR scanning is not supported yet. Unhandled requests
 remain visible and direct users to another T3 client. Approval providers without
 basic accept/decline options are not handled in this first UI.
@@ -142,6 +142,16 @@ staying connected throughout. The user's exact "Disconnected without error" bann
 directly; the likely silent paths are fixed. Plan mode, worktree launch and attachments remain follow-ups.
 Composer drafts (new-thread prompts and thread replies) persist locally and encrypted across restarts; they never
 sync to the server, as in T3 Code.
+
+## Diffs and pull requests (unreleased)
+
+Turn diffs: the thread overflow's Changes entry opens a full-screen Changes screen when the selected thread has checkpoints. It has a turn picker (newest first, with file counts and +/-), a file list in review order with a device-local hide-tests toggle, and a native Compose diff viewer. Turn 1 reads `orchestration.getFullThreadDiff`; later turns read `orchestration.getTurnDiff`. Replies are parsed off the main thread into flattened rows. Each diff holds at most 60 000 rows. Files over 400 lines or 24 000 characters, and generated files, start collapsed. A banner appears when the server reports truncation or the row cap cuts the view. An oversized reply fails only that request with "Diff too large for mobile". Completed turns are cached in memory per environment and dropped when the environment is forgotten. Diffs have add/delete colouring and word-level spans, but no syntax highlighting. Working-tree and branch-range diffs are not included.
+
+Pull request read path: the PR panel paints at once from the thread link's snapshot, then from the server's last-good detail, and revalidates when the environment's refresh stream ticks and when the panel opens. Checks load only when the environment reports `pullRequestChecks`. Diff files load in cursor pages, each up to 4 MB, on demand through the existing authorized client and URL policy. Caches are memory-only, per environment, bounded, and cleared on forget. Disconnected or stale, the panel shows the cached detail with a "Last updated" label and starts no new reads. The panel has Overview (status, checks, mergeability), Files and Actions tabs.
+
+Pull request actions: merge, update branch, mark ready, mark draft and comment. Each is sent exactly once, with no command id, and is never retried or replayed. Actions need source-control write permission, a live writable session, and the action listed in the PR's reported capabilities. Merge sends `expectedHeadSha` from the last detail, so a changed head fails instead of merging unseen commits. A typed rejection is shown as a definite failure. A timeout, disconnect, oversized reply or interrupt-only exit is an uncertain outcome. It is scoped to that pull request and does not fail the session: the panel shows "Outcome unknown – checking…" and keeps that PR's actions disabled. On the next live session, the app reconciles with `pullRequests.detail` (`allowStale: false`) and `checks`. Only the user can send the action again.
+
+Deferred after this release: working-tree and branch-range diffs (T12, `review.getDiffPreview`), syntax highlighting, inline review comments and the review composer (including submitting reviews), stack actions, labels and reviewers, the PR list and saved views, and disk caching of diffs or PR data. Verification so far is JVM tests and the Changes and diff screenshot references. Neither the Changes screen nor the PR panel has been exercised on a device against a live T3 server.
 
 ## Keep connected in background (0.16.0)
 
