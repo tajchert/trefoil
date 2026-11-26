@@ -35,7 +35,7 @@ internal fun settleLeavesConversation(action: ThreadAction, twoPane: Boolean): B
 /** Overflow button for a thread (conversation header). List rows open [ThreadActionsDropdown] on long-press instead. */
 @Composable
 internal fun ThreadActionsMenu(
-    state: ClientState, thread: ThreadSummary, onOpenAgents: (() -> Unit)? = null,
+    state: ClientState, thread: ThreadSummary, onOpenAgents: (() -> Unit)? = null, onOpenChanges: (() -> Unit)? = null,
     /** Items the shell demotes from a narrow conversation header, shown first; call `close` before acting. */
     leadingItems: (@Composable ColumnScope.(close: () -> Unit) -> Unit)? = null,
     onAction: (ThreadTarget, ThreadAction, String?) -> Unit,
@@ -45,7 +45,7 @@ internal fun ThreadActionsMenu(
         var open by remember { mutableStateOf(false) }
         Box {
             TfIconButton(TfIcons.More, "Thread actions for ${thread.title}", { open = true }, iconSize = 22.dp, tooltip = "Thread actions")
-            ThreadActionsDropdown(state, thread, onAction, open, { open = it }, onOpenAgents = onOpenAgents, leadingItems = leadingItems)
+            ThreadActionsDropdown(state, thread, onAction, open, { open = it }, onOpenAgents = onOpenAgents, onOpenChanges = onOpenChanges, leadingItems = leadingItems)
         }
     }
 }
@@ -57,6 +57,8 @@ internal fun ThreadActionsDropdown(
     expanded: Boolean, onExpandedChange: (Boolean) -> Unit, offset: DpOffset = DpOffset.Zero,
     /** Opens the Agents sheet; null hides the item (no agents in the selected thread). */
     onOpenAgents: (() -> Unit)? = null,
+    /** Opens the Changes screen; null hides the item (the selected thread has no checkpoints). */
+    onOpenChanges: (() -> Unit)? = null,
     leadingItems: (@Composable ColumnScope.(close: () -> Unit) -> Unit)? = null,
 ) {
     val environmentId = state.environment?.id ?: return
@@ -75,8 +77,11 @@ internal fun ThreadActionsDropdown(
             if (leadingItems != null) { leadingItems { close() }; HorizontalDivider() }
             if (onOpenAgents != null) {
                 DropdownMenuItem(text = { Text("Agents") }, leadingIcon = { Icon(TfIcons.Agents, null, Modifier.size(18.dp)) }, onClick = { close(); onOpenAgents() })
-                HorizontalDivider()
             }
+            if (onOpenChanges != null) {
+                DropdownMenuItem(text = { Text("Changes") }, leadingIcon = { Icon(TfIcons.Changes, null, Modifier.size(18.dp)) }, onClick = { close(); onOpenChanges() })
+            }
+            if (onOpenAgents != null || onOpenChanges != null) HorizontalDivider()
             DropdownMenuItem(text = { Text(if (thread.settledOverride == "settled") "Un-settle" else "Settle") }, enabled = writable,
                 onClick = { act(if (thread.settledOverride == "settled") ThreadAction.Unsettle else ThreadAction.Settle) })
             DropdownMenuItem(text = { Text(if (thread.pinnedAt != null) "Unpin" else "Pin") }, enabled = configured,

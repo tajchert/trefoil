@@ -36,6 +36,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.ui.diff.LocalChangesEntry
+import com.tajchert.trefoil.ui.diff.OpenInChangesButton
 import com.tajchert.trefoil.ui.adaptive.TfIconButton
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -231,7 +233,12 @@ private fun WorkEntry(activity: ToolActivity, single: Boolean, live: Boolean, ca
                 Text("−$removed", style = TrefoilType.mono, color = c.red)
             }
         }
-        if (expanded && hasDetail) WorkEntryDetail(activity, canLoadActivity, onLoadActivity)
+        if (expanded && hasDetail) {
+            // With checkpoints the turn's diff has its own screen: the row keeps its +/- and opens Changes instead of dumping the raw diff.
+            val changes = LocalChangesEntry.current
+            if (changes != null && activity.kind == "file_change") OpenInChangesButton({ changes.open(activity.runId) }, Modifier.padding(start = 16.dp))
+            else WorkEntryDetail(activity, canLoadActivity, onLoadActivity)
+        }
     }
 }
 

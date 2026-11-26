@@ -15,6 +15,7 @@ import com.tajchert.trefoil.ui.adaptive.SidePanelMode
 import com.tajchert.trefoil.ui.adaptive.WindowSpec
 import com.tajchert.trefoil.ui.adaptive.shellPolicy
 import com.tajchert.trefoil.ui.shell.SidePanelTab.Agents
+import com.tajchert.trefoil.ui.shell.SidePanelTab.Changes
 import com.tajchert.trefoil.ui.shell.SidePanelTab.Preview
 import com.tajchert.trefoil.ui.shell.SidePanelTab.Screens
 import com.tajchert.trefoil.ui.shell.SidePanelTab.Thread
@@ -31,6 +32,21 @@ class SidePanelTest {
         assertEquals(listOf(Screens), sidePanelTabs(preview = false, screens = true, agents = false))
         assertEquals(listOf(Preview, Agents), sidePanelTabs(preview = true, screens = false, agents = true))
         assertEquals(emptyList<SidePanelTab>(), sidePanelTabs(preview = false, screens = false, agents = false))
+    }
+
+    @Test fun changesIsTheLastTabAndOnlyExistsWithCheckpoints() {
+        assertEquals(listOf(Preview, Screens, Agents, Changes), sidePanelTabs(preview = true, screens = true, agents = true, changes = true))
+        assertEquals(listOf(Changes), sidePanelTabs(preview = false, screens = false, agents = false, changes = true))
+        assertEquals(emptyList<SidePanelTab>(), sidePanelTabs(preview = false, screens = false, agents = false, changes = false))
+        // Without checkpoints a saved Changes tab falls back to what is available.
+        assertEquals(Preview, resolveSidePanelTab(Changes, listOf(Preview)))
+    }
+
+    @Test fun changesIsAFullScreenRouteInANarrowWindowAndDockedOtherwise() {
+        val t = ShellDestination.Threads
+        assertEquals(SidePanelPresentation(t, agentsSheet = false, docked = false, changesRoute = true), sidePanelPresentation(t, Changes, SidePanelMode.FullScreen))
+        assertEquals(SidePanelPresentation(t, agentsSheet = false, docked = true), sidePanelPresentation(t, Changes, SidePanelMode.ThirdPane))
+        assertFalse(sidePanelPresentation(t, Agents, SidePanelMode.FullScreen).changesRoute)
     }
 
     @Test fun aSavedTabThatWentAwayFallsBackToTheFirstUsableOneOrCloses() {

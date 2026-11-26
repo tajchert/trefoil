@@ -33,6 +33,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.remember
+import com.tajchert.trefoil.ui.diff.ChangesUi
 import com.tajchert.trefoil.ui.ComposerDraftUi
 import com.tajchert.trefoil.ui.PromptSuggestionUi
 import com.tajchert.trefoil.ui.SideChatUi
@@ -199,6 +200,8 @@ class MainActivity : ComponentActivity() {
             val machineProbes by model.machineProbes.collectAsStateWithLifecycle()
             val usage by model.usage.collectAsStateWithLifecycle()
             val keepConnected by model.keepConnected.collectAsStateWithLifecycle()
+            val hideTestFiles by model.hideTestFiles.collectAsStateWithLifecycle()
+            val changesUi = remember(hideTestFiles) { ChangesUi(model::loadTurnDiff, hideTestFiles, model::setHideTestFiles) }
             val agentNotifications by model.agentNotifications.collectAsStateWithLifecycle()
             val openedThread by model.openedThread.collectAsStateWithLifecycle()
             val portBrowser by model.portForwards.browser.collectAsStateWithLifecycle()
@@ -298,6 +301,7 @@ class MainActivity : ComponentActivity() {
                 onKeepConnectedChange = ::onKeepConnectedChange,
                 agentNotifications = agentNotifications,
                 onAgentNotificationsChange = ::onAgentNotificationsChange,
+                changes = changesUi,
             ) }
         }
     }

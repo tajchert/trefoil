@@ -59,19 +59,20 @@ import com.tajchert.trefoil.ui.adaptive.focusRing
  * Tabs of the side panel beside the conversation, in header order. Saved by name only. [Thread] is the read-only inspector of a subagent
  * or side chat; its pill is labelled by the inspected thread's kind ([threadTabLabel]) and the tab exists only while a target is set.
  */
-internal enum class SidePanelTab(val label: String) { Preview("Preview"), Screens("Screens"), Agents("Agents"), Thread("Thread") }
+internal enum class SidePanelTab(val label: String) { Preview("Preview"), Screens("Screens"), Agents("Agents"), Changes("Changes"), Thread("Thread") }
 
 /** The Thread tab's pill label: "Side chat" for a side chat, "Subagent" for any subagent thread. */
 internal fun threadTabLabel(kind: SideThreadKind?): String = if (kind == SideThreadKind.SideChat) "Side chat" else "Subagent"
 
 /**
- * Which tabs exist: Preview with dev servers for this machine, Screens with the rail's Screens entry, Agents with a roster, Thread while an
- * inspector target is set.
+ * Which tabs exist: Preview with dev servers for this machine, Screens with the rail's Screens entry, Agents with a roster, Changes with checkpoints,
+ * Thread while an inspector target is set.
  */
-internal fun sidePanelTabs(preview: Boolean, screens: Boolean, agents: Boolean, thread: Boolean = false): List<SidePanelTab> = buildList {
+internal fun sidePanelTabs(preview: Boolean, screens: Boolean, agents: Boolean, changes: Boolean = false, thread: Boolean = false): List<SidePanelTab> = buildList {
     if (preview) add(SidePanelTab.Preview)
     if (screens) add(SidePanelTab.Screens)
     if (agents) add(SidePanelTab.Agents)
+    if (changes) add(SidePanelTab.Changes)
     if (thread) add(SidePanelTab.Thread)
 }
 
@@ -96,12 +97,15 @@ internal fun sidePanelOpenTarget(last: SidePanelTab?, available: List<SidePanelT
 internal fun effectiveSidePanelMode(policy: ShellPolicy): SidePanelMode =
     if (policy.compactHeight || !policy.twoPane) SidePanelMode.FullScreen else policy.sidePanelMode
 
-/** How an open tab is presented: [docked] beside the conversation, or (window too narrow) mapped onto a destination or the agents sheet. */
-internal data class SidePanelPresentation(val destination: ShellDestination, val agentsSheet: Boolean, val docked: Boolean)
+/**
+ * How an open tab is presented: [docked] beside the conversation, or (window too narrow) mapped onto a destination, the agents sheet
+ * or, for Changes, a full-screen route over the conversation ([changesRoute]).
+ */
+internal data class SidePanelPresentation(val destination: ShellDestination, val agentsSheet: Boolean, val docked: Boolean, val changesRoute: Boolean = false)
 
 /**
  * Narrow windows ([SidePanelMode.FullScreen]) have no docked panel, so an open tab is shown the way the narrow window shows that surface:
- * Preview as the Servers destination, Screens as the Screens destination, Agents as the agents sheet. The saved tab is kept, so growing
+ * Preview as the Servers destination, Screens as the Screens destination, Agents as the agents sheet, Changes as a full-screen route. The saved tab is kept, so growing
  * back to a dockable width docks it again. Wider windows dock the tab beside the conversation of the Threads destination.
  * A screen viewer in full screen always takes the whole window (as the Screens destination); leaving full screen docks it again.
  */
@@ -113,6 +117,7 @@ internal fun sidePanelPresentation(destination: ShellDestination, tab: SidePanel
         SidePanelTab.Preview -> SidePanelPresentation(ShellDestination.Servers, agentsSheet = false, docked = false)
         SidePanelTab.Screens -> SidePanelPresentation(ShellDestination.Screens, agentsSheet = false, docked = false)
         SidePanelTab.Agents -> SidePanelPresentation(ShellDestination.Threads, agentsSheet = true, docked = false)
+        SidePanelTab.Changes -> SidePanelPresentation(ShellDestination.Threads, agentsSheet = false, docked = false, changesRoute = true)
         // The inspector has no narrow form: nothing docks and no sheet opens. The target survives (it lives in the shell), so docking
         // again reopens the inspected thread; the child itself is reached through select() from the Agents sheet.
         SidePanelTab.Thread -> SidePanelPresentation(ShellDestination.Threads, agentsSheet = false, docked = false)

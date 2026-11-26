@@ -68,6 +68,10 @@ import com.tajchert.trefoil.ui.shell.resolveSidePanelTab
 import com.tajchert.trefoil.ui.shell.serversMenuLabel
 import com.tajchert.trefoil.ui.shell.sidePanelOpenTarget
 import com.tajchert.trefoil.ui.shell.sidePanelPresentation
+import com.tajchert.trefoil.ui.diff.ChangesEntry
+import com.tajchert.trefoil.ui.diff.ChangesScreen
+import com.tajchert.trefoil.ui.diff.ChangesUi
+import com.tajchert.trefoil.ui.diff.LocalChangesEntry
 import com.tajchert.trefoil.ui.shell.effectiveSidePanelMode
 import com.tajchert.trefoil.ui.shell.sidePanelTabs
 import com.tajchert.trefoil.ui.shell.BrandPanel
@@ -185,6 +189,7 @@ fun TrefoilApp(
     onClosePortBrowser: () -> Unit = {},
     stoppedForwards: Map<String, StoppedForwardNotice> = emptyMap(),
     onDismissStoppedForwards: (environmentId: String) -> Unit = {},
+    changes: ChangesUi = ChangesUi(),
     start: ShellStart = ShellStart(),
 ) {
     TrefoilTheme {
@@ -214,6 +219,8 @@ fun TrefoilApp(
         var destinationEnvironment by rememberSaveable { mutableStateOf(environmentId) }
         val destination = if (savedDestination.environmentScoped && destinationEnvironment != environmentId) ShellDestination.Threads else savedDestination
         var screenFullscreen by rememberSaveable { mutableStateOf(false) }
+        // The turn the Changes screen shows (null: the newest); it belongs to the selected thread.
+        var changesTurn by rememberSaveable(state.selectedThreadId) { mutableStateOf<Int?>(null) }
         // The side panel beside the conversation: the open tab and the last used one, saved by enum name only. It belongs to one machine.
         var sidePanelTabName by rememberSaveable { mutableStateOf(start.sidePanelTab) }
         var lastPanelTabName by rememberSaveable { mutableStateOf(start.sidePanelTab) }
@@ -457,7 +464,7 @@ fun TrefoilApp(
                 val listState = rememberShellListState(policy, environmentId, start.listCollapsed)
                 // Side panel tabs: Preview with dev servers, Screens with the rail's Screens entry (disabled with it), Agents with a roster.
                 val entries = navEntries(state, shell)
-                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null, thread = inspectorThreadId != null)
+                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null, changes = state.checkpoints.isNotEmpty(), thread = inspectorThreadId != null)
                 val panelDisabled = if (entries.screensEnabled) emptySet() else setOf(SidePanelTab.Screens)
                 val panelTab = resolveSidePanelTab(savedPanelTab, panelTabs, panelDisabled)
                 // A saved tab that went away (roster gone, servers unsupported) is replaced by what is shown, so the toggle and Back agree with the screen.
@@ -474,7 +481,7 @@ fun TrefoilApp(
                 @Suppress("NAME_SHADOWING") val showPorts = destination == ShellDestination.Servers
                 // A docked panel hosts the browser itself (Preview); otherwise an open page takes the window as it does today.
                 val browserHosted = portBrowser != null && !docked
-                SideEffect { conversationCovered = destination != ShellDestination.Threads || browserHosted }
+                SideEffect { conversationCovered = destination != ShellDestination.Threads || browserHosted || presentation.changesRoute }
                 val panes = resolvePanes(policy, listState.startWidth.value, listState.collapsed, sidePanelOpen = docked)
                 val split = policy.splitFold != null
                 val nav = navChrome(policy.rail, twoPane, policy.compactHeight, connected)
@@ -523,6 +530,8 @@ fun TrefoilApp(
                         null -> Unit
                     }
                 }
+                // The full-screen Changes route (narrow windows) is left by Back before anything else; registered later, so it wins.
+                BackHandler(presentation.changesRoute && connected) { closePanel() }
                 val navModel = ShellNavModel(state, savedEnvironments, machineProbes, shell, destination, browserHosted, needsYou,
                     onThreads = { navigate(ShellDestination.Threads); onClosePortBrowser() },
                     onNewThread = { creatingProject = null; creating = true },
@@ -545,6 +554,17 @@ fun TrefoilApp(
                 val budget = headerBudget(maxWidth.value, panes.conversation, density.fontScale, pill != null, portsAvailable && threadPorts.isNotEmpty(), dockable, panelOpen = docked)
                 val openAgents: () -> Unit = if (canDock) ({ openPanelTab(SidePanelTab.Agents) }) else ({ showAgents = true })
                 val openServers: () -> Unit = if (canDock) ({ openPanelTab(SidePanelTab.Preview) }) else ({ navigate(ShellDestination.Servers) })
+                // Changes: docked beside the conversation where a panel fits, otherwise a full-screen route. A run opens its own turn when it has a checkpoint.
+                val openChanges: (String?) -> Unit = { runId ->
+                    changesTurn = runId?.let { id -> latestState.runs.firstOrNull { it.id == id }?.ordinal }
+                    if (canDock) openPanelTab(SidePanelTab.Changes) else openPanel(SidePanelTab.Changes)
+                }
+                val latestOpenChanges by rememberUpdatedState(openChanges)
+                val hasCheckpoints = state.checkpoints.isNotEmpty()
+                val changesEntry = remember(hasCheckpoints) { if (hasCheckpoints) ChangesEntry { runId -> latestOpenChanges(runId) } else null }
+                val changesSurface: @Composable (Modifier, (() -> Unit)?) -> Unit = { modifier, onClose ->
+                    ChangesScreen(state, changes, changesTurn, { changesTurn = it }, onClose, modifier)
+                }
                 val toggleOpen: () -> Unit = { if (docked) closePanelToToggle() else sidePanelOpenTarget(SidePanelTab.entries.firstOrNull { it.name == lastPanelTabName }, panelTabs, panelDisabled)?.let(openPanelTab) }
                 val trackFocus: (PaneFocus) -> Modifier = { pane ->
                     Modifier.onFocusChanged { if (it.hasFocus) paneFocus = pane else if (paneFocus == pane) paneFocus = PaneFocus.None }
@@ -623,7 +643,7 @@ fun TrefoilApp(
                         .then(if (twoPane) Modifier.paneGroup(detailPaneTitle(destination, detailTitle), PaneOrder.Detail).then(trackFocus(PaneFocus.Conversation)) else Modifier)) {
                         if (!twoPane || split) ConnectionBanner(state, onReconnect)
                         Box(Modifier.weight(1f)) {
-                            CompositionLocalProvider(LocalTimelineFoldMemo provides timelineFolds) { conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) draftComposerKey(draft) else state.selectedThreadId}") {
+                            CompositionLocalProvider(LocalTimelineFoldMemo provides timelineFolds, LocalChangesEntry provides changesEntry) { conversationState.SaveableStateProvider("${state.environment?.id}:${if (draft != null) draftComposerKey(draft) else state.selectedThreadId}") {
                                 if (twoPane && draft == null && state.selectedThreadId == null) EmptyDetail(
                                     needsYou = if (state.connection == ConnectionStatus.Connected) needsYouThreads else emptyList(),
                                     newThreadEnabled = navModel.entries.newThreadEnabled, onOpenThread = select, onNewThread = { creatingProject = null; creating = true },
@@ -653,7 +673,8 @@ fun TrefoilApp(
                                                     leadingIcon = { Icon(TfIcons.Globe, null, Modifier.size(18.dp)) }, onClick = { close(); openServers() })
                                             })
                                             state.threads.firstOrNull { it.id == state.selectedThreadId }?.let { ThreadActionsMenu(state, it, leadingItems = demoted,
-                                                onOpenAgents = if (roster != null && !budget.menuAgents) openAgents else null, onAction = { target, operation, value ->
+                                                onOpenAgents = if (roster != null && !budget.menuAgents) openAgents else null,
+                                                onOpenChanges = if (hasCheckpoints) ({ openChanges(null) }) else null, onAction = { target, operation, value ->
                                                 onThreadAction(target, operation, value)
                                                 if (settleLeavesConversation(operation, twoPane)) showThread = false
                                             }) }
@@ -704,6 +725,11 @@ fun TrefoilApp(
                         secondaryHosted && split && !fullscreenViewer -> ShellPanes(policy, panes, listState, banner = {},
                             list = { if (connected) list(Modifier.fillMaxSize()) else BrandPanel(Modifier.fillMaxSize()) }, detail = { secondary(secondaryModifier) })
                         secondaryHosted -> secondary(secondaryModifier)
+                        // Narrow windows: Changes is a full-screen route over the conversation, with a back arrow.
+                        presentation.changesRoute && panelTab == SidePanelTab.Changes -> Column(Modifier.fillMaxSize().statusBarsPadding().windowInsetsPadding(BottomBarsAndIme)) {
+                            ConnectionBanner(state, onReconnect)
+                            changesSurface(Modifier.weight(1f), closePanel)
+                        }
                         twoPane -> ShellPanes(policy, panes, listState, banner = { ConnectionBanner(state, onReconnect) },
                             list = { list(Modifier.fillMaxSize()) }, detail = { detail(Modifier.fillMaxSize()) }, transient = transient,
                             sidePanel = if (docked && panelTab != null) ({
@@ -721,6 +747,7 @@ fun TrefoilApp(
                                                 addToChat?.let { insert -> PanelAction(TfIcons.Link, "Add to chat", true) { referenceInsert = insert } }))
                                             InspectorThreadPane(state, id, inspectorKind, onRetry = { onOpenInspector(id) }, onMaximize = { maximizeInspector(id) }, onClose = leaveInspector, modifier = Modifier.fillMaxSize())
                                         }
+                                        SidePanelTab.Changes -> changesSurface(Modifier.fillMaxSize(), null)
                                     }
                                 }
                             }) else null)

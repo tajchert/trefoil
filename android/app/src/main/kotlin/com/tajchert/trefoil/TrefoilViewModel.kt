@@ -213,6 +213,9 @@ class TrefoilViewModel internal constructor(
     private val _keepConnected = MutableStateFlow(prefs.getBoolean(KEEP_CONNECTED, false))
     /** Opt-in: a foreground service keeps a live connection open (and auto-reconnect working) while in the background. */
     val keepConnected: StateFlow<Boolean> = _keepConnected.asStateFlow()
+    private val _hideTestFiles = MutableStateFlow(prefs.getBoolean(HIDE_TEST_FILES, false))
+    /** Device-local: the Changes screen leaves test files out of the file list and the diff. */
+    val hideTestFiles: StateFlow<Boolean> = _hideTestFiles.asStateFlow()
     private val _agentNotifications = MutableStateFlow(prefs.getBoolean(AGENT_NOTIFICATIONS, true))
     /** Local notifications about agent activity while the app is in the background and connected; on by default. */
     val agentNotifications: StateFlow<Boolean> = _agentNotifications.asStateFlow()
@@ -1056,6 +1059,12 @@ class TrefoilViewModel internal constructor(
         _keepConnected.value = enabled
         postKeepAliveCheck()
     }
+    fun setHideTestFiles(hidden: Boolean) {
+        prefs.edit().putBoolean(HIDE_TEST_FILES, hidden).apply()
+        _hideTestFiles.value = hidden
+    }
+    /** Reads and parses one turn's diff of the selected thread (the Changes screen); the session applies its own selection guard. */
+    suspend fun loadTurnDiff(turnCount: Int): DiffDocument = client.loadTurnDiff(turnCount)
     /** Persists the opt-in for agent notifications; turning it off removes the ones in the shade (the driver sees the flow change). */
     fun setAgentNotifications(enabled: Boolean) {
         prefs.edit().putBoolean(AGENT_NOTIFICATIONS, enabled).apply()
@@ -1516,6 +1525,7 @@ class TrefoilViewModel internal constructor(
         const val LAST_ENVIRONMENT = "lastEnvironmentId"
         const val KEEP_CONNECTED = "keepConnectedInBackground"
         const val AGENT_NOTIFICATIONS = "agentNotifications"
+        const val HIDE_TEST_FILES = "changesHideTestFiles"
         const val SSH_FAILURE = "SSH connection failed. Check the address, login and running T3 server."
     }
 }
