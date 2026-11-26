@@ -329,7 +329,7 @@ interface TrefoilClient {
      * Throws PairingException if none answers (message names the last failure).
      */
     suspend fun connect(environment: SavedEnvironment, routes: List<EnvironmentRoute>) { connect(environment.copy(baseUrl = routes.first().baseUrl)) }
-    /** Route hints from the connected host: once after each successful connect (directEndpoints from server.getConfig + link-state), then on each subscribeServerConfig snapshot whose directEndpoints change. */
+    /** Route hints from the connected host: once after each successful connect (the first config's directEndpoints + link-state; additive while the first config snapshot's list may be incomplete), then on each subscribeServerConfig snapshot whose directEndpoints change, or once the first list settles. */
     val routeHints: Flow<RouteHints> get() = emptyFlow()
     /** Credential-free preflight: true when route answers /.well-known/t3/environment as environmentId (protocol 2) within timeoutMillis. Applies URL policy with allowInsecureHttp. */
     suspend fun preflight(environmentId: String, route: EnvironmentRoute, allowInsecureHttp: Boolean, timeoutMillis: Long): Boolean = false

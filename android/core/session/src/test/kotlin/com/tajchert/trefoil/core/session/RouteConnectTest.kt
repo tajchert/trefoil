@@ -87,7 +87,7 @@ class RouteConnectTest {
     }
 
     private fun json(body: String, code: Int = 200) = MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(body)
-    private fun client(timeout: Long = 2_000) = T3Client(scope, routeTimeoutMillis = { timeout }).also { clients += it }
+    private fun client(timeout: Long = 2_000, settle: Long = 10_000) = T3Client(scope, routeTimeoutMillis = { timeout }, directEndpointsSettleMillis = settle).also { clients += it }
     private fun environment(baseUrl: String) = SavedEnvironment("env-1", "Test", baseUrl, "fixture-token")
     private fun refusedUrl(): String { val dead = MockWebServer(); dead.start(); val url = dead.url("/").toString(); dead.shutdown(); return url }
 
@@ -307,7 +307,8 @@ class RouteConnectTest {
         val hints = scope.async { withTimeout(5_000) { client.routeHints.first() } }
         yield(); delay(50)
         client.connect(environment(host.url))
-        assertEquals(RouteHints("env-1", listOf(DirectEndpointHint("lan", "http://192.168.1.20:3773")), TunnelHint.Active("prod-fixture.t3coderelay.com")), hints.await())
+        // The first config snapshot's endpoints may predate T3's network discovery: they only add routes.
+        assertEquals(RouteHints("env-1", listOf(DirectEndpointHint("lan", "http://192.168.1.20:3773")), TunnelHint.Active("prod-fixture.t3coderelay.com"), additive = true), hints.await())
         val linkState = host.requests.single { it.path == "/api/connect/link-state" }
         assertEquals("Bearer fixture-token", linkState.getHeader("Authorization"))
     }
@@ -318,13 +319,13 @@ class RouteConnectTest {
         val hints = scope.async { withTimeout(5_000) { client.routeHints.first() } }
         yield(); delay(50)
         client.connect(environment(host.url))
-        assertEquals(RouteHints("env-1", null, TunnelHint.Unknown), hints.await())
+        assertEquals(RouteHints("env-1", null, TunnelHint.Unknown, additive = true), hints.await())
         assertEquals(ConnectionStatus.Connected, client.state.value.connection)
         val silent = Host(linkState = { MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE) })
         val late = scope.async { withTimeout(8_000) { client.routeHints.first() } }
         yield(); delay(50)
         client.connect(environment(silent.url))
-        assertEquals("A silent link-state times out as Unknown", RouteHints("env-1", null, TunnelHint.Unknown), late.await())
+        assertEquals("A silent link-state times out as Unknown", RouteHints("env-1", null, TunnelHint.Unknown, additive = true), late.await())
         assertEquals(ConnectionStatus.Connected, client.state.value.connection)
     }
 
@@ -336,7 +337,7 @@ class RouteConnectTest {
         val collector = scope.launch { client.routeHints.collect { received.send(it) } }
         yield(); delay(50)
         client.connect(environment(host.url))
-        assertEquals(TunnelHint.Unknown, withTimeout(5_000) { received.receive() }.tunnel)
+        assertTrue("The first snapshot's list is provisional", withTimeout(5_000) { received.receive() }.also { assertEquals(TunnelHint.Unknown, it.tunnel) }.additive)
         withTimeout(5_000) { client.state.first { it.canWrite } }
         val socket = host.socket.await(); val stream = host.configStream.await()
         fun chunk(vararg values: String) = socket.send("""{"_tag":"Chunk","requestId":"$stream","values":[${values.joinToString(",")}]}""")
@@ -345,7 +346,7 @@ class RouteConnectTest {
         chunk("""{"version":1,"type":"snapshot","config":{"providers":[]}}""")
         chunk("""{"version":1,"type":"snapshot","config":{"providers":[],"directEndpoints":[{"kind":"tailnet","httpBaseUrl":"https://box.tail.ts.net"}]}}""")
         val changed = withTimeout(5_000) { received.receive() }
-        assertEquals(RouteHints("env-1", listOf(DirectEndpointHint("tailnet", "https://box.tail.ts.net")), TunnelHint.Unknown), changed)
+        assertEquals("A later snapshot's list is complete", RouteHints("env-1", listOf(DirectEndpointHint("tailnet", "https://box.tail.ts.net")), TunnelHint.Unknown), changed)
         delay(100)
         assertTrue("Unchanged, absent and unknown events emit nothing", received.tryReceive().isFailure)
         // An older server rejecting or ending the optional config stream leaves the session alone.
@@ -353,6 +354,35 @@ class RouteConnectTest {
         delay(200)
         assertEquals(ConnectionStatus.Connected, client.state.value.connection)
         assertTrue(client.state.value.canWrite)
+        collector.cancel()
+    }
+
+    @Test fun theFirstSnapshotsEndpointsSettleWhenNoLaterSnapshotChangesThem() = runBlocking {
+        val lan = listOf(DirectEndpointHint("lan", "http://192.168.1.20:3773"))
+        val host = Host(config = """{"providers":[],"directEndpoints":[{"kind":"lan","httpBaseUrl":"http://192.168.1.20:3773"}]}""")
+        val client = client(settle = 300)
+        val received = Channel<RouteHints>(Channel.UNLIMITED)
+        val collector = scope.launch { client.routeHints.collect { received.send(it) } }
+        yield(); delay(50)
+        client.connect(environment(host.url))
+        assertEquals(RouteHints("env-1", lan, TunnelHint.Unknown, additive = true), withTimeout(5_000) { received.receive() })
+        assertEquals("T3 found nothing more, so the list may now remove routes", RouteHints("env-1", lan, TunnelHint.Unknown), withTimeout(5_000) { received.receive() })
+        delay(500)
+        assertTrue("It settles once", received.tryReceive().isFailure)
+        collector.cancel()
+    }
+
+    @Test fun aDisconnectBeforeTheEndpointsSettleNeverLetsThemRemoveRoutes() = runBlocking {
+        val host = Host(config = """{"providers":[],"directEndpoints":[]}""")
+        val client = client(settle = 300)
+        val received = Channel<RouteHints>(Channel.UNLIMITED)
+        val collector = scope.launch { client.routeHints.collect { received.send(it) } }
+        yield(); delay(50)
+        client.connect(environment(host.url))
+        assertTrue(withTimeout(5_000) { received.receive() }.additive)
+        client.disconnect()
+        delay(600)
+        assertTrue("No complete list from a connection that ended", received.tryReceive().isFailure)
         collector.cancel()
     }
 

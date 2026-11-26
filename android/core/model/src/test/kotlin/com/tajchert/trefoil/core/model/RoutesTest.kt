@@ -11,7 +11,7 @@ class RoutesTest {
     private val direct = SavedEnvironment("env", "Mac", "https://mac.example/", "token")
     private val ssh = SavedEnvironment("env", "Mac", "", "token", SshProfile("mac.local", 22, "user", "SHA256:x", "ssh-ed25519"))
     private fun learned(kind: RouteKind, url: String) = EnvironmentRoute(kind, url, Learned)
-    private fun hints(endpoints: List<DirectEndpointHint>? = null, tunnel: TunnelHint = TunnelHint.Unknown, id: String = "env") = RouteHints(id, endpoints, tunnel)
+    private fun hints(endpoints: List<DirectEndpointHint>? = null, tunnel: TunnelHint = TunnelHint.Unknown, id: String = "env", additive: Boolean = false) = RouteHints(id, endpoints, tunnel, additive)
     private fun lan(url: String) = DirectEndpointHint("lan", url)
     private fun tailnet(url: String) = DirectEndpointHint("tailnet", url)
 
@@ -86,6 +86,16 @@ class RoutesTest {
         val start = direct.copy(routes = listOf(learned(Lan, "http://192.168.1.9/"), learned(Tailnet, "https://old.ts.net/"), learned(Tunnel, "https://prod-abc.t3coderelay.com/")))
         val next = start.withRouteHints(hints(listOf(lan("http://192.168.1.20:3773"), tailnet("https://mac.tail1234.ts.net/"), DirectEndpointHint("vpn", "https://10.8.0.2/"))))
         assertEquals(listOf(learned(Lan, "http://192.168.1.20:3773/"), learned(Lan, "https://10.8.0.2/"), learned(Tailnet, "https://mac.tail1234.ts.net/"), learned(Tunnel, "https://prod-abc.t3coderelay.com/")), next.routes)
+    }
+
+    @Test fun `additive direct endpoints add routes but never remove a saved one`() {
+        val start = direct.copy(routes = listOf(learned(Lan, "http://192.168.1.9/"), learned(Tailnet, "https://mac.tail1234.ts.net/")))
+        // T3's first config snapshot, before its Tailscale probe finished: LAN only.
+        val partial = start.withRouteHints(hints(listOf(lan("http://192.168.1.20:3773")), additive = true))
+        assertEquals(listOf(learned(Lan, "http://192.168.1.9/"), learned(Lan, "http://192.168.1.20:3773/"), learned(Tailnet, "https://mac.tail1234.ts.net/")), partial.routes)
+        assertSame(start, start.withRouteHints(hints(emptyList(), additive = true)))
+        val complete = partial.withRouteHints(hints(listOf(lan("http://192.168.1.20:3773"))))
+        assertEquals("The complete list then replaces them", listOf(learned(Lan, "http://192.168.1.20:3773/")), complete.routes)
     }
 
     @Test fun `empty direct endpoints clear learned direct routes but null keeps them`() {

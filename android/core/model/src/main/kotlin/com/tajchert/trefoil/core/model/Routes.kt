@@ -19,7 +19,11 @@ sealed interface TunnelHint {
     data object NotLinked : TunnelHint
     data class Active(val hostname: String) : TunnelHint
 }
-data class RouteHints(val environmentId: String, val directEndpoints: List<DirectEndpointHint>?, val tunnel: TunnelHint)
+/**
+ * [additive]: [directEndpoints] may still be incomplete (T3 sends its first config snapshot before network discovery
+ * finishes), so they add learned routes but never remove one; a later complete list replaces them.
+ */
+data class RouteHints(val environmentId: String, val directEndpoints: List<DirectEndpointHint>?, val tunnel: TunnelHint, val additive: Boolean = false)
 
 const val MAX_LEARNED_ROUTES = 8
 
@@ -97,7 +101,7 @@ private fun tunnelHostname(value: String): String? {
 
 /**
  * Applies host hints to the learned routes. Hints for another environment are ignored. Non-null direct endpoints
- * replace all learned Lan/Tailnet routes; an active tunnel replaces the learned tunnel, NotLinked removes it,
+ * replace all learned Lan/Tailnet routes (an [RouteHints.additive] hint only adds them); an active tunnel replaces the learned tunnel, NotLinked removes it,
  * Unknown keeps it. Learned routes are deduplicated by normalized base (also against the paired `baseUrl`),
  * sorted by kind and capped at [MAX_LEARNED_ROUTES], keeping the tunnel. Equal hints give an equal result.
  */
@@ -109,7 +113,7 @@ fun SavedEnvironment.withRouteHints(hints: RouteHints): SavedEnvironment {
             normalizedRouteBase(hint.httpBaseUrl)?.takeIf(::routeUsable)
                 ?.let { EnvironmentRoute(if (hint.kind == "tailnet") RouteKind.Tailnet else RouteKind.Lan, it, RouteSource.Learned) }
         }
-        learned = learned.filterNot { it.kind == RouteKind.Lan || it.kind == RouteKind.Tailnet } + direct
+        learned = if (hints.additive) learned + direct else learned.filterNot { it.kind == RouteKind.Lan || it.kind == RouteKind.Tailnet } + direct
     }
     when (val tunnel = hints.tunnel) {
         is TunnelHint.Active -> tunnelHostname(tunnel.hostname)?.let { host ->

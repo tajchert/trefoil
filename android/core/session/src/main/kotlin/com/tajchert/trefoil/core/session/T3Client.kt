@@ -62,6 +62,11 @@ class T3Client(
     private val usageClockMillis: () -> Long = System::currentTimeMillis,
     /** Descriptor preflight timeout per route kind during [connect]. */
     private val routeTimeoutMillis: (RouteKind) -> Long = ::routePreflightTimeoutMillis,
+    /**
+     * How long after the first route hint a first config snapshot's `directEndpoints` count as complete when no later
+     * snapshot changed them. T3 bounds its full discovery (Tailscale probe) to a few seconds.
+     */
+    private val directEndpointsSettleMillis: Long = 10_000,
     /** This device's DPoP proof key, loaded lazily; needed for DPoP environments (null: bearer only). */
     dpopKey: (() -> DpopKey)? = null,
     /** Renews DPoP sessions; share one per process so renewals of an environment are serialized and persisted. */
@@ -190,6 +195,12 @@ class T3Client(
     private var pendingRouteHints: (() -> Unit)? = null
     /** Whether the first (first config + link-state) hint went out; earlier snapshots only update [directEndpoints]. */
     private var initialHintSent = false
+    /**
+     * Whether [directEndpoints] came from the first config snapshot, which T3 builds before network discovery finishes
+     * (e.g. without the Tailscale endpoint), and no later snapshot or [directEndpointsSettleMillis] confirmed it yet.
+     * Hints from such a list only add routes.
+     */
+    private var endpointsProvisional = false
     /** Mutations between their first local check and their outcome; see [isIdleForRouteSwitch]. */
     private val mutationsInFlight = java.util.concurrent.atomic.AtomicInteger()
     fun millisSinceLastPong(): Long? = synchronized(lifecycleLock) {
@@ -646,6 +657,8 @@ class T3Client(
             configSubscription = subscribe("subscribeServerConfig", SERVER_CONFIG_SUBSCRIPTION_INPUT) { event -> serverConfigEvent(epoch, environmentId, event) }
         }
         val snapshot = try { withTimeoutOrNull(requestTimeoutMillis) { first.await() } ?: throw RequestTimedOut() } catch (_: ConfigStreamUnavailable) { null }
+        // getConfig resolves discovery fully; the stream's first snapshot may not have.
+        synchronized(lifecycleLock) { if (epoch == generation) endpointsProvisional = snapshot != null }
         return snapshot ?: rpc("server.getConfig", buildJsonObject {}, epoch).jsonObject
     }
 
@@ -659,7 +672,16 @@ class T3Client(
         linkStateJob = scope.launch {
             val tunnel = linkState(base, environment)
             synchronized(lifecycleLock) {
-                if (epoch == generation) { initialHintSent = true; hints.tryEmit(RouteHints(environment.id, directEndpoints, tunnel)) }
+                if (epoch == generation) { initialHintSent = true; hints.tryEmit(RouteHints(environment.id, directEndpoints, tunnel, additive = endpointsProvisional)) }
+            }
+            // No later snapshot changed the first snapshot's list: T3 found nothing more, so it may now remove routes.
+            if (synchronized(lifecycleLock) { !endpointsProvisional || directEndpoints == null }) return@launch
+            delay(directEndpointsSettleMillis)
+            synchronized(lifecycleLock) {
+                if (epoch == generation && endpointsProvisional) {
+                    endpointsProvisional = false
+                    directEndpoints?.let { hints.tryEmit(RouteHints(environment.id, it, TunnelHint.Unknown)) }
+                }
             }
         }
     }
@@ -686,8 +708,9 @@ class T3Client(
         }
         if (event.string("type") != "snapshot") return
         val endpoints = directEndpointHints(event.obj("config")) ?: return
+        // A later snapshot carries T3's fully resolved list (it sends one only when that list differs).
         if (endpoints == directEndpoints) return
-        directEndpoints = endpoints
+        directEndpoints = endpoints; endpointsProvisional = false
         if (initialHintSent) hints.tryEmit(RouteHints(environmentId, endpoints, TunnelHint.Unknown))
     }
 
@@ -852,7 +875,8 @@ class T3Client(
                 if (streams.remove(id) != null) {
                     // The config stream is optional: rejected before its snapshot, the connect asks `server.getConfig`; its
                     // later end leaves the session alone.
-                    if (id == configSubscription) { configSubscription = null; firstConfig?.takeUnless { it.isCompleted }?.completeExceptionally(ConfigStreamUnavailable()); configStreamLost() }
+                    // Before publication, the connect sees the null subscription and reports the loss itself.
+                    if (id == configSubscription) { configSubscription = null; firstConfig?.takeUnless { it.isCompleted }?.completeExceptionally(ConfigStreamUnavailable()); if (configPublished) configStreamLost() }
                     // Prompt suggestions are optional too: an end or rejection clears the value, without a retry.
                     else if (id == suggestionSubscription) { suggestionSubscription = null; suggestionGeneration++; if (state.value.promptSuggestion != null) update { it.copy(promptSuggestion = null) } }
                     else if (id == discoverySubscription) discoveryEnded(exit)
@@ -900,7 +924,7 @@ class T3Client(
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
     }
-    private fun resetRoute() { endDiscovery(); tunnelConfig = PreviewTunnelConfig(); activeBase = null; liveShellOrigin = null; pendingRouteHints = null; directEndpoints = null; initialHintSent = false; configSubscription = null
+    private fun resetRoute() { endDiscovery(); tunnelConfig = PreviewTunnelConfig(); activeBase = null; liveShellOrigin = null; pendingRouteHints = null; directEndpoints = null; initialHintSent = false; endpointsProvisional = false; configSubscription = null
         firstConfig?.completeExceptionally(IllegalStateException("Connection was cancelled")); firstConfig = null; configPublished = false; earlyConfigEvents.clear(); configProviders = emptyList(); linkStateJob?.cancel(); linkStateJob = null; renewJob?.cancel(); renewJob = null
         // The socket is gone with its streams; the next connection reads the setting again.
         promptSuggestionsEnabled = false; stopPromptSuggestion() }
