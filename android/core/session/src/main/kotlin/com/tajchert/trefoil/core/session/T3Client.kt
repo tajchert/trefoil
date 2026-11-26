@@ -216,6 +216,8 @@ class T3Client(
     private val environmentStates = linkedMapOf<String, ClientState>()
     // Recently viewed threads with their derived rows, so a revisit paints at once (memory only, bounded; see the class).
     private val threadProjections = ThreadProjectionCache()
+    /** Whether [projection] came from the selected thread's own stream since it was selected, not from [threadProjections]. */
+    private var projectionLive = false
     private fun cacheState() {
         val current = state.value
         current.environment?.id?.let { id ->
@@ -1091,7 +1093,7 @@ class T3Client(
         }
         syncPromptSuggestion()
     }
-    private fun showEmptySelection(threadId: String?) = update { it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), subagents = emptyList(), backgroundWork = emptyList(), queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null, selectedModelOptions = emptyMap(), selectedProviderLocked = false) }
+    private fun showEmptySelection(threadId: String?) = update { projectionLive = false; it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), subagents = emptyList(), backgroundWork = emptyList(), queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null, selectedModelOptions = emptyMap(), selectedProviderLocked = false) }
     /** Drops the selection of a thread the synchronized shell no longer lists, without touching the connection. Caller holds [lifecycleLock]. */
     private fun clearThreadSelection() {
         threadSubscription?.let { streams.remove(it); runCatching { send(EffectRpc.signal("Interrupt", it)) } }
@@ -1295,7 +1297,7 @@ class T3Client(
     }
     private fun project(value: JsonObject) = Project(value.string("id"), value.string("title"), value.string("workspaceRoot"))
     private fun applyProjection(incoming: JsonObject, threadId: String? = state.value.selectedThreadId, authoritative: Boolean = true) {
-        if (authoritative) projectionRevision++
+        if (authoritative) { projectionRevision++; projectionLive = true }
         val value = if (authoritative) retainHydratedActivities(incoming, projection) else incoming
         showProjection(value, threadPresentation(value), threadId)
     }
@@ -1305,7 +1307,7 @@ class T3Client(
      * stay disabled until then. Caller holds [lifecycleLock].
      */
     private fun applyCachedThread(cached: CachedThread, threadId: String) {
-        projectionRevision++
+        projectionRevision++; projectionLive = false
         showProjection(cached.projection, cached.presentation, threadId)
     }
     /** Publishes [value] (already derived into [derived]) as the selected thread and remembers both. Caller holds [lifecycleLock]. */
@@ -1322,8 +1324,9 @@ class T3Client(
         )
         val environmentId = current.environment?.id
         if (environmentId != null && threadId != null) threadProjections.put(environmentId to threadId, CachedThread(value, shown))
-        // Steer and Stop are live facts: a cached projection shown while offline offers neither.
-        val live = current.connection == ConnectionStatus.Connected
+        // Steer and Stop are live facts: a projection repainted from memory offers neither, connected or not, until the
+        // thread's own stream has answered (a later event only marks it stale, so a running turn keeps its Stop).
+        val live = current.connection == ConnectionStatus.Connected && projectionLive
         update { it.copy(selectedThreadId = threadId, canWrite = it.canWrite && threadReady, canRead = it.canRead && threadReady, messages = shown.messages,
             activities = shown.activities, requests = shown.requests, activeRunId = shown.activeRunId,
             runs = shown.runs, attempts = shown.attempts, subagents = shown.subagents,

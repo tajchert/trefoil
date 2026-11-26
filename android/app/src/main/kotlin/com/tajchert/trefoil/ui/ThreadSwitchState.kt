@@ -9,25 +9,33 @@ import com.tajchert.trefoil.core.model.ConversationRun
 import com.tajchert.trefoil.core.model.ToolActivity
 
 /**
- * The last few folded timelines, matched by the identity of their inputs. The session keeps a revisited thread's rows as
- * the same instances, so switching back reuses its fold instead of rebuilding it on the main thread. Memory only; the shell
- * provides one per environment ([LocalTimelineFoldMemo]), so nothing outlives an environment switch. Main thread only.
+ * The folded timeline of each recently shown thread, one entry per thread, reused while its inputs are the same instances.
+ * The session keeps a revisited thread's rows as the same instances, so switching back reuses its fold instead of
+ * rebuilding it on the main thread; a streaming delta only replaces its own thread's entry. The budget mirrors the
+ * session's thread cache (`ThreadProjectionCache`: [maxThreads] threads and [maxRows] rows, least recently shown evicted
+ * first), so a thread the session no longer keeps is not kept here either. Memory only; the shell provides one per
+ * environment ([LocalTimelineFoldMemo]), so nothing outlives an environment switch. Main thread only.
  */
-internal class TimelineFoldMemo(private val capacity: Int = 8) {
+internal class TimelineFoldMemo(private val maxThreads: Int = 12, private val maxRows: Int = 6_000) {
     private class Entry(val messages: List<ConversationMessage>, val activities: List<ToolActivity>, val activeRunId: String?,
-                        val runs: List<ConversationRun>, val folded: List<ConversationEntry>)
-    private val recent = ArrayDeque<Entry>()
+                        val runs: List<ConversationRun>, val folded: List<ConversationEntry>) {
+        val rows get() = messages.size + activities.size
+    }
+    private val threads = linkedMapOf<String, Entry>() // least recently shown first
 
-    fun fold(messages: List<ConversationMessage>, activities: List<ToolActivity>, activeRunId: String?, runs: List<ConversationRun>): List<ConversationEntry> {
-        val hit = recent.firstOrNull { it.messages === messages && it.activities === activities && it.runs === runs && it.activeRunId == activeRunId }
-        if (hit != null) {
-            recent.remove(hit); recent.addFirst(hit)
-            return hit.folded
+    val threadIds: Set<String> get() = threads.keys
+
+    fun fold(threadId: String?, messages: List<ConversationMessage>, activities: List<ToolActivity>, activeRunId: String?, runs: List<ConversationRun>): List<ConversationEntry> {
+        if (threadId == null) return foldConversationTimeline(conversationTimeline(messages, activities), activeRunId, runs)
+        val hit = threads.remove(threadId)?.takeIf { it.messages === messages && it.activities === activities && it.runs === runs && it.activeRunId == activeRunId }
+        val entry = hit ?: Entry(messages, activities, activeRunId, runs, foldConversationTimeline(conversationTimeline(messages, activities), activeRunId, runs))
+        threads[threadId] = entry
+        var rows = threads.values.sumOf { it.rows }
+        while (threads.size > 1 && (threads.size > maxThreads || rows > maxRows)) {
+            val eldest = threads.keys.first()
+            rows -= threads.remove(eldest)!!.rows
         }
-        val folded = foldConversationTimeline(conversationTimeline(messages, activities), activeRunId, runs)
-        recent.addFirst(Entry(messages, activities, activeRunId, runs, folded))
-        while (recent.size > capacity) recent.removeLast()
-        return folded
+        return entry.folded
     }
 }
 

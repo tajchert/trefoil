@@ -54,15 +54,24 @@ class ThreadSwitchTest {
         assertTrue(compose.onAllNodesWithText("Prompt 15").fetchSemanticsNodes().isEmpty())
     }
 
-    @Test fun foldMemoReusesTheFoldOfIdenticalRowsOnly() {
-        val memo = TimelineFoldMemo(capacity = 2)
-        val first = memo.fold(messages, emptyList(), null, emptyList())
-        assertSame(first, memo.fold(messages, emptyList(), null, emptyList()))
-        assertEquals(first, memo.fold(messages.toList(), emptyList(), null, emptyList())) // equal but not the session's instances: refolded
-        assertNotSame(first, memo.fold(messages.toList(), emptyList(), null, emptyList()))
+    @Test fun foldMemoKeepsOneFoldPerThreadReusedForIdenticalRowsOnly() {
+        val memo = TimelineFoldMemo(maxThreads = 2)
+        val first = memo.fold("t", messages, emptyList(), null, emptyList())
+        assertSame(first, memo.fold("t", messages, emptyList(), null, emptyList()))
+        // Streaming deltas on another thread replace only that thread's entry: switching back still reuses "t"'s fold.
         val other = messages.take(2)
-        memo.fold(other, emptyList(), null, emptyList()); memo.fold(other.toList(), emptyList(), null, emptyList())
-        assertNotSame(first, memo.fold(messages, emptyList(), null, emptyList())) // evicted beyond capacity
+        repeat(5) { memo.fold("o", other.toList(), emptyList(), null, emptyList()) }
+        assertEquals(setOf("t", "o"), memo.threadIds)
+        assertSame(first, memo.fold("t", messages, emptyList(), null, emptyList()))
+        // Equal rows that are not the session's instances are refolded, in place of the old entry.
+        val refolded = memo.fold("t", messages.toList(), emptyList(), null, emptyList())
+        assertEquals(first, refolded); assertNotSame(first, refolded)
+        // Over the thread budget the least recently shown thread ("o") goes; over the row budget all but the newest.
+        memo.fold("x", other, emptyList(), null, emptyList())
+        assertEquals(setOf("t", "x"), memo.threadIds)
+        val small = TimelineFoldMemo(maxRows = 10)
+        small.fold("t", messages, emptyList(), null, emptyList()); small.fold("x", other, emptyList(), null, emptyList())
+        assertEquals(setOf("x"), small.threadIds)
     }
 
     @Suppress("UNCHECKED_CAST")

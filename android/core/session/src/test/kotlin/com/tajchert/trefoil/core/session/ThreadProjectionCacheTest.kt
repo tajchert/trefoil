@@ -34,6 +34,16 @@ class ThreadProjectionCacheTest {
         assertEquals(listOf("env" to "huge"), cache.keys.toList())
     }
 
+    @Test fun eachEnvironmentHasItsOwnBudget() {
+        val cache = ThreadProjectionCache(maxThreads = 2, maxRows = 100)
+        cache.put("one" to "a", entry(60)); cache.put("one" to "b", entry(30))
+        cache.put("two" to "a", entry(90)); cache.put("two" to "b", entry(1)); cache.put("two" to "c", entry(1))
+        // "two" trimmed to its own two newest; "one" keeps both although the total is over one budget.
+        assertEquals(listOf("one" to "a", "one" to "b", "two" to "b", "two" to "c"), cache.keys.toList())
+        cache.put("one" to "c", entry(50)) // over its count: only "one"'s eldest goes
+        assertEquals(listOf("one" to "b", "two" to "b", "two" to "c", "one" to "c"), cache.keys.toList())
+    }
+
     @Test fun forgettingAnEnvironmentDropsOnlyItsThreads() {
         val cache = ThreadProjectionCache()
         cache.put("one" to "a", entry(1)); cache.put("two" to "a", entry(1)); cache.put("one" to "b", entry(1))

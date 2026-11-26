@@ -35,8 +35,8 @@ internal sealed interface ConversationEntry {
 internal fun conversationTimeline(messages: List<ConversationMessage>, activities: List<ToolActivity>): List<ConversationEntry> {
     data class Item(val message: ConversationMessage? = null, val activity: ToolActivity? = null) {
         val ordinal = message?.ordinal ?: activity?.ordinal
-        // Parsed once: the sorts and the legacy insertion below compare it many times.
-        val time = timelineInstant(message?.createdAt ?: activity?.startedAt)
+        // Parsed at most once, and only when a sort or the legacy insertion below compares it.
+        val time by lazy(LazyThreadSafetyMode.NONE) { timelineInstant(message?.createdAt ?: activity?.startedAt) }
     }
     // T3 `deriveTimelineEntriesFromVisibleTurnItems` never shows checkpoint items in the timeline.
     val all = messages.map { Item(message = it) } + activities.filter { it.kind != "checkpoint" }.map { Item(activity = it) }

@@ -34,25 +34,26 @@ internal data class ThreadPresentation(
 internal class CachedThread(val projection: JsonObject, val presentation: ThreadPresentation)
 
 /**
- * Recently viewed threads, keyed by (environment id, thread id). Memory only: nothing here is written to disk. Bounded by
- * [maxThreads] and by [maxRows] in total; the most recently stored thread is always kept (it is the one on screen, held in
- * memory anyway), older ones are evicted least recently used first. A projection is already capped by the oversized-frame
- * containment (`EffectRpc.MAX_FRAME_CHARS`), so the row budget bounds what the cache adds on top of the open thread.
- * Not thread-safe: the client guards it with its lifecycle lock.
+ * Recently viewed threads, keyed by (environment id, thread id). Memory only: nothing here is written to disk. Each
+ * environment has its own budget of [maxThreads] threads and [maxRows] rows; the client keeps at most five (the open one and
+ * four retained; `evictRetained` calls [forgetEnvironment] for the rest). Within an environment the most recently stored thread is always kept (it is
+ * the one on screen, held in memory anyway) and older ones are evicted least recently used first. A projection is
+ * already capped by the oversized-frame containment (`EffectRpc.MAX_FRAME_CHARS`), so the row budget bounds what the cache
+ * adds on top of the open thread. Not thread-safe: the client guards it with its lifecycle lock.
  */
 internal class ThreadProjectionCache(private val maxThreads: Int = 12, private val maxRows: Int = 6_000) {
     private val entries = linkedMapOf<Pair<String, String>, CachedThread>()
 
     operator fun get(key: Pair<String, String>): CachedThread? = entries[key]
 
-    /** Stores [entry] as the most recently used and trims the rest to the budget. */
+    /** Stores [entry] as the most recently used and trims its environment to the budget. */
     fun put(key: Pair<String, String>, entry: CachedThread) {
         entries.remove(key)
         entries[key] = entry
-        var rows = entries.values.sumOf { it.presentation.rows }
-        while (entries.size > 1 && (entries.size > maxThreads || rows > maxRows)) {
-            val eldest = entries.keys.first()
-            rows -= entries.remove(eldest)!!.presentation.rows
+        val environment = entries.keys.filter { it.first == key.first }.toMutableList() // eldest first; ends with [key]
+        var rows = environment.sumOf { entries.getValue(it).presentation.rows }
+        while (environment.size > 1 && (environment.size > maxThreads || rows > maxRows)) {
+            rows -= entries.remove(environment.removeAt(0))!!.presentation.rows
         }
     }
 

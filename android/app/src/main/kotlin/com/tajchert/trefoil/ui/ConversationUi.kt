@@ -253,8 +253,8 @@ internal fun Conversation(
     // Identical consecutive errors do not retrigger the effect above, so every failed send also emits here.
     LaunchedEffect(sendFailed) { sendFailed.collect { if (submissionId == null) submitted = null } }
     val foldMemo = LocalTimelineFoldMemo.current
-    val entries = remember(state.messages, state.activities, state.activeRunId, state.runs) {
-        foldMemo?.fold(state.messages, state.activities, state.activeRunId, state.runs)
+    val entries = remember(state.selectedThreadId, state.messages, state.activities, state.activeRunId, state.runs) {
+        foldMemo?.fold(state.selectedThreadId, state.messages, state.activities, state.activeRunId, state.runs)
             ?: foldConversationTimeline(conversationTimeline(state.messages, state.activities), state.activeRunId, state.runs)
     }
     val roster = remember(state.runs, state.subagents, draft) { if (draft == null) subagentRoster(state.runs, state.subagents) else null }

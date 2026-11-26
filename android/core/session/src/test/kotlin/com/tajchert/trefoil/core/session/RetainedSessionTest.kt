@@ -338,6 +338,21 @@ class RetainedSessionTest {
         }
     }
 
+    @Test fun aRunningThreadRepaintedFromMemoryOffersStopOnlyOnceItsSnapshotLands() = runBlocking {
+        Fixture().use { f ->
+            val running = """{"kind":"snapshot","projection":{"messages":[{"id":"m","role":"assistant","text":"Working"}],"turnItems":[],"runs":[{"id":"r1","status":"running"}],"runtimeRequests":[]}}, {"kind":"synchronized"}"""
+            f.shell(f.connect()); f.client.selectThread("working")
+            f.chunk(withTimeout(5000) { f.threads.receive() }, running)
+            assertTrue(f.client.state.value.canStop)
+            f.client.selectThread("open-0")
+            f.threadSnapshot(withTimeout(5000) { f.threads.receive() }, "Other reply")
+            f.client.selectThread("working")
+            assertFalse(f.client.state.value.canStop); assertFalse(f.client.state.value.canWrite)
+            f.chunk(withTimeout(5000) { f.threads.receive() }, running)
+            assertTrue(f.client.state.value.canStop)
+        }
+    }
+
     @Test fun forgettingAnEnvironmentDropsItsCachedThreads() = runBlocking {
         Fixture().use { f ->
             f.shell(f.connect()); f.client.selectThread("working")
