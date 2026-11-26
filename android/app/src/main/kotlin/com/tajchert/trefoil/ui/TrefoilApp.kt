@@ -708,7 +708,7 @@ fun TrefoilApp(
                                         SidePanelTab.Agents -> roster?.let { SidePanelAgents(it, state.providers, state.models, steadyWrite, openSideThread, onStopSubagent, Modifier.fillMaxSize()) }
                                         // The read-only inspector of a subagent or side chat; its header actions are offered to the tab bar while it shows.
                                         SidePanelTab.Thread -> inspectorThreadId?.let { id ->
-                                            PanelActionsEffect(panelHost, true, listOf(PanelAction(InspectorIcons.Maximize, "Maximize thread", live) { maximizeInspector(id) }))
+                                            PanelActionsEffect(panelHost, true, listOf(PanelAction(InspectorIcons.Maximize, "Maximize thread", true) { maximizeInspector(id) }))
                                             InspectorThreadPane(state, id, inspectorKind, onRetry = { onOpenInspector(id) }, onMaximize = { maximizeInspector(id) }, onClose = leaveInspector, modifier = Modifier.fillMaxSize())
                                         }
                                     }
