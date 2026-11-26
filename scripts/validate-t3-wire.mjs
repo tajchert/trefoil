@@ -266,7 +266,45 @@ try {
     await waitFor(event => event._tag === 'Exit' && event.requestId === 'shell-side');
     sideChatSummary = 'thread.fork sideChat listed, onlyIfUnused delete removes it, message.dispatch context decodes';
   }
-  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; two concurrent subscribeThread streams on one socket (inspector interrupt leaves the selected stream live); capabilities.sideChats=${sideChatsCapability} (${sideChatSummary}); config bytes ${JSON.stringify(configBytes)}.`);
+  // PRs and diffs. wire-thread has no provider run, so it has no checkpoints; wire-project is a plain directory, not a forge repository.
+  const failures = exit => exit.cause.filter(reason => reason._tag === 'Fail').map(reason => reason.error);
+  const typedFailure = (exit, label) => {
+    assert.equal(exit._tag, 'Failure', `${label} fails`);
+    assert.ok(Array.isArray(exit.cause) && exit.cause.length > 0 && exit.cause.every(reason => reason._tag === 'Fail'), `${label} is a typed Fail cause array`);
+    return failures(exit)[0];
+  };
+  const diffErrors = {};
+  for (const [tag, payload] of [
+    ['orchestration.getFullThreadDiff', { threadId: 'wire-thread', toTurnCount: 1 }],
+    ['orchestration.getTurnDiff', { threadId: 'wire-thread', fromTurnCount: 0, toTurnCount: 1 }],
+  ]) {
+    const error = typedFailure(await rpc(tag, payload), tag);
+    assert.equal(typeof error.message, 'string', `${tag} error carries a message`);
+    assert.ok(error.message.length > 0, `${tag} error message is not empty`);
+    diffErrors[tag] = error;
+  }
+  const capabilities = config.environment.capabilities ?? {};
+  const pullRequestCapabilities = Object.fromEntries(['pullRequests', 'pullRequestChecks', 'threadPullRequests']
+    .map(key => [key, key in capabilities ? capabilities[key] : 'absent']));
+  for (const value of Object.values(pullRequestCapabilities)) assert.ok(value === 'absent' || typeof value === 'boolean', 'PR capability keys are optional Booleans');
+  const unavailable = typedFailure(await rpc('pullRequests.detail', { projectId: 'wire-project', repository: 'example/wire-check', number: 1 }), 'pullRequests.detail');
+  assert.equal(unavailable._tag, 'PullRequestUnavailableError', 'pullRequests.detail on a non-forge project is unavailable');
+  assert.equal(typeof unavailable.reason, 'string', 'PullRequestUnavailableError carries a reason');
+  socket.send(JSON.stringify({ _tag: 'Request', id: 'pr-refreshes', tag: 'pullRequests.subscribeRefreshes', payload: {}, headers: [] }));
+  // The stream only emits on a PR refresh, so "open" means no immediate Exit; a first value is accepted but not required.
+  await delay(1000);
+  const refreshEvents = events.filter(event => event.requestId === 'pr-refreshes');
+  assert.ok(!refreshEvents.some(event => event._tag === 'Exit'), 'subscribeRefreshes stays open');
+  const firstRefresh = refreshEvents.find(event => event._tag === 'Chunk')?.values?.[0];
+  assert.ok(firstRefresh === undefined || Number.isInteger(firstRefresh) && firstRefresh >= 0, 'refresh ticks are non-negative integers');
+  socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: 'pr-refreshes' }));
+  const refreshesExit = await waitFor(event => event._tag === 'Exit' && event.requestId === 'pr-refreshes');
+  assert.equal(refreshesExit.exit._tag, 'Failure', 'interrupt terminates subscribeRefreshes');
+  const refreshesObserved = { firstValue: firstRefresh ?? 'none', interruptCause: refreshesExit.exit.cause.map(reason => reason._tag) };
+  const summarize = error => ({ _tag: error._tag, message: error.message, reason: error.reason });
+  console.log(`PRs and diffs (observed): ${JSON.stringify({ diffErrors: Object.fromEntries(Object.entries(diffErrors).map(([tag, error]) => [tag, summarize(error)])),
+    pullRequestCapabilities, pullRequestDetail: summarize(unavailable), subscribeRefreshes: refreshesObserved })}`);
+  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; two concurrent subscribeThread streams on one socket (inspector interrupt leaves the selected stream live); diff RPC typed failure on a no-checkpoint thread; pullRequests.detail PullRequestUnavailableError; PR capability keys; subscribeRefreshes open and interrupt; capabilities.sideChats=${sideChatsCapability} (${sideChatSummary}); config bytes ${JSON.stringify(configBytes)}.`);
 } finally {
   socket?.close();
   child.kill('SIGTERM');
