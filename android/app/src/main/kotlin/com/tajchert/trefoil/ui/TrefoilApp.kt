@@ -16,6 +16,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -62,6 +63,10 @@ import com.tajchert.trefoil.ui.shell.SidePanelTab
 import com.tajchert.trefoil.ui.shell.SidePanelHost
 import com.tajchert.trefoil.ui.shell.SidePanelToggle
 import com.tajchert.trefoil.ui.shell.headerBudget
+import com.tajchert.trefoil.ui.shell.issuesMenuLabel
+import com.tajchert.trefoil.ui.issues.ThreadIssueChip
+import com.tajchert.trefoil.ui.issues.ThreadIssueLinksSheet
+import com.tajchert.trefoil.ui.issues.isOpenableIssueUrl
 import com.tajchert.trefoil.ui.shell.navEntries
 import com.tajchert.trefoil.ui.shell.rememberMovableSurface
 import com.tajchert.trefoil.ui.shell.resolveSidePanelTab
@@ -197,6 +202,8 @@ fun TrefoilApp(
     changes: ChangesUi = ChangesUi(),
     pullRequests: PullRequestUi = PullRequestUi(),
     start: ShellStart = ShellStart(),
+    // Opens a linked issue from the thread header's issue sheet; null opens the link's URL in the browser (http and https only).
+    onOpenIssue: ((ThreadIssueLink) -> Unit)? = null,
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -328,7 +335,12 @@ fun TrefoilApp(
         val cancelDraft: () -> Unit = { if (draft != null) onCancelDraft() }
         val select: (String) -> Unit = { cancelDraft(); onSelectThread(it); showThread = true }
         var showAgents by rememberSaveable { mutableStateOf(false) }
+        // Keyed by thread: another thread starts with the issue sheet closed.
+        var showIssueLinks by rememberSaveable(state.selectedThreadId) { mutableStateOf(false) }
         val selectedThread = state.threads.firstOrNull { it.id == state.selectedThreadId }
+        val issueLinks = if (draft == null) selectedThread?.issues.orEmpty() else emptyList()
+        val uriHandler = LocalUriHandler.current
+        val openIssue: (ThreadIssueLink) -> Unit = onOpenIssue ?: { link -> if (isOpenableIssueUrl(link.url)) runCatching { uriHandler.openUri(link.url) } }
         val roster = remember(state.runs, state.subagents) { if (state.subagents.isEmpty()) null else subagentRoster(state.runs, state.subagents) }
         val pill = remember(roster) { roster?.let { subagentPill(it) } }
         // A subagent child or side chat goes back to its parent when that parent is loaded, otherwise to the list.
@@ -557,7 +569,7 @@ fun TrefoilApp(
                 // Header budget (spec 3.2): which chips stay beside the title, from the conversation pane's own width.
                 val threadPorts = remember(threadServers) { chipPorts(threadServers) }
                 val dockable = canDock && panelTabs.isNotEmpty()
-                val budget = headerBudget(maxWidth.value, panes.conversation, density.fontScale, pill != null, portsAvailable && threadPorts.isNotEmpty(), dockable, panelOpen = docked)
+                val budget = headerBudget(maxWidth.value, panes.conversation, density.fontScale, pill != null, portsAvailable && threadPorts.isNotEmpty(), dockable, panelOpen = docked, issues = issueLinks.isNotEmpty())
                 val openAgents: () -> Unit = if (canDock) ({ openPanelTab(SidePanelTab.Agents) }) else ({ showAgents = true })
                 val openServers: () -> Unit = if (canDock) ({ openPanelTab(SidePanelTab.Preview) }) else ({ navigate(ShellDestination.Servers) })
                 // Changes: docked beside the conversation where a panel fits, otherwise a full-screen route. A run opens its own turn when it has a checkpoint.
@@ -626,7 +638,7 @@ fun TrefoilApp(
                     shortcutHost.bindings = bindings
                     shortcutHost.visible = { id -> registeredShortcutVisible(id, listHidden, transient) }
                     shortcutHost.modalOpen = {
-                        creating || adding || sshConnecting || sshLogin != null || sshHostKey != null || pairing || shortcutsOpen || showAgents ||
+                        creating || adding || sshConnecting || sshLogin != null || sshHostKey != null || pairing || shortcutsOpen || showAgents || (showIssueLinks && issueLinks.isNotEmpty()) ||
                             (presentation.agentsSheet && roster != null) || (presentation.prSheet && hasPullRequests) || !drawerState.isClosed
                     }
                 }
@@ -676,16 +688,19 @@ fun TrefoilApp(
                                             if (pill != null && budget.agentsChip) AgentsChip(pill, openAgents)
                                             if (portsAvailable && budget.serversChip) ThreadPortsChip(threadServers, onClick = openServers)
                                             if (prChipInHeader) PullRequestChip(state.threadPullRequests, live, pullRequests, openPullRequest)
+                                            if (budget.issuesChip) ThreadIssueChip(issueLinks, onClick = { showIssueLinks = true })
                                             if (budget.toggle) SidePanelToggle(docked, toggleOpen, toggleFocus)
                                             // Chips that do not fit lead the thread menu and do exactly what the chip would do.
                                             val prInMenu = hasPullRequests && !prChipInHeader
-                                            val demoted: (@Composable ColumnScope.(() -> Unit) -> Unit)? = if (!budget.menuAgents && !budget.menuServers && !prInMenu) null else ({ close ->
+                                            val demoted: (@Composable ColumnScope.(() -> Unit) -> Unit)? = if (!budget.menuAgents && !budget.menuServers && !prInMenu && !budget.menuIssues) null else ({ close ->
                                                 if (prInMenu) DropdownMenuItem(text = { Text("Pull request #${state.threadPullRequests.first().key.number}") },
                                                     leadingIcon = { Icon(TfIcons.Branch, null, Modifier.size(18.dp)) }, onClick = { close(); openPullRequest() })
                                                 if (budget.menuAgents && pill != null) DropdownMenuItem(text = { Text("Agents (${pill.label})") },
                                                     leadingIcon = { Icon(TfIcons.Agents, null, Modifier.size(18.dp)) }, onClick = { close(); openAgents() })
                                                 if (budget.menuServers) DropdownMenuItem(text = { Text(serversMenuLabel(threadPorts)) },
                                                     leadingIcon = { Icon(TfIcons.Globe, null, Modifier.size(18.dp)) }, onClick = { close(); openServers() })
+                                                if (budget.menuIssues) DropdownMenuItem(text = { Text(issuesMenuLabel(issueLinks.size)) },
+                                                    leadingIcon = { Icon(TfIcons.Link, null, Modifier.size(18.dp)) }, onClick = { close(); showIssueLinks = true })
                                             })
                                             state.threads.firstOrNull { it.id == state.selectedThreadId }?.let { ThreadActionsMenu(state, it, leadingItems = demoted,
                                                 onOpenAgents = if (roster != null && !budget.menuAgents) openAgents else null,
@@ -801,6 +816,7 @@ fun TrefoilApp(
                 if (presentation.prSheet && panelTab == SidePanelTab.PullRequest && hasPullRequests && connected) PullRequestSheet(state, pullRequests, closePanel)
                 if ((showAgents || presentation.agentsSheet) && roster != null) ThreadAgentsSheet(roster, state.providers, state.models, steadyWrite,
                     { showAgents = false; if (presentation.agentsSheet) closePanel() }, { id -> showAgents = false; if (presentation.agentsSheet) closePanel(); select(id) }, onStopSubagent)
+                if (showIssueLinks && issueLinks.isNotEmpty()) ThreadIssueLinksSheet(issueLinks, onOpen = { showIssueLinks = false; openIssue(it) }, onDismiss = { showIssueLinks = false })
             }
         }
         }
