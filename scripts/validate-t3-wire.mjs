@@ -304,7 +304,140 @@ try {
   const summarize = error => ({ _tag: error._tag, message: error.message, reason: error.reason });
   console.log(`PRs and diffs (observed): ${JSON.stringify({ diffErrors: Object.fromEntries(Object.entries(diffErrors).map(([tag, error]) => [tag, summarize(error)])),
     pullRequestCapabilities, pullRequestDetail: summarize(unavailable), subscribeRefreshes: refreshesObserved })}`);
-  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; two concurrent subscribeThread streams on one socket (inspector interrupt leaves the selected stream live); diff RPC typed failure on a no-checkpoint thread; pullRequests.detail PullRequestUnavailableError; PR capability keys; subscribeRefreshes open and interrupt; capabilities.sideChats=${sideChatsCapability} (${sideChatSummary}); config bytes ${JSON.stringify(configBytes)}.`);
+  // Issue contract (protocol/ISSUES.md). Synthetic key only; nothing here talks to a real tracker or a real thread.
+  // TREFOIL_WIRE_RECORD=<t3 revision> also prints every recorded reply as JSON (RECORD ...), for refreshing ISSUES.md.
+  const record = {};
+  const caps = config.environment.capabilities ?? {};
+  assert.equal(caps.issues, true, 'capabilities.issues');
+  assert.equal(caps.issueLinkedThreads, true, 'capabilities.issueLinkedThreads');
+  record.capabilities = { issues: caps.issues, issueLinkedThreads: caps.issueLinkedThreads, issueTrackerAccounts: caps.issueTrackerAccounts };
+  record.serverVersion = config.environment.serverVersion;
+  const failureOf = exit => {
+    assert.equal(exit._tag, 'Failure', 'expected a typed failure');
+    assert.ok(Array.isArray(exit.cause) && exit.cause.length > 0, 'failure cause is a non-empty array');
+    return exit.cause;
+  };
+  const list = await rpc('issues.list', { state: 'open' });
+  assert.equal(list._tag, 'Success', 'issues.list state=open');
+  assert.ok(Array.isArray(list.value.entries) && list.value.entries.length === 0, 'no entries on a non-git workspace');
+  for (const field of ['viewers', 'trackers', 'errors', 'nextCursors']) assert.ok(Object.hasOwn(list.value, field), `issues.list result has ${field}`);
+  assert.ok(Array.isArray(list.value.trackers) && Array.isArray(list.value.errors), 'trackers and errors are arrays');
+  record.issuesList = list.value;
+  const listWithOptions = await rpc('issues.list', { state: 'open', involvement: 'all', limit: 50, sort: 'updated', query: 'x', labels: ['a'], assignee: 'someone', projectId: 'wire-project' });
+  assert.equal(listWithOptions._tag, 'Success', 'issues.list accepts the full option set Trefoil may send');
+  record.issuesListFilteredKeys = Object.keys(listWithOptions.value);
+  const noState = await rpc('issues.list', {});
+  record.issuesListMissingState = noState;
+  assert.equal(noState._tag, 'Failure', 'issues.list requires state');
+  const fakeRef = { projectId: 'wire-project', tracker: 'github', host: 'github.com', scope: 'wire/test', key: '999999' };
+  const detail = await rpc('issues.detail', fakeRef);
+  record.issuesDetailFake = detail;
+  failureOf(detail);
+  const detailMissingProject = await rpc('issues.detail', { ...fakeRef, projectId: 'no-such-project' });
+  record.issuesDetailMissingProject = detailMissingProject;
+  failureOf(detailMissingProject);
+  const detailUnknownTracker = await rpc('issues.detail', { ...fakeRef, tracker: 'nope' });
+  record.issuesDetailUnknownTracker = detailUnknownTracker;
+  failureOf(detailUnknownTracker);
+  const commentsFake = await rpc('issues.comments', { ...fakeRef, cursor: 'x' });
+  record.issuesCommentsFake = commentsFake;
+  failureOf(commentsFake);
+  const linkedBefore = await rpc('issues.linkedThreads', { tracker: 'github', host: 'github.com', scope: 'wire/test', key: '1' });
+  assert.equal(linkedBefore._tag, 'Success', 'issues.linkedThreads before link');
+  assert.deepEqual(linkedBefore.value.threads, [], 'no linked threads before link');
+
+  // Shell rows. A live subscription stays open across the link so a delta is observable; fresh ones read snapshots.
+  const shellStreams = [];
+  const subscribeShell = async id => {
+    socket.send(JSON.stringify({ _tag: 'Request', id, tag: 'orchestration.subscribeShell', payload: { requestCompletionMarker: true }, headers: [] }));
+    const first = await waitFor(event => event._tag === 'Chunk' && event.requestId === id && event.values.some(value => value.kind === 'snapshot'));
+    shellStreams.push(id);
+    return first.values.find(value => value.kind === 'snapshot').snapshot;
+  };
+  const freshShellThread = async id => {
+    const snapshot = await subscribeShell(id);
+    socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: id }));
+    return [...snapshot.threads, ...snapshot.archivedThreads].find(thread => thread.id === 'wire-thread');
+  };
+  const liveSnapshot = await subscribeShell('shell-live');
+  const liveThread = liveSnapshot.threads.find(thread => thread.id === 'wire-thread');
+  assert.ok(liveThread, 'launched thread is in the shell snapshot');
+  assert.ok(liveThread.issues === undefined || liveThread.issues.length === 0, 'no issues on the shell row before linking');
+  record.shellRowKeys = Object.keys(liveThread);
+  const liveItems = () => events.filter(event => event._tag === 'Chunk' && event.requestId === 'shell-live').flatMap(event => event.values);
+  const liveCountBefore = liveItems().length;
+  const commandIds = new Set();
+  const dispatch = command => {
+    assert.ok(!commandIds.has(command.commandId), 'every dispatch uses a fresh commandId');
+    commandIds.add(command.commandId);
+    return rpc('orchestration.dispatchCommand', command);
+  };
+  const link = { type: 'thread.issue.link', threadId: 'wire-thread', tracker: 'github', host: 'GitHub.com', scope: 'wire/test', key: '1',
+    projectId: 'wire-project', url: 'https://github.com/wire/test/issues/1', displayKey: '#1', title: 'Wire probe issue', source: 'manual' };
+  const linked = await dispatch({ ...link, commandId: 'wire-issue-link-1' });
+  assert.equal(linked._tag, 'Success', 'thread.issue.link');
+  assert.equal(typeof linked.value.sequence, 'number', 'link receipt carries a sequence');
+  record.linkReceipt = linked.value;
+  const expectLink = thread => {
+    assert.ok(thread, 'thread present');
+    assert.equal(thread.issues?.length, 1, 'exactly one issue link');
+    const [row] = thread.issues;
+    assert.equal(row.host, 'github.com', 'host is stored lowercased');
+    assert.deepEqual([row.tracker, row.scope, row.key, row.projectId, row.url, row.displayKey, row.title, row.source],
+      ['github', 'wire/test', '1', 'wire-project', link.url, '#1', link.title, 'manual']);
+    return row;
+  };
+  const freshAfterLink = await freshShellThread('shell-after-link');
+  record.shellIssueRow = expectLink(freshAfterLink);
+  for (let attempt = 0; attempt < 100 && !liveItems().slice(liveCountBefore).some(item => item.thread?.issues?.length === 1); attempt++) await delay(50);
+  const liveDelta = liveItems().slice(liveCountBefore).filter(item => item.thread?.id === 'wire-thread' || item.threadId === 'wire-thread');
+  record.liveShellItemKinds = liveItems().slice(liveCountBefore).map(item => item.kind);
+  assert.ok(liveDelta.some(item => item.thread?.issues?.length === 1), 'the live shell stream carries the link as a delta');
+  record.liveShellDelta = liveDelta.find(item => item.thread?.issues?.length === 1);
+  const projection = await rpc('orchestration.getThreadProjection', { threadId: 'wire-thread' });
+  assert.equal(projection._tag, 'Success', 'getThreadProjection');
+  const projectionIssues = projection.value.thread?.issues;
+  assert.equal(projectionIssues?.length, 1, 'thread projection shows the issue link');
+  assert.equal(projectionIssues[0].host, 'github.com', 'projection host lowercased');
+  const linkedAfter = await rpc('issues.linkedThreads', { tracker: 'github', host: 'GitHub.com', scope: 'Wire/Test', key: '1' });
+  assert.equal(linkedAfter._tag, 'Success', 'issues.linkedThreads after link');
+  record.linkedThreads = linkedAfter.value;
+  assert.deepEqual(linkedAfter.value.threads.map(thread => thread.id), ['wire-thread'], 'linkedThreads finds the thread (host and scope case-insensitive)');
+  const linkedOther = await rpc('issues.linkedThreads', { tracker: 'github', host: 'github.com', scope: 'wire/test', key: '2' });
+  assert.deepEqual(linkedOther.value.threads, [], 'another key has no threads');
+  const noHost = await rpc('issues.linkedThreads', { tracker: 'github', scope: 'wire/test', key: '1' });
+  record.linkedThreadsMissingHost = noHost._tag;
+  assert.equal(noHost._tag, 'Failure', 'linkedThreads requires host');
+  // A link with a new commandId for the same key is a receipt, not a second link.
+  const relinked = await dispatch({ ...link, commandId: 'wire-issue-link-2' });
+  assert.equal(relinked._tag, 'Success', 'second link of the same key');
+  record.relinkReceipt = relinked.value;
+  assert.equal(expectLink(await freshShellThread('shell-after-relink')).key, '1', 'no duplicate link after a repeat');
+  // Same commandId replayed: the server must answer with a receipt too.
+  const replayedLink = await rpc('orchestration.dispatchCommand', { ...link, commandId: 'wire-issue-link-1' });
+  record.linkReplaySameCommandId = replayedLink;
+  assert.equal(replayedLink._tag, 'Success', 'a replayed issue link commandId is answered with a receipt');
+  const unlink = { type: 'thread.issue.unlink', threadId: 'wire-thread', tracker: 'github', host: 'GITHUB.com', scope: 'wire/test', key: '1' };
+  const unlinked = await dispatch({ ...unlink, commandId: 'wire-issue-unlink-1' });
+  assert.equal(unlinked._tag, 'Success', 'thread.issue.unlink');
+  record.unlinkReceipt = unlinked.value;
+  const afterUnlink = await freshShellThread('shell-after-unlink');
+  assert.ok(afterUnlink.issues === undefined || afterUnlink.issues.length === 0, 'unlink removes the key from the shell row');
+  record.shellRowAfterUnlinkIssues = afterUnlink.issues ?? null;
+  const linkedGone = await rpc('issues.linkedThreads', { tracker: 'github', host: 'github.com', scope: 'wire/test', key: '1' });
+  assert.deepEqual(linkedGone.value.threads, [], 'linkedThreads is empty after unlink');
+  const unlinkedAgain = await dispatch({ ...unlink, commandId: 'wire-issue-unlink-2' });
+  assert.equal(unlinkedAgain._tag, 'Success', 'unlinking a missing key is a receipt');
+  record.unlinkMissingReceipt = unlinkedAgain.value;
+  const linkMissingThread = await dispatch({ ...link, commandId: 'wire-issue-link-3', threadId: 'no-such-thread' });
+  record.linkMissingThread = linkMissingThread;
+  assert.equal(linkMissingThread._tag, 'Failure', 'link on a missing thread is rejected');
+  const linkBlankTitle = await dispatch({ ...link, commandId: 'wire-issue-link-4', title: '  ' });
+  record.linkBlankTitle = linkBlankTitle;
+  assert.equal(linkBlankTitle._tag, 'Failure', 'link with a blank title is rejected');
+  for (const id of shellStreams) socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: id }));
+  if (process.env.TREFOIL_WIRE_RECORD) console.log(`RECORD ${JSON.stringify({ t3Head: process.env.TREFOIL_WIRE_RECORD, ...record }, null, 2)}`);
+  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; two concurrent subscribeThread streams on one socket (inspector interrupt leaves the selected stream live); diff RPC typed failure on a no-checkpoint thread; pullRequests.detail PullRequestUnavailableError; PR capability keys; subscribeRefreshes open and interrupt; capabilities.sideChats=${sideChatsCapability} (${sideChatSummary}); issue capabilities, issues.list/detail/linkedThreads, thread.issue.link/unlink idempotency and shell propagation; config bytes ${JSON.stringify(configBytes)}.`);
 } finally {
   socket?.close();
   child.kill('SIGTERM');
