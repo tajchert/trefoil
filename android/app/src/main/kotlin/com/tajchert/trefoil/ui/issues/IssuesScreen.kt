@@ -42,7 +42,6 @@ import com.tajchert.trefoil.ui.adaptive.focusRing
 import com.tajchert.trefoil.ui.adaptive.handPointer
 import com.tajchert.trefoil.ui.adaptive.maxContentWidth
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -69,7 +68,7 @@ internal fun issueAge(iso: String, nowMillis: Long): String {
         seconds < 86_400 -> "${seconds / 3_600}h"
         seconds < 7 * 86_400 -> "${seconds / 86_400}d"
         seconds < 365 * 86_400L -> "${seconds / (7 * 86_400)}w"
-        else -> LocalDate.ofInstant(Instant.ofEpochMilli(then), ZoneOffset.UTC).toString()
+        else -> Instant.ofEpochMilli(then).atOffset(ZoneOffset.UTC).toLocalDate().toString()
     }
 }
 

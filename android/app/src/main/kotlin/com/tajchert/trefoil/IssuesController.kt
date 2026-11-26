@@ -150,6 +150,7 @@ class IssuesController(
 
     /** Shows a fresh held answer as is, an older one while a refresh runs; otherwise starts from nothing. */
     private fun startQuery(query: IssueQuery, environmentId: String) {
+        debounceJob?.cancel()
         cancelLoad()
         val live = live()
         val cached = cache[CacheKey(environmentId, query)]
@@ -186,12 +187,12 @@ class IssuesController(
                 val (rows, capped) = mergePage(emptyList(), page.entries, query.sort, page.nextCursors.isNotEmpty())
                 cache[CacheKey(environmentId, query)] = Entry(rows, page.trackers, page.errors, page.nextCursors, page.scopes, capped, now())
                 remembered[environmentId] = Remembered(page.scopes, page.trackers)
-                mutable.value = IssueListUiState(environmentId, query, rows, page.trackers, page.errors, page.nextCursors, page.scopes, capped = capped, loaded = true)
+                mutable.value = IssueListUiState(environmentId, query, rows, page.trackers, page.errors, page.nextCursors, page.scopes, capped = capped, live = live(), loaded = true)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (gen != generation) return@launch
                 mutable.update {
-                    it.copy(loading = false, refreshing = false, loaded = it.entries.isNotEmpty() || it.loaded,
+                    it.copy(loading = false, refreshing = false, loaded = it.entries.isNotEmpty() || it.loaded, live = live(),
                         failure = (e as? IssueException)?.failure ?: IssueFailure.Failed, failureMessage = message(e))
                 }
             }

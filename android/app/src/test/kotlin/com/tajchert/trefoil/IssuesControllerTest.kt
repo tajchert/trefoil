@@ -220,6 +220,25 @@ class IssuesControllerTest {
         assertFalse(c.state.value.live)
     }
 
+    @Test fun aReplyAfterADisconnectKeepsTheListNotLive() = runTest {
+        val fake = Fake(); val gate = CompletableDeferred<Unit>()
+        fake.answer = { gate.await(); page(rows(1..2)) }
+        val c = controller(fake)
+        c.open(); runCurrent()
+        fake.state.value = fake.state.value.copy(connection = ConnectionStatus.Reconnecting)
+        c.syncLive(); gate.complete(Unit); advanceUntilIdle()
+        assertEquals(2, c.state.value.entries.size)
+        assertFalse(c.state.value.live)
+    }
+
+    @Test fun openingWhilePendingTextIsDebouncedCancelsTheStaleTextLoad() = runTest {
+        val fake = Fake(); val c = controller(fake)
+        c.open(); advanceUntilIdle(); fake.calls.clear()
+        c.setQuery(IssueQuery(text = "crash"))
+        c.open(); advanceUntilIdle()
+        assertEquals(1, fake.calls.size)
+    }
+
     @Test fun heldRowsStayVisibleAndReadsStopWhileNotLive() = runTest {
         val fake = Fake(); fake.answer = { page(rows(1..3), mapOf("p1" to "c1")) }
         val c = controller(fake)

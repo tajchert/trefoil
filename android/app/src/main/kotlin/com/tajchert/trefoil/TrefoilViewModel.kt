@@ -96,7 +96,9 @@ class TrefoilViewModel internal constructor(
             client.state.map { it.environment?.id }.distinctUntilChanged().collect { issuesController.reset(); issueDetailController.reset() }
         }
         viewModelScope.launch {
-            client.state.map { Triple(it.connection, it.issuesSupported, it.issueLinkedThreadsSupported) }.distinctUntilChanged().collect {
+            client.state.map { Triple(it.connection, it.issuesSupported, it.issueLinkedThreadsSupported) }.distinctUntilChanged().collect { (connection, issues, _) ->
+                // The same machine coming back without issue support: nothing held for it may be shown or reused.
+                if (connection == ConnectionStatus.Connected && !issues) { issuesController.reset(); issueDetailController.reset() }
                 issuesController.syncLive(); issueDetailController.syncLive()
             }
         }

@@ -127,8 +127,10 @@ class ShellDestinationTest {
             shellBack(ShellDestination.Issues, connected, portBrowserOpen = false, twoPane = twoPane, showThread = false, hasBackParent = false, issueDetailOpen = detail)
         assertEquals(ShellBack.ToIssueList, back(detail = true))
         assertEquals(ShellBack.ToThreads, back(detail = false))
-        // Two panes keep the detail beside the list: Back leaves the destination.
-        assertEquals(ShellBack.ToThreads, back(twoPane = true, detail = true))
+        // Two flat panes keep the detail beside the list; the shell passes detail = false then, so Back leaves the destination. A hinged
+        // window shows one pane at a time and passes true, so Back closes the detail first.
+        assertEquals(ShellBack.ToThreads, back(twoPane = true, detail = false))
+        assertEquals(ShellBack.ToIssueList, back(twoPane = true, detail = true))
         // The cached list can be left while offline.
         assertEquals(ShellBack.ToThreads, back(connected = false))
         // The flag changes nothing for the other destinations.

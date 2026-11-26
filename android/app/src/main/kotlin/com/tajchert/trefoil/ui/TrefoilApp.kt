@@ -294,7 +294,9 @@ fun TrefoilApp(
         LaunchedEffect(state.connection, state.issuesSupported) { if (state.connection == ConnectionStatus.Connected) issuesLastKnown = state.issuesSupported }
         val issuesAvailable = state.environment != null && (if (state.connection == ConnectionStatus.Connected) state.issuesSupported else issuesLastKnown)
         // The capability going away (or the machine) returns to Threads, as Dev servers do.
-        LaunchedEffect(issuesAvailable) { if (!issuesAvailable && savedDestination == ShellDestination.Issues) { savedDestination = ShellDestination.Threads; issueDetailOpen = false } }
+        LaunchedEffect(issuesAvailable) {
+            if (!issuesAvailable) { issueDetailOpen = false; panelIssueOpen = false; if (savedDestination == ShellDestination.Issues) savedDestination = ShellDestination.Threads }
+        }
         LaunchedEffect(environmentId) { issueDetailOpen = false; panelIssueOpen = false }
         val drawerState = rememberDrawerState(if (start.navigationOpen) DrawerValue.Open else DrawerValue.Closed)
         // A t3code: link opens the pair dialog pre-filled and never submits. Plain remember: the link is not persisted.
@@ -583,9 +585,11 @@ fun TrefoilApp(
                 }
                 // An opened issue: pushed on a phone, always shown beside the list in two panes (where the controller's issue is the selection).
                 val issuesTwoPane = showIssues && twoPane && !split
-                val issueOpen = (issueDetailOpen || issuesTwoPane) && issues.detail.ref != null && issues.detail.environmentId == environmentId
+                // The docked Issue tab's issue survives the window narrowing: the tab then maps onto the Issues destination and shows its detail.
+                val issueFromPanel = panelTab == SidePanelTab.Issue && presentation.destination == ShellDestination.Issues
+                val issueOpen = (issueDetailOpen || issuesTwoPane || issueFromPanel) && issues.detail.ref != null && issues.detail.environmentId == environmentId
                 val back = shellBack(destination, connected, browserHosted, twoPane, showThread, backParent != null, panelDocked = docked, besideRail = besideRail, inspectorOpen = inspectorShown,
-                    issueDetailOpen = showIssues && issueOpen)
+                    issueDetailOpen = showIssues && issueOpen && !issuesTwoPane)
                 BackHandler(back != null) {
                     when (back) {
                         ShellBack.ToThreads -> navigate(ShellDestination.Threads)

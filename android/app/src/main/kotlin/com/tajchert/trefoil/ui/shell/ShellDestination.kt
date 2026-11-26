@@ -41,9 +41,10 @@ internal fun shellBack(
 ): ShellBack? = when {
     destination == ShellDestination.Usage -> ShellBack.ToThreads
     destination == ShellDestination.Machines -> if (connected) ShellBack.ToThreads else null
-    // Issues: on a phone an open detail returns to the list first, then the list returns to Threads. Two panes keep the detail beside the
-    // list, so Back leaves the destination. Disconnected, the cached list can still be left.
-    destination == ShellDestination.Issues -> if (issueDetailOpen && !twoPane) ShellBack.ToIssueList else ShellBack.ToThreads
+    // Issues: a pushed detail (single pane: a phone, or a hinged window) returns to the list first, then the list returns to Threads. The
+    // caller passes issueDetailOpen = false while two flat panes keep the detail beside the list, so Back leaves the destination.
+    // Disconnected, the cached list can still be left.
+    destination == ShellDestination.Issues -> if (issueDetailOpen) ShellBack.ToIssueList else ShellBack.ToThreads
     !connected -> null
     portBrowserOpen -> null
     // Beside the rail Screens and Dev servers have no leave arrow and claim Back only for their own steps (an open session, an open
