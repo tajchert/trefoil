@@ -152,7 +152,7 @@ internal fun threadSummary(value: JsonObject, archived: Boolean = false) = Threa
     pendingRequestUserOnly = value.obj("pendingRuntimeRequest").literalTrue("userOnly"),
     workflowStep = value.obj("lineage").literalTrue("workflowStep"),
     monitorHoldsWakeCompletion = value.literalTrue("latestRunBackgroundWake") &&
-        value.objects("pendingBackgroundTasks").any { pendingMonitorHoldsWake(it) },
+        value.objects("pendingBackgroundTasks").any { pendingMonitorHoldsWake(it) },    issues = threadIssueLinks(value["issues"]),
 )
 
 /** Only a JSON `true` literal; a quoted "true" or any other type reads as absent. */

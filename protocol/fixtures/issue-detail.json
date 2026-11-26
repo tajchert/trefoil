@@ -1,0 +1,32 @@
+{
+  "tracker": "github", "host": "github.com", "scope": "fixture/app", "key": "12", "displayKey": "#12",
+  "title": "Fixture issue twelve", "url": "https://github.com/fixture/app/issues/12",
+  "author": {"login": "fixture-author"},
+  "state": {"category": "open", "name": "Open"},
+  "createdAt": "2026-11-01T10:00:00.000Z", "updatedAt": "2026-11-20T10:00:00.000Z", "closedAt": null,
+  "assignees": [], "labels": [{"name": "bug"}], "commentCount": 3,
+  "projectId": "project-a", "projectTitle": "Fixture App", "writable": true,
+  "capabilities": {"create": true, "edit": true, "comment": true, "labels": true, "assignees": true, "reactions": false,
+    "templates": false, "linkedPullRequests": true, "events": true, "search": true, "futureCapability": true},
+  "viewerPermissions": {"setState": true, "comment": true, "edit": false, "labels": false, "assignees": false},
+  "states": [{"category": "open", "name": "Open"}, {"category": "closed", "name": "Closed"}, {"name": "No category"}],
+  "viewer": {"login": "fixture-viewer"},
+  "body": "Synthetic fixture body.",
+  "reactions": [],
+  "comments": [
+    {"id": "c2", "author": {"login": "fixture-author"}, "body": "Second synthetic comment.", "createdAt": "2026-11-02T10:00:00.000Z", "url": "https://github.com/fixture/app/issues/12#c2"},
+    {"id": "c3", "author": null, "body": "Third synthetic comment.", "createdAt": "2026-11-03T10:00:00.000Z", "url": null},
+    {"author": {"login": "no-id"}, "body": "Malformed comment without an id."}
+  ],
+  "commentsCursor": "comments-cursor-1",
+  "events": [
+    {"id": "e1", "kind": "labeled", "actor": {"login": "fixture-author"}, "createdAt": "2026-11-01T11:00:00.000Z", "detail": "bug"},
+    {"id": "e2", "kind": "state-changed", "actor": null, "createdAt": "2026-11-04T11:00:00.000Z", "detail": null,
+      "reference": {"repository": "fixture/app", "number": 20, "kind": "pull-request", "url": "https://github.com/fixture/app/pull/20"}},
+    {"id": "e3", "kind": "future-kind", "actor": null, "createdAt": "2026-11-05T11:00:00.000Z", "detail": null}
+  ],
+  "linkedPullRequests": [
+    {"repository": "fixture/app", "number": 20, "title": "Fixture fix", "url": "https://github.com/fixture/app/pull/20", "state": "open", "isDraft": true, "closesIssue": true},
+    {"repository": "fixture/app", "title": "No number", "url": "https://github.com/fixture/app/pull/21"}
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "viewers": {"github.com": "fixture-viewer"},
+  "trackers": [
+    {"tracker": "github", "host": "github.com", "projectCount": 1, "capabilities": null, "configured": true, "detail": null},
+    {"tracker": "future-tracker", "host": "tracker.example", "projectCount": 1, "capabilities": null, "configured": false, "detail": "Not signed in"},
+    {"host": "missing-tracker.example"}
+  ],
+  "entries": [
+    {
+      "tracker": "github", "host": "github.com", "scope": "fixture/app", "key": "12", "displayKey": "#12",
+      "title": "Fixture issue twelve", "url": "https://github.com/fixture/app/issues/12",
+      "author": {"login": "fixture-author", "name": "Fixture Author", "avatarUrl": "https://example.invalid/a.png"},
+      "state": {"category": "open", "name": "Open"},
+      "createdAt": "2026-11-01T10:00:00.000Z", "updatedAt": "2026-11-20T10:00:00.000Z", "closedAt": null,
+      "assignees": [{"login": "fixture-assignee"}, {"name": "no login"}],
+      "labels": [{"name": "bug", "color": "d73a4a"}, {"color": "ffffff"}],
+      "commentCount": 3, "projectId": "project-a", "projectTitle": "Fixture App", "futureField": {"ignored": true}
+    },
+    {
+      "tracker": "future-tracker", "host": "tracker.example", "scope": "TEAM", "key": "TEAM-7", "displayKey": "TEAM-7",
+      "title": "Fixture issue on an unknown tracker", "url": "https://tracker.example/TEAM-7",
+      "author": null, "state": {"category": "closed", "name": "Done", "closeReason": "completed"},
+      "createdAt": "2026-10-01T10:00:00.000Z", "updatedAt": "2026-11-21T10:00:00.000Z", "closedAt": "2026-11-21T10:00:00.000Z",
+      "assignees": [], "labels": [], "commentCount": 0, "projectId": "project-b", "projectTitle": "Fixture Tracker"
+    },
+    {
+      "tracker": "github", "host": "github.com", "scope": "fixture/app", "key": "13", "displayKey": "#13",
+      "title": "", "url": "https://github.com/fixture/app/issues/13",
+      "state": {"category": "open", "name": "Open"}, "projectId": "project-a", "projectTitle": "Fixture App"
+    },
+    {
+      "tracker": "github", "host": "github.com", "scope": "fixture/app", "key": "14", "displayKey": "#14",
+      "title": "Fixture issue with an unknown state", "url": "https://github.com/fixture/app/issues/14",
+      "state": {"category": "triage", "name": "Triage"}, "projectId": "project-a", "projectTitle": "Fixture App"
+    },
+    "not an object"
+  ],
+  "errors": [{"projectId": "project-c", "projectTitle": "Fixture Broken", "message": "Tracker query failed"}],
+  "nextCursors": {"github.com fixture/app": "cursor-2", "blank": ""},
+  "scopes": [
+    {"projectId": "project-a", "tracker": "github", "host": "github.com", "scope": "fixture/app"},
+    {"projectId": "project-b", "tracker": "future-tracker", "scope": "TEAM"}
+  ]
+}

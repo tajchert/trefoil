@@ -86,6 +86,8 @@ class T3Client(
     private val pullRequestMutationTimeoutMillis: Long = 60_000,
     /** Client timeout of one `POST /api/pull-requests/diff` page (T3 `pullRequestDiffHttp`). */
     private val pullRequestDiffTimeoutMillis: Long = 60_000,
+    /** Budget of `issues.list` / `issues.detail`, which wait on tracker APIs. */
+    private val issueReadTimeoutMillis: Long = 45_000,
 ) : TrefoilClient {
     private val authorizer = tokens.authorizer
     private var renewJob: Job? = null
@@ -367,7 +369,11 @@ class T3Client(
     /** [body]: the parsed error object of a 503 (PR endpoints answer their typed errors with it). */
     private class HttpFailure(val status: Int, val dpopRetry: Boolean = false, val body: JsonObject? = null) : IllegalStateException(if (status == 401 || status == 403) "Authorization expired or denied; pair again" else "Server HTTP error $status")
     /** The server answered with a failure Exit: a definite answer, not a lost reply. */
-    private class ServerRejected(val error: JsonObject? = null) : IllegalStateException("Server rejected request; refresh before trying again")
+    /**
+     * A definite rejection: [error] is the first typed `Fail` error as sent (PR failures map it), [reason] the same error reduced to
+     * content-free fields (null for a `Die`).
+     */
+    private class ServerRejected(val error: JsonObject? = null, val reason: RpcFailReason? = null) : IllegalStateException("Server rejected request; refresh before trying again")
     /** A local check stopped the command before anything was transmitted: nothing changed, so the session stays usable. */
     private class CommandNotSent : IllegalStateException("The thread changed or went stale; the command was not sent")
     /** A success Exit whose value is not a dispatch receipt (`{sequence: non-negative integer}`): the outcome is uncertain. */
@@ -617,6 +623,8 @@ class T3Client(
             val sideChats = (config.obj("environment").obj("capabilities")["sideChats"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true
             val pullRequestsCapable = (config.obj("environment").obj("capabilities")["pullRequests"] as? JsonPrimitive)?.booleanOrNull == true
             val pullRequestChecksCapable = (config.obj("environment").obj("capabilities")["pullRequestChecks"] as? JsonPrimitive)?.booleanOrNull == true
+            val issues = (config.obj("environment").obj("capabilities")["issues"] as? JsonPrimitive)?.booleanOrNull == true
+            val issueLinkedThreads = issues && (config.obj("environment").obj("capabilities")["issueLinkedThreads"] as? JsonPrimitive)?.booleanOrNull == true
             // The capability only says the server honors `enablePreviewTunnel` (absent where the tunnel cannot be switched off);
             // whether the tunnel is off comes from the config's effective value.
             val tunnel = PreviewTunnelConfig().withConfig(config)
@@ -637,7 +645,7 @@ class T3Client(
                 configProviders = config.objects("providers")
                 // An early shell synchronized before its origin was known has a checkpoint without its cursor.
                 if (shellSynced) checkpointShell(marker = false)
-                update { it.copy(connection = ConnectionStatus.Connected, threadActionsConfigured = true, activeRoute = route, canReadUsage = mayReadUsage, models = models, providers = providers, defaultRuntimeMode = defaultMode, defaultModelSelection = defaultModel, projectDefaults = projectDefaults, modelPreferences = preferences, threadStopSupported = threadStop, sideChatsSupported = sideChats, pullRequestsSupported = pullRequestsCapable, pullRequestChecksSupported = pullRequestChecksCapable, canWriteSourceControl = mayWriteSourceControl, previewTunnelSetting = tunnel.capability, previewTunnelDisabled = tunnel.disabled,
+                update { it.copy(connection = ConnectionStatus.Connected, threadActionsConfigured = true, activeRoute = route, canReadUsage = mayReadUsage, models = models, providers = providers, defaultRuntimeMode = defaultMode, defaultModelSelection = defaultModel, projectDefaults = projectDefaults, modelPreferences = preferences, threadStopSupported = threadStop, sideChatsSupported = sideChats, issuesSupported = issues, issueLinkedThreadsSupported = issueLinkedThreads, pullRequestsSupported = pullRequestsCapable, pullRequestChecksSupported = pullRequestChecksCapable, canWriteSourceControl = mayWriteSourceControl, previewTunnelSetting = tunnel.capability, previewTunnelDisabled = tunnel.disabled,
                     selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
                 // Route hints (a second config snapshot and the link-state read) would compete with the snapshot on a slow
                 // link; they wait for the shell's synchronized marker.
@@ -921,7 +929,7 @@ class T3Client(
                 pullRequestStreams.remove(id)?.onEnd?.invoke(exit)
                 val result = pending.remove(id)
                 if (exit.string("_tag") == "Success") result?.complete(exit["value"] ?: JsonNull)
-                else result?.completeExceptionally(if (exitInterruptedOnly(exit)) RequestInterrupted() else ServerRejected(exitFailError(exit)))
+                else result?.completeExceptionally(if (exitInterruptedOnly(exit)) RequestInterrupted() else ServerRejected(exitFailError(exit), firstFailReason(exit)))
                 if (streams.remove(id) != null) {
                     // The config stream is optional: rejected before its snapshot, the connect asks `server.getConfig`; its
                     // later end leaves the session alone.
@@ -973,7 +981,7 @@ class T3Client(
         resetScreens()
         stopPortForwards()
         undoPlan = null; pendingModelSelections = null; serverPreferences = ModelPreferences(); pendingFavorites.clear()
-        update { it.copy(connection =ConnectionStatus.Error, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
+        update { it.copy(connection =ConnectionStatus.Error, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false, issuesSupported = false, issueLinkedThreadsSupported = false) }
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
         pullRequestSessionLost()
@@ -998,7 +1006,7 @@ class T3Client(
         resetScreens()
         stopPortForwards()
         undoPlan = null; pendingModelSelections = null; serverPreferences = ModelPreferences(); pendingFavorites.clear()
-        update { it.copy(connection =ConnectionStatus.Disconnected, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
+        update { it.copy(connection =ConnectionStatus.Disconnected, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false, issuesSupported = false, issueLinkedThreadsSupported = false) }
     }
 
     private fun usageEnvironment(): SavedEnvironment {
@@ -1069,6 +1077,71 @@ class T3Client(
             result
         }
         return work.await()
+    }
+
+    /** Epoch of a live connection whose server serves issues (and linked threads when [linkedThreads]). */
+    private fun issueEpoch(linkedThreads: Boolean = false): Long = synchronized(lifecycleLock) {
+        val current = state.value
+        if (socket == null || current.connection != ConnectionStatus.Connected) throw IssueException(IssueFailure.NotConnected, "Connect to view issues.")
+        if (!current.issuesSupported || (linkedThreads && !current.issueLinkedThreadsSupported)) throw IssueException(IssueFailure.NotSupported, "This T3 server does not offer issues.")
+        generation
+    }
+
+    /**
+     * One read-only `issues.*` RPC. Failures become [IssueException] and never change the connection state; a reply that
+     * arrives after the connection changed is dropped. Nothing about the request or reply is logged.
+     */
+    private suspend fun <T> issueRead(tag: String, payload: JsonObject, timeoutMillis: Long = requestTimeoutMillis, linkedThreads: Boolean = false, parse: (JsonObject) -> T?): T {
+        val epoch = issueEpoch(linkedThreads)
+        val reply = try { rpc(tag, payload, epoch, timeoutMillis = timeoutMillis) }
+        catch (error: CancellationException) { throw error }
+        catch (error: ServerRejected) { throw issueRejection(error.reason) }
+        catch (_: RequestTimedOut) { throw IssueException(IssueFailure.TimedOut, "The issue request timed out. Try again.") }
+        catch (_: Exception) {
+            if (epoch != generation) throw IssueException(IssueFailure.NotConnected, "Connection changed; reload issues.")
+            throw IssueException(IssueFailure.Failed, "This T3 server could not load issues.")
+        }
+        if (epoch != generation) throw IssueException(IssueFailure.NotConnected, "Connection changed; reload issues.")
+        return (reply as? JsonObject)?.let(parse) ?: throw IssueException(IssueFailure.Failed, "This T3 server sent an unreadable issue reply.")
+    }
+
+    override suspend fun issuesList(query: IssueQuery, cursors: Map<String, String>?, limit: Int, refresh: Boolean): IssueListPage =
+        issueRead("issues.list", issueListInput(query, cursors, limit, refresh), issueReadTimeoutMillis, parse = ::parseIssueListPage)
+    override suspend fun issueDetail(ref: IssueRef): IssueDetail =
+        issueRead("issues.detail", issueRefPayload(ref), issueReadTimeoutMillis, parse = ::parseIssueDetail)
+    override suspend fun issueComments(ref: IssueRef, cursor: String): IssueCommentsPage {
+        if (cursor.isBlank()) throw IssueException(IssueFailure.Failed, "No older comments to load.")
+        return issueRead("issues.comments", issueRefPayload(ref, cursor), parse = ::parseIssueCommentsPage)
+    }
+    override suspend fun issueLinkedThreads(key: IssueKey): List<IssueLinkedThread> =
+        issueRead("issues.linkedThreads", issueKeyPayload(key), linkedThreads = true, parse = ::parseIssueLinkedThreads)
+
+    /**
+     * `thread.issue.link`, like [performThreadAction]: a fresh commandId, sent once. A key the row already shows is refused
+     * locally. A definite rejection keeps the session; an uncertain outcome fails it and the shell row reconciles later.
+     */
+    override suspend fun linkIssue(target: ThreadTarget, link: ThreadIssueLink) = issueLinkCommand(target, "issue link") { row ->
+        check(row.issues.none { it.key.identity == link.key.identity }) { "Already linked" }
+        threadCommand("thread.issue.link", target.threadId, issueLinkFields(link))
+    }
+    /** `thread.issue.unlink`; a key the row does not show is refused locally. Same rules as [linkIssue]. */
+    override suspend fun unlinkIssue(target: ThreadTarget, key: IssueKey) = issueLinkCommand(target, "issue unlink") { row ->
+        check(row.issues.any { it.key.identity == key.identity }) { "Not linked" }
+        threadCommand("thread.issue.unlink", target.threadId, issueUnlinkFields(key))
+    }
+    private suspend fun issueLinkCommand(target: ThreadTarget, subject: String, build: (ThreadSummary) -> JsonObject): Unit = mutating {
+        val requestedEpoch = synchronized(lifecycleLock) { requireThreadWrite(); generation }
+        threadActionMutex.withLock {
+            val (epoch, payload) = synchronized(lifecycleLock) {
+                check(generation == requestedEpoch) { "Connection changed; action cancelled" }
+                requireThreadWrite()
+                if (!state.value.issuesSupported) throw IssueException(IssueFailure.NotSupported, "This T3 server does not offer issues.")
+                check(state.value.environment?.id == target.environmentId) { "Machine changed; reopen the action" }
+                val row = state.value.threads.firstOrNull { it.id == target.threadId && it.deletedAt == null && !it.archived && it.archivedAt == null } ?: error("Thread is unavailable")
+                generation to build(row)
+            }
+            mutation(epoch, subject) { requireReceipt(rpc("orchestration.dispatchCommand", payload, epoch)) }
+        }
     }
     override suspend fun selectThread(threadId: String) = selectThreadNow(threadId)
     override suspend fun selectThreadIn(environmentId: String, threadId: String): Boolean = synchronized(lifecycleLock) {
