@@ -11,6 +11,9 @@ enum class CheckpointStatus { Ready, Missing, Error, Stale, Unknown }
 /** One file of a checkpoint summary (T3 `CheckpointFileSummary`). [kind] is the raw wire string. */
 data class CheckpointFile(val path: String, val kind: String, val additions: Int, val deletions: Int)
 
+/** T3 `CheckpointFileTotals`: sent only when the wire carries a prefix of `files`; the totals cover the full list. */
+data class CheckpointFileTotals(val count: Int, val additions: Int, val deletions: Int)
+
 /**
  * A completed turn's checkpoint. [turnCount] is T3 `appRunOrdinal` (1-based); checkpoints without it are not shown.
  * [files] holds at most 200 entries; [filesTotal] is set when the wire truncated the list.
@@ -20,12 +23,12 @@ data class ThreadCheckpoint(
     val turnCount: Int,
     val status: CheckpointStatus,
     val files: List<CheckpointFile>,
-    val filesTotal: Int? = null,
+    val filesTotal: CheckpointFileTotals? = null,
     val capturedAt: String? = null,
 ) {
-    val additions: Int get() = files.sumOf { it.additions }
-    val deletions: Int get() = files.sumOf { it.deletions }
-    val fileCount: Int get() = filesTotal ?: files.size
+    val additions: Int get() = filesTotal?.additions ?: files.sumOf { it.additions }
+    val deletions: Int get() = filesTotal?.deletions ?: files.sumOf { it.deletions }
+    val fileCount: Int get() = filesTotal?.count ?: files.size
 }
 
 enum class DiffChange { Added, Deleted, Modified, Renamed, Binary }
@@ -44,6 +47,8 @@ data class DiffFile(
     val collapsedByDefault: Boolean = false,
     val firstRowIndex: Int,
     val endRowIndex: Int,
+    /** Number of [DiffRow.Line] rows of this file (for "Show N lines" when collapsed). */
+    val lineCount: Int = 0,
     /** Optional repository label for multi-repository threads; null for single-repository diffs. */
     val repository: String? = null,
 )
