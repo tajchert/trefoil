@@ -78,6 +78,8 @@ class T3Client(
     http: OkHttpClient? = null,
     /** How long [startSideChat] waits for the shell to list the forked side chat before giving up; tests lower it. */
     private val sideChatShellWaitMillis: Long = 10_000,
+    /** Parses turn diffs off the main thread; see [loadTurnDiff]. */
+    private val diffParser: DiffParser = PendingDiffParser,
 ) : TrefoilClient {
     private val authorizer = tokens.authorizer
     private var renewJob: Job? = null
@@ -233,13 +235,15 @@ class T3Client(
             threadProjections.put(environmentId to threadId, entry, keep = state.value.selectedThreadId?.let { environmentId to it })
         }
     })
+    /** Parsed turn diffs per environment (memory only, bounded); see [loadTurnDiff]. */
+    private val turnDiffs = TurnDiffCache()
     /** Whether [projection] came from the selected thread's own stream since it was selected, not from [threadProjections]. */
     private var projectionLive = false
     private fun cacheState() {
         val current = state.value
         current.environment?.id?.let { id ->
             environmentStates.remove(id)
-            environmentStates[id] = current.copy(canWrite = false, canWriteThreads = false, canWriteSettings = false, canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, screens = ScreenCatalog(), localServers = LocalServerCatalog(), portForwards = emptyList(), promptSuggestion = null, inspector = null, sideChatsSupported = false)
+            environmentStates[id] = current.copy(canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, screens = ScreenCatalog(), localServers = LocalServerCatalog(), portForwards = emptyList(), promptSuggestion = null, inspector = null, sideChatsSupported = false)
             evictRetained()
         }
     }
@@ -251,6 +255,7 @@ class T3Client(
             if (evicted != state.value.environment?.id) shellCheckpoints.remove(evicted)
             shellResume.forget(evicted)
             threadProjections.forgetEnvironment(evicted)
+            turnDiffs.forgetEnvironment(evicted)
         }
     }
     private fun update(block: (ClientState) -> ClientState) = mutable.update(block)
@@ -526,11 +531,12 @@ class T3Client(
         val epoch = generation
         synchronized(lifecycleLock) {
             if (state.value.environment?.id != environment.id) usageCache.clear()
+            turnDiffs.retainOnly(environment.id)
             val retained = environmentStates[environment.id] ?: ClientState()
             projection = JsonObject(emptyMap())
             // The inspector's stream ended with the old connection; a reconnect to the same environment keeps its stale rows.
             val staleInspector = state.value.inspector?.takeIf { state.value.environment?.id == environment.id }?.copy(ready = false)
-            update { retained.copy(inspector = staleInspector, sideChatsSupported = false, environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, settlementUndo = null, threadActionsConfigured = false, activeRoute = null,
+            update { retained.copy(inspector = staleInspector, sideChatsSupported = false, environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, settlementUndo = null, threadActionsConfigured = false, activeRoute = null,
                 localServers = LocalServerCatalog(), previewTunnelSetting = null, previewTunnelDisabled = false, portForwards = emptyList(), promptSuggestion = null) }
         }
         // Set once the session check succeeded: any later failure is [ConnectFailure.AfterSession].
@@ -543,6 +549,7 @@ class T3Client(
             val mayOperate = permissions?.any { it.jsonPrimitive.content == "orchestration:operate" } == true
             val mayReadUsage = permissions?.any { (it as? JsonPrimitive)?.contentOrNull == "diagnostics:read" } == true
             val mayWriteSettings = permissions?.any { (it as? JsonPrimitive)?.contentOrNull == "settings:write" } == true
+            val mayWriteSourceControl = permissions?.any { (it as? JsonPrimitive)?.contentOrNull == "source-control:write" } == true
             val ticket = try { ticketRequest("/api/auth/websocket-ticket/rpc") } catch (error: HttpFailure) {
                 if (error.status != 404) throw error
                 ticketRequest("/api/auth/websocket-ticket")
@@ -597,6 +604,8 @@ class T3Client(
             val browserCapable = config.obj("environment").obj("capabilities")["serverBrowser"]?.jsonPrimitive?.booleanOrNull == true
             val threadStop = (config.obj("environment").obj("capabilities")["threadStop"] as? JsonPrimitive)?.booleanOrNull == true
             val sideChats = (config.obj("environment").obj("capabilities")["sideChats"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true
+            val pullRequestsCapable = (config.obj("environment").obj("capabilities")["pullRequests"] as? JsonPrimitive)?.booleanOrNull == true
+            val pullRequestChecksCapable = (config.obj("environment").obj("capabilities")["pullRequestChecks"] as? JsonPrimitive)?.booleanOrNull == true
             // The capability only says the server honors `enablePreviewTunnel` (absent where the tunnel cannot be switched off);
             // whether the tunnel is off comes from the config's effective value.
             val tunnel = PreviewTunnelConfig().withConfig(config)
@@ -617,7 +626,7 @@ class T3Client(
                 configProviders = config.objects("providers")
                 // An early shell synchronized before its origin was known has a checkpoint without its cursor.
                 if (shellSynced) checkpointShell(marker = false)
-                update { it.copy(connection = ConnectionStatus.Connected, threadActionsConfigured = true, activeRoute = route, canReadUsage = mayReadUsage, models = models, providers = providers, defaultRuntimeMode = defaultMode, defaultModelSelection = defaultModel, projectDefaults = projectDefaults, modelPreferences = preferences, threadStopSupported = threadStop, sideChatsSupported = sideChats, previewTunnelSetting = tunnel.capability, previewTunnelDisabled = tunnel.disabled,
+                update { it.copy(connection = ConnectionStatus.Connected, threadActionsConfigured = true, activeRoute = route, canReadUsage = mayReadUsage, models = models, providers = providers, defaultRuntimeMode = defaultMode, defaultModelSelection = defaultModel, projectDefaults = projectDefaults, modelPreferences = preferences, threadStopSupported = threadStop, sideChatsSupported = sideChats, pullRequestsSupported = pullRequestsCapable, pullRequestChecksSupported = pullRequestChecksCapable, canWriteSourceControl = mayWriteSourceControl, previewTunnelSetting = tunnel.capability, previewTunnelDisabled = tunnel.disabled,
                     selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
                 // Route hints (a second config snapshot and the link-state read) would compete with the snapshot on a slow
                 // link; they wait for the shell's synchronized marker.
@@ -946,7 +955,7 @@ class T3Client(
         resetScreens()
         stopPortForwards()
         undoPlan = null; pendingModelSelections = null; serverPreferences = ModelPreferences(); pendingFavorites.clear()
-        update { it.copy(connection =ConnectionStatus.Error, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
+        update { it.copy(connection =ConnectionStatus.Error, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
     }
@@ -970,7 +979,7 @@ class T3Client(
         resetScreens()
         stopPortForwards()
         undoPlan = null; pendingModelSelections = null; serverPreferences = ModelPreferences(); pendingFavorites.clear()
-        update { it.copy(connection =ConnectionStatus.Disconnected, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
+        update { it.copy(connection =ConnectionStatus.Disconnected, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
     }
 
     private fun usageEnvironment(): SavedEnvironment {
@@ -1134,7 +1143,7 @@ class T3Client(
         }
         syncPromptSuggestion()
     }
-    private fun showEmptySelection(threadId: String?) = update { projectionLive = false; it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), subagents = emptyList(), backgroundWork = emptyList(), queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null, selectedModelOptions = emptyMap(), selectedProviderLocked = false) }
+    private fun showEmptySelection(threadId: String?) = update { projectionLive = false; it.copy(selectedThreadId = threadId, messages = emptyList(), requests = emptyList(), activities = emptyList(), runs = emptyList(), attempts = emptyList(), subagents = emptyList(), backgroundWork = emptyList(), queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, activeRunId = null, canWrite = false, selectedRuntimeMode = null, selectedModel = null, selectedModelOptions = emptyMap(), selectedProviderLocked = false, checkpoints = emptyList(), threadPullRequests = emptyList()) }
     /** Drops the selection of a thread the synchronized shell no longer lists, without touching the connection. Caller holds [lifecycleLock]. */
     private fun clearThreadSelection() {
         threadSubscription?.let { streams.remove(it); runCatching { send(EffectRpc.signal("Interrupt", it)) } }
@@ -1366,6 +1375,12 @@ class T3Client(
         )
         val environmentId = current.environment?.id
         if (environmentId != null && threadId != null) threadProjections.put(environmentId to threadId, CachedThread(value, shown))
+        // Small lists read straight from the projection (a cached repaint parses them again); unchanged ones keep their instances.
+        val sameThread = current.selectedThreadId == threadId
+        val thread = value.obj("thread")
+        val projectId = thread.string("projectId").ifBlank { current.threads.firstOrNull { it.id == threadId }?.projectId.orEmpty() }
+        val checkpoints = threadCheckpoints(value).let { if (sameThread) stableValue(current.checkpoints, it) else it }
+        val pullRequests = threadPullRequestLinks(thread, projectId).let { if (sameThread) stableValue(current.threadPullRequests, it) else it }
         // Steer and Stop are live facts: a projection repainted from memory offers neither, connected or not, until the
         // thread's own stream has answered (a later event only marks it stale, so a running turn keeps its Stop).
         val live = current.connection == ConnectionStatus.Connected && projectionLive
@@ -1378,7 +1393,8 @@ class T3Client(
             selectedRuntimeMode = shown.runtimeMode,
             selectedModel = selectedModel(shown.modelSelection, it.models),
             selectedModelOptions = shown.modelOptions,
-            selectedProviderLocked = shown.providerLocked) }
+            selectedProviderLocked = shown.providerLocked,
+            checkpoints = checkpoints, threadPullRequests = pullRequests) }
         reconcilePendingModelSelections(threadId)
     }
     /** T3 `thread.modelSelection {instanceId, model}`; prefers the server catalog entry for its label. */
@@ -1415,6 +1431,44 @@ class T3Client(
     }
     private data class ActivityRead(
         val generation: Long, val selection: Long, val revision: Long, val threadId: String, val item: JsonObject,
+    )
+    /**
+     * Reads one turn's diff of the selected thread and parses it on [Dispatchers.Default]. A reply for a thread, connection
+     * or environment that is no longer current is dropped ([TurnDiffException.THREAD_CHANGED]). Failures are scoped to
+     * this request ([TurnDiffException]); the session and its writes are untouched. Ready turns are cached in memory.
+     */
+    override suspend fun loadTurnDiff(turnCount: Int): DiffDocument {
+        val captured = synchronized(lifecycleLock) {
+            check(state.value.connection == ConnectionStatus.Connected && socket != null) { "Connect to load this diff" }
+            val threadId = state.value.selectedThreadId ?: error("Select a thread")
+            val environmentId = state.value.environment?.id ?: error("Select a thread")
+            val checkpoint = state.value.checkpoints.firstOrNull { it.turnCount == turnCount } ?: error("This turn has no diff")
+            DiffRead(generation, threadGeneration, environmentId, threadId, turnCount, checkpoint.status == CheckpointStatus.Ready)
+        }
+        turnDiffs.get(captured.environmentId, captured.threadId, turnCount)?.let { return it }
+        val request = turnDiffRequest(captured.threadId, turnCount)
+        val reply = try {
+            rpc(request.tag, request.payload, captured.generation, guard = { captured.current() }) as? JsonObject
+        } catch (error: CancellationException) { throw error }
+        catch (_: FrameTooLarge) { throw TurnDiffException(TurnDiffException.TOO_LARGE) }
+        catch (_: Exception) { throw TurnDiffException(if (synchronized(lifecycleLock) { captured.current() }) TurnDiffException.UNAVAILABLE else TurnDiffException.THREAD_CHANGED) }
+        reply ?: throw TurnDiffException(TurnDiffException.UNAVAILABLE)
+        if (!synchronized(lifecycleLock) { captured.current() }) throw TurnDiffException(TurnDiffException.THREAD_CHANGED)
+        val document = try { withContext(Dispatchers.Default) { diffParser.parse(turnDiffParts(reply)) } }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { throw TurnDiffException(TurnDiffException.UNAVAILABLE) }
+        synchronized(lifecycleLock) {
+            if (!captured.current()) throw TurnDiffException(TurnDiffException.THREAD_CHANGED)
+            if (captured.cacheable) turnDiffs.put(captured.environmentId, captured.threadId, turnCount, document)
+        }
+        return document
+    }
+    /** Caller holds [lifecycleLock]. */
+    private fun DiffRead.current() = generation == this@T3Client.generation && selection == threadGeneration &&
+        state.value.environment?.id == environmentId && state.value.selectedThreadId == threadId &&
+        state.value.connection == ConnectionStatus.Connected
+    private data class DiffRead(
+        val generation: Long, val selection: Long, val environmentId: String, val threadId: String, val turnCount: Int, val cacheable: Boolean,
     )
     private fun resetScreens(interrupt: Boolean = false) {
         listOfNotNull(previewScreenSubscription, deviceScreenSubscription).forEach { id ->
@@ -2276,6 +2330,7 @@ class T3Client(
         shellCheckpoints.remove(environmentId)
         environmentId?.let(shellResume::forget)
         threadProjections.forgetEnvironment(environmentId)
+        turnDiffs.forgetEnvironment(environmentId)
         environmentId?.let(tokens::forget)
     }
     /**
@@ -2308,7 +2363,7 @@ class T3Client(
         if (environmentStates[id]?.shellLoaded == true) return false
         val base = (if (shown) current else environmentStates[id]) ?: ClientState()
         val restored = base.copy(projects = shell.projects, threads = shell.threads, shellLoaded = true, shellLive = false,
-            canWrite = false, canWriteThreads = false, canWriteSettings = false, canRead = false, canReadUsage = false, busy = false, promptSuggestion = null)
+            canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, canRead = false, canReadUsage = false, busy = false, promptSuggestion = null)
         if (shown) mutable.value = restored
         environmentStates.remove(id)
         environmentStates[id] = restored
