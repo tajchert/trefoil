@@ -299,6 +299,10 @@ data class ClientState(
     val previewTunnelDisabled: Boolean = false,
     /** Port forwards of the live connection, ordered by start. Cleared on disconnect and environment switch. */
     val portForwards: List<PortForward> = emptyList(),
+    /** Read-only child of the selected thread streamed beside it; null when no inspector is open. See SideThreads.kt. */
+    val inspector: InspectorThread? = null,
+    /** Server `environment.capabilities.sideChats`; false when not reported. Gates starting side chats, not opening them. */
+    val sideChatsSupported: Boolean = false,
 )
 
 private val ACTIVE_RUN_STATUSES = setOf("preparing", "starting", "running", "waiting")
@@ -437,6 +441,12 @@ interface TrefoilClient {
      */
     suspend fun refreshUsageLimits(automatic: Boolean = false): Boolean =
         throw UsageException(UsageFailure.Unsupported, "Usage limits are unavailable")
+    /** Streams [threadId], a side thread of the selected thread, into [ClientState.inspector] without touching the selection. */
+    suspend fun openInspector(threadId: String) { error("The thread inspector is unavailable") }
+    /** Stops the inspector stream and clears [ClientState.inspector]. */
+    fun closeInspector() {}
+    /** Forks the selected thread into a side chat, sends [question] there, and returns the new thread id. */
+    suspend fun startSideChat(question: String): String { error("Side chats are unavailable") }
     suspend fun reconnect()
     fun close()
 }
