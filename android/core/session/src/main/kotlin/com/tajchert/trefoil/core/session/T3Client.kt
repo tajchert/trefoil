@@ -216,13 +216,28 @@ class T3Client(
     private val environmentStates = linkedMapOf<String, ClientState>()
     // Recently viewed threads with their derived rows, so a revisit paints at once (memory only, bounded; see the class).
     private val threadProjections = ThreadProjectionCache()
+    /** The read-only side-thread stream beside the selected thread; see [InspectorStream]. Guarded by [lifecycleLock]. */
+    private val inspector = InspectorStream(scope, lifecycleLock, object : InspectorStream.Host {
+        override val epoch: Long get() = generation
+        override fun subscribe(threadId: String, handler: (JsonObject) -> Unit): String =
+            subscribe("orchestration.subscribeThread", buildJsonObject { put("threadId", threadId); put("requestCompletionMarker", true) }, handler)
+        override fun interrupt(requestId: String) { streams.remove(requestId); runCatching { send(EffectRpc.signal("Interrupt", requestId)) } }
+        override suspend fun projection(threadId: String, epoch: Long): JsonObject =
+            rpc("orchestration.getThreadProjection", buildJsonObject { put("threadId", threadId) }, epoch).jsonObject
+        override fun publish(transform: (InspectorThread?) -> InspectorThread?) = update { it.copy(inspector = transform(it.inspector)) }
+        override fun cached(threadId: String): CachedThread? = state.value.environment?.id?.let { threadProjections[it to threadId] }
+        override fun remember(threadId: String, entry: CachedThread) {
+            val environmentId = state.value.environment?.id ?: return
+            threadProjections.put(environmentId to threadId, entry, keep = state.value.selectedThreadId?.let { environmentId to it })
+        }
+    })
     /** Whether [projection] came from the selected thread's own stream since it was selected, not from [threadProjections]. */
     private var projectionLive = false
     private fun cacheState() {
         val current = state.value
         current.environment?.id?.let { id ->
             environmentStates.remove(id)
-            environmentStates[id] = current.copy(canWrite = false, canWriteThreads = false, canWriteSettings = false, canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, screens = ScreenCatalog(), localServers = LocalServerCatalog(), portForwards = emptyList(), promptSuggestion = null)
+            environmentStates[id] = current.copy(canWrite = false, canWriteThreads = false, canWriteSettings = false, canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, screens = ScreenCatalog(), localServers = LocalServerCatalog(), portForwards = emptyList(), promptSuggestion = null, inspector = null, sideChatsSupported = false)
             evictRetained()
         }
     }
@@ -511,7 +526,9 @@ class T3Client(
             if (state.value.environment?.id != environment.id) usageCache.clear()
             val retained = environmentStates[environment.id] ?: ClientState()
             projection = JsonObject(emptyMap())
-            update { retained.copy(environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, settlementUndo = null, threadActionsConfigured = false, activeRoute = null,
+            // The inspector's stream ended with the old connection; a reconnect to the same environment keeps its stale rows.
+            val staleInspector = state.value.inspector?.takeIf { state.value.environment?.id == environment.id }?.copy(ready = false)
+            update { retained.copy(inspector = staleInspector, sideChatsSupported = false, environment = environment, connection = ConnectionStatus.Connecting, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = null, settlementUndo = null, threadActionsConfigured = false, activeRoute = null,
                 localServers = LocalServerCatalog(), previewTunnelSetting = null, previewTunnelDisabled = false, portForwards = emptyList(), promptSuggestion = null) }
         }
         // Set once the session check succeeded: any later failure is [ConnectFailure.AfterSession].
@@ -577,6 +594,7 @@ class T3Client(
             val mayPreview = permissions?.any { it.jsonPrimitive.content == "preview:operate" } == true
             val browserCapable = config.obj("environment").obj("capabilities")["serverBrowser"]?.jsonPrimitive?.booleanOrNull == true
             val threadStop = (config.obj("environment").obj("capabilities")["threadStop"] as? JsonPrimitive)?.booleanOrNull == true
+            val sideChats = (config.obj("environment").obj("capabilities")["sideChats"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true
             // The capability only says the server honors `enablePreviewTunnel` (absent where the tunnel cannot be switched off);
             // whether the tunnel is off comes from the config's effective value.
             val tunnel = PreviewTunnelConfig().withConfig(config)
@@ -597,7 +615,7 @@ class T3Client(
                 configProviders = config.objects("providers")
                 // An early shell synchronized before its origin was known has a checkpoint without its cursor.
                 if (shellSynced) checkpointShell(marker = false)
-                update { it.copy(connection = ConnectionStatus.Connected, threadActionsConfigured = true, activeRoute = route, canReadUsage = mayReadUsage, models = models, providers = providers, defaultRuntimeMode = defaultMode, defaultModelSelection = defaultModel, projectDefaults = projectDefaults, modelPreferences = preferences, threadStopSupported = threadStop, previewTunnelSetting = tunnel.capability, previewTunnelDisabled = tunnel.disabled,
+                update { it.copy(connection = ConnectionStatus.Connected, threadActionsConfigured = true, activeRoute = route, canReadUsage = mayReadUsage, models = models, providers = providers, defaultRuntimeMode = defaultMode, defaultModelSelection = defaultModel, projectDefaults = projectDefaults, modelPreferences = preferences, threadStopSupported = threadStop, sideChatsSupported = sideChats, previewTunnelSetting = tunnel.capability, previewTunnelDisabled = tunnel.disabled,
                     selectedModel = it.selectedModel?.let { selected -> models.firstOrNull { m -> m.instanceId == selected.instanceId && m.model == selected.model } ?: selected }) }
                 // Route hints (a second config snapshot and the link-state read) would compete with the snapshot on a slow
                 // link; they wait for the shell's synchronized marker.
@@ -887,7 +905,8 @@ class T3Client(
                         if (id == previewScreenSubscription) { previewScreenSubscription = null; browserScreensFresh = false }
                         if (id == deviceScreenSubscription) { deviceScreenSubscription = null; deviceScreensFresh = false }
                         update { it.copy(screens = it.screens.copy(error = "Remote screen updates ended. Refresh screens to try again.")) }
-                    } else fail(generation, "Subscription ended; reconnect to refresh")
+                    } else if (id == inspector.subscription) inspector.ended(id, state.value.threads)
+                    else fail(generation, "Subscription ended; reconnect to refresh")
                 }
             }
             "Defect", "ClientProtocolError" -> fail(generation, "Server protocol failure; reconnect to refresh")
@@ -903,6 +922,7 @@ class T3Client(
         val id = error.requestId
         when {
             id != null && id == threadSubscription -> threadTooLarge()
+            id != null && id == inspector.subscription -> inspector.tooLarge()
             id != null && pending.containsKey(id) && !streams.containsKey(id) -> pending[id]?.completeExceptionally(error)
             else -> fail(epoch, "The server sent more data than this app can load; reconnect to retry")
         }
@@ -916,6 +936,7 @@ class T3Client(
         if (epoch != generation) return@synchronized
         fileDownloads.forEach { it.cancel() }; fileDownloads.clear()
         generation++
+        inspector.suspend()
         refreshSignals?.close(); refreshJob?.cancel(); visits.reset(null); visitTimer?.cancel(); visitTimer = null
         shellReady = false; shellSynced = false; deferredThread = null; threadReady = false; authorized = false; previewAuthorized = false; settingsAuthorized = false
         endShellStream(message)
@@ -923,7 +944,7 @@ class T3Client(
         resetScreens()
         stopPortForwards()
         undoPlan = null; pendingModelSelections = null; serverPreferences = ModelPreferences(); pendingFavorites.clear()
-        update { it.copy(connection =ConnectionStatus.Error, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null, activeRoute = null) }
+        update { it.copy(connection =ConnectionStatus.Error, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
     }
@@ -938,6 +959,7 @@ class T3Client(
         fileDownloads.forEach { it.cancel() }; fileDownloads.clear()
         generation++; threadGeneration++; refreshSignals?.close(); refreshJob?.cancel(); heartbeat?.cancel(); heartbeat = null
         visits.reset(null); visitTimer?.cancel(); visitTimer = null
+        inspector.suspend()
         socket?.close(1000, null); socket = null
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Disconnected; pending command outcome may be uncertain")) }
         pending.clear(); streams.clear(); threadSubscription = null; shellReady = false; shellSynced = false; deferredThread = null; threadReady = false; authorized = false; previewAuthorized = false; settingsAuthorized = false
@@ -946,7 +968,7 @@ class T3Client(
         resetScreens()
         stopPortForwards()
         undoPlan = null; pendingModelSelections = null; serverPreferences = ModelPreferences(); pendingFavorites.clear()
-        update { it.copy(connection =ConnectionStatus.Disconnected, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null, activeRoute = null) }
+        update { it.copy(connection =ConnectionStatus.Disconnected, canWrite = false, canWriteThreads = false, canWriteSettings = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = reason ?: it.error, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
     }
 
     private fun usageEnvironment(): SavedEnvironment {
@@ -1029,13 +1051,30 @@ class T3Client(
         true
     }
     /**
+     * Streams [threadId] read-only beside the selected thread (see [InspectorStream]). Needs a live, synchronized shell
+     * listing [threadId] as a side thread of the selected one (its side chat, or the child thread of one of its
+     * subagents). Opening the one already streaming is a no-op; any other open replaces it.
+     */
+    override suspend fun openInspector(threadId: String) {
+        synchronized(lifecycleLock) {
+            val current = state.value
+            check(socket != null && current.connection == ConnectionStatus.Connected && current.shellLive) { "Connect to open this thread" }
+            val parent = current.selectedThreadId ?: error("Open a thread first")
+            val child = current.threads.firstOrNull { it.id == threadId && it.id != parent } ?: error("This thread is not available")
+            val kind = child.sideThreadKind() ?: error("This thread does not open beside its parent")
+            check(child.parentThreadId == parent || current.subagents.any { it.childThreadId == threadId }) { "This thread does not belong to the open thread" }
+            if (!inspector.isLive(threadId)) inspector.open(threadId, kind)
+        }
+    }
+    override fun closeInspector() = synchronized(lifecycleLock) { inspector.close() }
+    /**
      * Shows [threadId] and subscribes it once the current connection's shell is synchronized: a row shown from the cache
      * (or retained) may name a thread deleted meanwhile, whose subscription the server would reject, failing the session.
      * Before the marker the selection is remembered with any cached projection, and [shellItem] subscribes it at the
      * marker only while the shell still lists it; otherwise the selection is cleared.
      */
     private fun selectThreadNow(threadId: String): Unit = synchronized(lifecycleLock) {
-        if (state.value.selectedThreadId != threadId) { fileDownloads.forEach { it.cancel() }; fileDownloads.clear(); resetScreens(interrupt = true) }
+        if (state.value.selectedThreadId != threadId) { fileDownloads.forEach { it.cancel() }; fileDownloads.clear(); resetScreens(interrupt = true); inspector.close() }
         if (state.value.connection != ConnectionStatus.Connected) {
             val cached = state.value.environment?.id?.let { threadProjections[it to threadId] }
             threadReady = false
@@ -1099,6 +1138,7 @@ class T3Client(
         threadSubscription?.let { streams.remove(it); runCatching { send(EffectRpc.signal("Interrupt", it)) } }
         threadSubscription = null; deferredThread = null; threadReady = false; threadGeneration++
         stopPromptSuggestion()
+        inspector.close()
         refreshSignals?.close(); refreshJob?.cancel(); visits.reset(null); visitTimer?.cancel(); visitTimer = null
         projection = JsonObject(emptyMap())
         resetScreens(interrupt = true)
@@ -1293,7 +1333,7 @@ class T3Client(
         }
         // After the rows changed: an item that failed to apply never moves the cursor.
         shellResume.applied(item, ShellRows(state.value.projects, state.value.threads))
-        if (shellSynced) checkpointShell(marker = item.string("kind") == "synchronized")
+        if (shellSynced) { checkpointShell(marker = item.string("kind") == "synchronized"); inspector.shellChanged(state.value.threads) }
     }
     private fun project(value: JsonObject) = Project(value.string("id"), value.string("title"), value.string("workspaceRoot"))
     private fun applyProjection(incoming: JsonObject, threadId: String? = state.value.selectedThreadId, authoritative: Boolean = true) {
@@ -1338,35 +1378,6 @@ class T3Client(
             selectedModelOptions = shown.modelOptions,
             selectedProviderLocked = shown.providerLocked) }
         reconcilePendingModelSelections(threadId)
-    }
-    /** Derives the [ClientState] slice of one projection. Pure; parses each row once. */
-    private fun threadPresentation(value: JsonObject): ThreadPresentation {
-        val items = presentationItems(value)
-        val promotion = steerPromotion(value)
-        val requests = value.objects("runtimeRequests").filter { it.string("status") == "pending" }.map { request ->
-            val item = items.firstOrNull { it.string("requestId") == request.string("id") } ?: JsonObject(emptyMap())
-            val questions = item.objects("questions").map { q -> Question(q.string("id"), q.string("question"), q.objects("options").map { it.string("label") }, q["multiSelect"]?.jsonPrimitive?.booleanOrNull == true, q["required"]?.jsonPrimitive?.booleanOrNull != false) }
-            val kind = request.string("kind")
-            val offered = item.objects("options").map { it.string("decision") }
-            val basicApproval = item.string("type") == "approval_request" && (offered.isEmpty() || ("accept" in offered && "decline" in offered))
-            val supported = request.obj("responseCapability").string("type") == "live" && (basicApproval || item.string("type") == "user_input_request")
-            RuntimeRequest(request.string("id"), item.string("prompt").ifBlank { kind }, if (supported) item.string("reason") else "Respond using another T3 client: unsupported or non-resumable request", questions, supported)
-        }
-        // Highest ordinal; the stable sort keeps wire order for runs without one.
-        val active = value.objects("runs").filter { it.string("status") in ACTIVE_RUN_STATUSES }
-            .sortedBy { (it["ordinal"] as? JsonPrimitive)?.intOrNull ?: Int.MIN_VALUE }.lastOrNull()?.string("id")
-        val thread = value.obj("thread")
-        val agents = subagents(value)
-        val background = pendingBackgroundWork(value)
-        return ThreadPresentation(
-            messages = conversationMessages(value, items), activities = toolActivities(value, items), requests = requests, activeRunId = active,
-            runs = conversationRuns(value), attempts = runAttempts(value), subagents = agents, backgroundWork = background,
-            queuedMessages = queuedMessages(value, promotion), queueHeld = queueHeld(value),
-            steerable = canSteer(value, promotion, items), stoppable = canStopThread(active, background, agents),
-            runtimeMode = RuntimeMode.fromWire(thread.string("runtimeMode")),
-            modelSelection = thread["modelSelection"] as? JsonObject,
-            modelOptions = modelOptionValues(thread.obj("modelSelection")["options"]),
-            providerLocked = providerLocked(value))
     }
     /** T3 `thread.modelSelection {instanceId, model}`; prefers the server catalog entry for its label. */
     private fun selectedModel(selection: JsonObject?, models: List<ModelOption>): ModelOption? {

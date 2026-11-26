@@ -204,7 +204,29 @@ try {
   assert.ok(Array.isArray(rejected.cause) && rejected.cause.every(reason => reason._tag === 'Fail'), 'typed rejection is a Fail cause array');
   const resent = await rpc('orchestration.launchThread', { ...launch, commandId: 'wire-launch-2', threadId: 'wire-thread-2' });
   assert.equal(resent._tag, 'Success', 'a corrected resend may reuse the rejected ids');
-  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; config bytes ${JSON.stringify(configBytes)}.`);
+  // Thread inspector (InspectorStream.kt): the selected thread's subscribeThread and a second one for another thread run
+  // concurrently on one socket; interrupting the inspector's leaves the selected stream live and refetchable.
+  const subscribeThread = (id, threadId) => socket.send(JSON.stringify({ _tag: 'Request', id, tag: 'orchestration.subscribeThread', payload: { threadId, requestCompletionMarker: true }, headers: [] }));
+  const threadChunks = id => events.filter(event => event._tag === 'Chunk' && event.requestId === id).flatMap(event => event.values);
+  subscribeThread('thread-selected', 'wire-thread');
+  subscribeThread('thread-inspector', 'wire-thread-2');
+  for (const [id, threadId] of [['thread-selected', 'wire-thread'], ['thread-inspector', 'wire-thread-2']]) {
+    await waitFor(event => event._tag === 'Chunk' && event.requestId === id && event.values.some(value => value.kind === 'synchronized'));
+    const threadSnapshot = threadChunks(id).find(value => value.kind === 'snapshot');
+    assert.equal(threadSnapshot?.projection?.thread?.id, threadId, `concurrent subscribeThread snapshot for ${id}`);
+    assert.equal(events.some(event => event._tag === 'Exit' && event.requestId === id), false, `${id} stays open beside the other`);
+  }
+  socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: 'thread-inspector' }));
+  const inspectorExit = await waitFor(event => event._tag === 'Exit' && event.requestId === 'thread-inspector');
+  assert.equal(inspectorExit.exit._tag, 'Failure', 'interrupt ends the inspector stream');
+  const refetched = await rpc('orchestration.getThreadProjection', { threadId: 'wire-thread' });
+  assert.equal(refetched._tag, 'Success', 'getThreadProjection beside a live thread stream');
+  assert.equal(events.some(event => event._tag === 'Exit' && event.requestId === 'thread-selected'), false, 'the selected stream survives the inspector interrupt');
+  socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: 'thread-selected' }));
+  await waitFor(event => event._tag === 'Exit' && event.requestId === 'thread-selected');
+  const sideChatsCapability = config.environment.capabilities?.sideChats;
+  assert.ok(sideChatsCapability === undefined || typeof sideChatsCapability === 'boolean', 'capabilities.sideChats is optional boolean');
+  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; two concurrent subscribeThread streams on one socket (inspector interrupt leaves the selected stream live); capabilities.sideChats=${sideChatsCapability}; config bytes ${JSON.stringify(configBytes)}.`);
 } finally {
   socket?.close();
   child.kill('SIGTERM');
