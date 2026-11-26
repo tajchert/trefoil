@@ -20,6 +20,8 @@ The client requests complete shell history (`omitIdleSubagents: false` and `omit
 
 Connected-environment [usage summaries and provider limits](USAGE.md) use read-only RPCs with scoped access, caching and refresh throttling.
 
+Side chats (`thread.fork` with `sideChat`), the read-only thread inspector and thread context references are described in [side chats](SIDE_CHATS.md).
+
 Fixtures are synthetic examples shaped from the pinned contracts and contain no user data. The isolated server wire probe lives in `scripts/validate-t3-wire.mjs` and never touches a developer's T3 state.
 
 ## Subagents
