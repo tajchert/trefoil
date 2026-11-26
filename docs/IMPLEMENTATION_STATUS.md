@@ -201,3 +201,9 @@ Tapping a notification opens its thread. Only taps on Trefoil's own notification
 Limits: alerts cover only the machine Trefoil is connected to, and only while the app is in the background with that connection live. With Keep connected in background off, the connection closes after about 60 seconds in the background, so alerts stop too. Remote push is not supported; if the app process or the connection is gone, no alert arrives. Covered by Robolectric and JVM tests; not yet exercised on a device.
 
 The keep-alive notification still shows only the machine name. Agent alerts use their own notifications.
+
+## Issue trackers
+
+Shipped (unreleased): issue chips on the thread header open a links sheet, where each link can be unlinked behind a confirmation. An Issues destination (fifth rail or drawer entry) appears only when the server advertises `capabilities.issues`. It has a list with filters (state, involvement, project, labels, assignee, sort), search, pagination and pull to refresh. Issue detail shows the body, activity (comments and events), older comments, linked PRs and linked threads. From detail, the current thread can be linked or unlinked. "Start thread" opens the New thread sheet with the composer prefilled, and the issue is linked once the thread exists. Issue links in chat open the issue screen when they match a known tracker. Wire contract: [issue trackers](../protocol/ISSUES.md).
+
+Not included: issue comments and state changes, saved views, and tracker connect or settings. Those are set up in T3 on a computer.
