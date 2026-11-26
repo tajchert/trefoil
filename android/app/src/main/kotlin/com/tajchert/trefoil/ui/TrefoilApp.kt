@@ -71,6 +71,11 @@ import com.tajchert.trefoil.ui.shell.sidePanelPresentation
 import com.tajchert.trefoil.ui.diff.ChangesEntry
 import com.tajchert.trefoil.ui.diff.ChangesScreen
 import com.tajchert.trefoil.ui.diff.ChangesUi
+import com.tajchert.trefoil.ui.pr.PullRequestChip
+import com.tajchert.trefoil.ui.pr.PullRequestPanel
+import com.tajchert.trefoil.ui.pr.PullRequestSheet
+import com.tajchert.trefoil.ui.pr.PullRequestUi
+import com.tajchert.trefoil.ui.shell.HeaderChipsBelow
 import com.tajchert.trefoil.ui.diff.LocalChangesEntry
 import com.tajchert.trefoil.ui.shell.effectiveSidePanelMode
 import com.tajchert.trefoil.ui.shell.sidePanelTabs
@@ -190,6 +195,7 @@ fun TrefoilApp(
     stoppedForwards: Map<String, StoppedForwardNotice> = emptyMap(),
     onDismissStoppedForwards: (environmentId: String) -> Unit = {},
     changes: ChangesUi = ChangesUi(),
+    pullRequests: PullRequestUi = PullRequestUi(),
     start: ShellStart = ShellStart(),
 ) {
     TrefoilTheme {
@@ -464,7 +470,7 @@ fun TrefoilApp(
                 val listState = rememberShellListState(policy, environmentId, start.listCollapsed)
                 // Side panel tabs: Preview with dev servers, Screens with the rail's Screens entry (disabled with it), Agents with a roster.
                 val entries = navEntries(state, shell)
-                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null, changes = state.checkpoints.isNotEmpty(), thread = inspectorThreadId != null)
+                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null, changes = state.checkpoints.isNotEmpty(), pullRequest = state.threadPullRequests.isNotEmpty(), thread = inspectorThreadId != null)
                 val panelDisabled = if (entries.screensEnabled) emptySet() else setOf(SidePanelTab.Screens)
                 val panelTab = resolveSidePanelTab(savedPanelTab, panelTabs, panelDisabled)
                 // A saved tab that went away (roster gone, servers unsupported) is replaced by what is shown, so the toggle and Back agree with the screen.
@@ -561,6 +567,11 @@ fun TrefoilApp(
                 }
                 val latestOpenChanges by rememberUpdatedState(openChanges)
                 val hasCheckpoints = state.checkpoints.isNotEmpty()
+                // The pull request: docked as the PR tab where a panel fits, otherwise a sheet. The header chip is the way in.
+                val hasPullRequests = state.threadPullRequests.isNotEmpty()
+                val openPullRequest: () -> Unit = { if (canDock) openPanelTab(SidePanelTab.PullRequest) else openPanel(SidePanelTab.PullRequest) }
+                // From 460dp panes (and in windows narrower than 600dp, which keep every chip) the chip stays; below that it leads the thread menu.
+                val prChipInHeader = hasPullRequests && (maxWidth.value < 600f || panes.conversation >= HeaderChipsBelow)
                 val changesEntry = remember(hasCheckpoints) { if (hasCheckpoints) ChangesEntry { runId -> latestOpenChanges(runId) } else null }
                 val changesSurface: @Composable (Modifier, (() -> Unit)?) -> Unit = { modifier, onClose ->
                     ChangesScreen(state, changes, changesTurn, { changesTurn = it }, onClose, modifier)
@@ -616,7 +627,7 @@ fun TrefoilApp(
                     shortcutHost.visible = { id -> registeredShortcutVisible(id, listHidden, transient) }
                     shortcutHost.modalOpen = {
                         creating || adding || sshConnecting || sshLogin != null || sshHostKey != null || pairing || shortcutsOpen || showAgents ||
-                            (presentation.agentsSheet && roster != null) || !drawerState.isClosed
+                            (presentation.agentsSheet && roster != null) || (presentation.prSheet && hasPullRequests) || !drawerState.isClosed
                     }
                 }
                 val listChrome = if (nav == NavChrome.Header) ThreadListChrome() else ThreadListChrome(
@@ -664,9 +675,13 @@ fun TrefoilApp(
                                         if (selectedThreadActionsVisible(twoPane, showThread, draft, state.selectedThreadId)) {
                                             if (pill != null && budget.agentsChip) AgentsChip(pill, openAgents)
                                             if (portsAvailable && budget.serversChip) ThreadPortsChip(threadServers, onClick = openServers)
+                                            if (prChipInHeader) PullRequestChip(state.threadPullRequests, live, pullRequests, openPullRequest)
                                             if (budget.toggle) SidePanelToggle(docked, toggleOpen, toggleFocus)
                                             // Chips that do not fit lead the thread menu and do exactly what the chip would do.
-                                            val demoted: (@Composable ColumnScope.(() -> Unit) -> Unit)? = if (!budget.menuAgents && !budget.menuServers) null else ({ close ->
+                                            val prInMenu = hasPullRequests && !prChipInHeader
+                                            val demoted: (@Composable ColumnScope.(() -> Unit) -> Unit)? = if (!budget.menuAgents && !budget.menuServers && !prInMenu) null else ({ close ->
+                                                if (prInMenu) DropdownMenuItem(text = { Text("Pull request #${state.threadPullRequests.first().key.number}") },
+                                                    leadingIcon = { Icon(TfIcons.Branch, null, Modifier.size(18.dp)) }, onClick = { close(); openPullRequest() })
                                                 if (budget.menuAgents && pill != null) DropdownMenuItem(text = { Text("Agents (${pill.label})") },
                                                     leadingIcon = { Icon(TfIcons.Agents, null, Modifier.size(18.dp)) }, onClick = { close(); openAgents() })
                                                 if (budget.menuServers) DropdownMenuItem(text = { Text(serversMenuLabel(threadPorts)) },
@@ -748,6 +763,7 @@ fun TrefoilApp(
                                             InspectorThreadPane(state, id, inspectorKind, onRetry = { onOpenInspector(id) }, onMaximize = { maximizeInspector(id) }, onClose = leaveInspector, modifier = Modifier.fillMaxSize())
                                         }
                                         SidePanelTab.Changes -> changesSurface(Modifier.fillMaxSize(), null)
+                                        SidePanelTab.PullRequest -> PullRequestPanel(state, pullRequests, null, Modifier.fillMaxSize())
                                     }
                                 }
                             }) else null)
@@ -781,6 +797,8 @@ fun TrefoilApp(
                     SnackbarHost(snackbar, Modifier.navigationBarsPadding().imePadding().onGloballyPositioned { snackbarHostBounds = it.boundsInRoot() })
                 }
                 // The agents sheet: opened from the header where no panel can dock, or an Agents tab shown in a window too narrow to dock it.
+                // The pull request panel where no panel can dock: an adaptive sheet over the conversation.
+                if (presentation.prSheet && panelTab == SidePanelTab.PullRequest && hasPullRequests && connected) PullRequestSheet(state, pullRequests, closePanel)
                 if ((showAgents || presentation.agentsSheet) && roster != null) ThreadAgentsSheet(roster, state.providers, state.models, steadyWrite,
                     { showAgents = false; if (presentation.agentsSheet) closePanel() }, { id -> showAgents = false; if (presentation.agentsSheet) closePanel(); select(id) }, onStopSubagent)
             }

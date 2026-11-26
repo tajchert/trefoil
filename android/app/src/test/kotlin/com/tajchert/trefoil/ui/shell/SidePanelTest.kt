@@ -67,6 +67,19 @@ class SidePanelTest {
         assertNull(sidePanelOpenTarget(null, emptyList()))
     }
 
+    @Test fun pullRequestIsTheLastTabAndOnlyExistsWithALinkedPullRequest() {
+        assertEquals(listOf(Preview, Agents, Changes, SidePanelTab.PullRequest), sidePanelTabs(preview = true, screens = false, agents = true, changes = true, pullRequest = true))
+        assertEquals(listOf(SidePanelTab.PullRequest), sidePanelTabs(preview = false, screens = false, agents = false, pullRequest = true))
+        assertEquals(Preview, resolveSidePanelTab(SidePanelTab.PullRequest, listOf(Preview)))
+        assertEquals("PR", SidePanelTab.PullRequest.label)
+    }
+
+    @Test fun aNarrowWindowShowsThePullRequestAsASheetAndAWideOneDocksIt() {
+        val t = ShellDestination.Threads
+        assertEquals(SidePanelPresentation(t, agentsSheet = false, docked = false, prSheet = true), sidePanelPresentation(t, SidePanelTab.PullRequest, SidePanelMode.FullScreen))
+        assertEquals(SidePanelPresentation(t, false, true), sidePanelPresentation(t, SidePanelTab.PullRequest, SidePanelMode.ThirdPane))
+    }
+
     @Test fun aNarrowWindowMapsTheOpenTabInsteadOfDroppingIt() {
         val t = ShellDestination.Threads
         assertEquals(SidePanelPresentation(ShellDestination.Servers, false, false), sidePanelPresentation(t, Preview, SidePanelMode.FullScreen))

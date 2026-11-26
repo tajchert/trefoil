@@ -1065,6 +1065,12 @@ class TrefoilViewModel internal constructor(
     }
     /** Reads and parses one turn's diff of the selected thread (the Changes screen); the session applies its own selection guard. */
     suspend fun loadTurnDiff(turnCount: Int): DiffDocument = client.loadTurnDiff(turnCount)
+    /** Pull request panel state, reads and actions of the selected thread (the PR panel); the session owns the rules and the refresh stream. */
+    fun prPanel(key: PullRequestKey): StateFlow<PrPanelState> = client.prPanel(key)
+    suspend fun refreshPullRequest(key: PullRequestKey) = client.refreshPullRequest(key)
+    suspend fun loadPullRequestDiff(key: PullRequestKey, cursor: String?): PrDiffPage = client.loadPullRequestDiff(key, cursor)
+    suspend fun runPullRequestAction(key: PullRequestKey, action: PrAction, method: PrMergeMethod?) = client.runPullRequestAction(key, action, method)
+    suspend fun commentOnPullRequest(key: PullRequestKey, body: String) = client.commentOnPullRequest(key, body)
     /** Persists the opt-in for agent notifications; turning it off removes the ones in the shade (the driver sees the flow change). */
     fun setAgentNotifications(enabled: Boolean) {
         prefs.edit().putBoolean(AGENT_NOTIFICATIONS, enabled).apply()
