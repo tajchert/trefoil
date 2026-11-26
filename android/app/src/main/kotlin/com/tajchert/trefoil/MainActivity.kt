@@ -207,7 +207,8 @@ class MainActivity : ComponentActivity() {
                 IssuesUi(issueList, issueDetail, model.issuesController::open, model.issuesController::setQuery, model.issuesController::refresh,
                     model.issuesController::loadMore, model.issuesController::retry, model.issueDetailController::open,
                     model.issueDetailController::refresh, model.issueDetailController::retry, model.issueDetailController::loadOlderComments,
-                    model::openIssueThread)
+                    model::openIssueThread,
+                    model.issuesController::resolveLink)
             }
             val keepConnected by model.keepConnected.collectAsStateWithLifecycle()
             val hideTestFiles by model.hideTestFiles.collectAsStateWithLifecycle()

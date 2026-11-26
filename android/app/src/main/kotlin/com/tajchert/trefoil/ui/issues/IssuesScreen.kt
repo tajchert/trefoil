@@ -34,6 +34,7 @@ import com.tajchert.trefoil.IssueDetailUiState
 import com.tajchert.trefoil.IssueListUiState
 import com.tajchert.trefoil.IssuesController
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.core.session.IssueLinkTarget
 import com.tajchert.trefoil.ui.Tf
 import com.tajchert.trefoil.ui.TfIcons
 import com.tajchert.trefoil.ui.TrefoilType
@@ -362,4 +363,6 @@ class IssuesUi(
     val onOpenIssue: (environmentId: String, ref: IssueRef, key: IssueKey) -> Unit = { _, _, _ -> },
     val onRefreshDetail: () -> Unit = {}, val onRetryDetail: () -> Unit = {}, val onLoadOlder: () -> Unit = {},
     val onOpenThread: suspend (environmentId: String, threadId: String) -> Boolean = { _, _ -> false },
+    /** Resolves a tapped chat URL to a known issue (see [IssuesController.resolveLink]); null when it is none. */
+    val onResolveLink: (environmentId: String, url: String, threadLinks: List<ThreadIssueLink>) -> IssueLinkTarget? = { _, _, _ -> null },
 )

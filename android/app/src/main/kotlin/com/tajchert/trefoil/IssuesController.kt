@@ -1,6 +1,8 @@
 package com.tajchert.trefoil
 
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.core.session.IssueLinkResolver
+import com.tajchert.trefoil.core.session.IssueLinkTarget
 import java.time.Instant
 import kotlin.math.ceil
 import kotlinx.coroutines.*
@@ -57,6 +59,17 @@ class IssuesController(
 
     /** The trackers (with their hosts) the last first page of [environmentId] reported. */
     fun trackersFor(environmentId: String): List<IssueTrackerStatus> = remembered[environmentId]?.trackers.orEmpty()
+
+    /**
+     * Resolves a tapped chat [url] of [environmentId] to an issue the server has already named: the thread's own [threadLinks], the held
+     * list rows of this environment (the shown list and every cached answer), then the remembered scopes and tracker hosts. Null otherwise.
+     */
+    fun resolveLink(environmentId: String, url: String, threadLinks: List<ThreadIssueLink>): IssueLinkTarget? {
+        val shown = mutable.value.takeIf { it.environmentId == environmentId }?.entries.orEmpty()
+        val rows = shown + cache.filterKeys { it.environmentId == environmentId }.values.flatMap { it.entries }
+        val hosts = trackersFor(environmentId).map { it.host }
+        return IssueLinkResolver.resolve(url, threadLinks, rows, scopesFor(environmentId), hosts)
+    }
 
     /** The Issues destination opened: shows the held list for this environment, reading it again unless it is fresh. */
     fun open() {

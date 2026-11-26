@@ -199,6 +199,19 @@ class IssuesControllerTest {
         assertTrue(c.scopesFor("other").isEmpty())
     }
 
+    @Test fun resolvesChatLinksFromHeldRowsAndRememberedScopesOfThisEnvironmentOnly() = runTest {
+        val fake = Fake()
+        fake.answer = { page(listOf(summary(1)), scopes = listOf(IssueScope("p1", "github", "github.com", "o/r"))) }
+        val c = controller(fake)
+        assertNull(c.resolveLink("e1", "https://github.com/o/r/issues/1", emptyList()))
+        c.open(); advanceUntilIdle()
+        assertEquals("1", c.resolveLink("e1", "https://github.com/o/r/issues/1/", emptyList())?.key?.key)
+        assertEquals("9", c.resolveLink("e1", "https://GitHub.com/o/r/issues/9?x=1#c", emptyList())?.ref?.key)
+        assertNull(c.resolveLink("e1", "https://github.com.evil.io/o/r/issues/9", emptyList()))
+        assertNull(c.resolveLink("other", "https://github.com/o/r/issues/9", emptyList()))
+        assertNull(c.resolveLink("e1", "https://github.com/o/r/pull/9", emptyList()))
+    }
+
     @Test fun failedFirstPageKeepsHeldRowsAndReportsTheFailure() = runTest {
         val fake = Fake(); var fail = false
         fake.answer = { if (fail) throw IssueException(IssueFailure.Unavailable, "down") else page(listOf(summary(1))) }

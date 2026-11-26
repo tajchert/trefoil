@@ -24,6 +24,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -94,6 +96,16 @@ import com.tajchert.trefoil.ui.adaptive.focusRing
  */
 internal fun draftComposerKey(draft: ThreadDraft) = "draft:${draft.projectId}:${draft.threadId}"
 
+/**
+ * The timeline's [UriHandler]: [openIssue] gets each tapped URL first and returns true when it opened an issue; any other URL goes
+ * to [delegate] unchanged. Never logs the URL.
+ */
+internal class IssueAwareUriHandler(private val delegate: UriHandler, private val openIssue: (String) -> Boolean) : UriHandler {
+    override fun openUri(uri: String) {
+        if (!openIssue(uri)) delegate.openUri(uri)
+    }
+}
+
 @Composable
 internal fun Conversation(
     rawState: ClientState, send: (String) -> Unit, interrupt: () -> Unit, respond: (String, String, Map<String, List<String>>) -> Unit,
@@ -147,9 +159,15 @@ internal fun Conversation(
     /** A thread reference waiting to be put into this conversation's composer ("Add to chat"); [onThreadReferenceInserted] once it was handled. */
     threadReferenceInsert: ThreadReferenceInsert? = null,
     onThreadReferenceInserted: () -> Unit = {},
+    /** Opens a tapped timeline link as an issue when it names a known one and returns true; false leaves it to the platform handler. */
+    onOpenIssueLink: ((String) -> Boolean)? = null,
 ) {
     val c = Tf.colors
     val readOnly = readOnlyNotice != null
+    // Links in the timeline open as the issue screen when they name a known issue, and in the platform handler otherwise.
+    val platformUriHandler = LocalUriHandler.current
+    val issueLinkOpener by rememberUpdatedState(onOpenIssueLink)
+    val timelineUriHandler = remember(platformUriHandler) { IssueAwareUriHandler(platformUriHandler) { url -> issueLinkOpener?.invoke(url) == true } }
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
     val base = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())
     // A draft launches a new thread, which needs only the shell; an open thread rides out its refresh gaps. Read-only never writes.
@@ -443,7 +461,7 @@ internal fun Conversation(
                     projectTitle = project?.title, branch = thread?.branch?.takeIf { it.isNotBlank() },
                     workLabel = workLabel.takeIf { state.activeRunId != null }, onBack = onBack, actions = actions, subtitle = subtitle, otherNeedsYou = otherNeedsYou, navigationIcon = navigationIcon, compact = compactHeight)
                 HorizontalDivider(color = c.line)
-                Box(Modifier.weight(1f)) {
+                CompositionLocalProvider(LocalUriHandler provides timelineUriHandler) { Box(Modifier.weight(1f)) {
                     // Wide: the list spans the pane (scrolling and the scrollbar work anywhere) and centres the reading column with its side padding.
                     val sidePadding = if (layout.wide) layout.contentPadding.dp else 16.dp
                     LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(start = sidePadding, end = sidePadding, top = if (compactHeight) 8.dp else 16.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -488,7 +506,7 @@ internal fun Conversation(
                             Icon(TfIcons.ChevronDown, null, Modifier.size(16.dp)); Text("Latest", style = TrefoilType.meta.copy(color = c.text))
                         }
                     }
-                }
+                } }
                 // The composer owns its bottom insets: it rides above the keyboard, or above the navigation bar when closed.
                 Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
                     if (readOnlyNotice != null) { ReadOnlyInspectorBar(readOnlyNotice); return@Column }

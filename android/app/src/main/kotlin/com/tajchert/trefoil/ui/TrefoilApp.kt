@@ -373,6 +373,17 @@ fun TrefoilApp(
                 if (canDock) { panelIssueOpen = true; openPanel(SidePanelTab.Issue) } else { issueDetailOpen = true; navigate(ShellDestination.Issues) }
             }
         }
+        // A tapped chat link naming an issue the server already knows opens its detail; null (not supported, no thread) leaves links to the platform.
+        val openIssueLink: (Boolean) -> ((String) -> Boolean)? = { canDock ->
+            if (!issuesAvailable || environmentId == null || draft != null) null else { url ->
+                val target = issues.onResolveLink(environmentId, url, issueLinks)
+                if (target != null) {
+                    val key = target.key
+                    openIssueDetail(ThreadIssueLink(key, target.ref.projectId, url, displayKey = key.key, title = ""), canDock)
+                }
+                target != null
+            }
+        }
         // A thread linked from an issue opens inside the issue's own machine; an archived one says so instead of failing.
         val openLinkedThread: (IssueLinkedThread) -> Unit = { thread ->
             val owner = issues.detail.environmentId
@@ -727,6 +738,7 @@ fun TrefoilApp(
                                     leading = if (listHidden) ({ ShowThreadListButton(otherNeedsYou, showList) }) else null,
                                 ) else Conversation(state, onSend, onStop, onRespond, submitMessage = onSubmitMessage, sendOutcomes = sendOutcomes, sendsInFlight = sendsInFlight, onConsumeSendOutcome = onConsumeSendOutcome, stopPendingKeys = stopPendingKeys, queueOperationKeys = queueOperationKeys, onCancelQueued = onCancelQueued, onSteerQueued = onSteerQueued, onResumeQueue = onResumeQueue, onLoadActivity = onLoadActivity, composerDrafts = composerDrafts, promptSuggestions = promptSuggestions, fileDownloadUi = fileDownloadUi,
                                     sideChat = sideChat, threadReferenceInsert = referenceInsert, onThreadReferenceInserted = { referenceInsert = null },
+                                    onOpenIssueLink = openIssueLink(canDock),
                                     draft = draft, onSetRuntimeMode = onSetRuntimeMode, onSetModel = onSetModel, onSetModelOption = onSetModelOption, onSetModelFavorite = onSetModelFavorite, sendFailed = sendFailed,
                                     onBack = if (backParent != null) ({ select(backParent.id) }) else if (twoPane) null else ({ cancelDraft(); showThread = false }),
                                     onOpenParent = parentThread?.let { p -> { select(p.id) } },
