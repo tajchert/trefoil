@@ -324,6 +324,20 @@ class UnifiedDiffParserTest {
         assertEquals(listOf("a", "b", "c", "d"), lines(doc).map { it.text })
     }
 
+    @Test fun `quoted new path only on a binary rename`() {
+        val diff = "diff --git a/plain.bin \"b/caf\\303\\251.bin\"\nBinary files differ\n"
+        val doc = UnifiedDiffParser.parse(diff)
+        assertEquals("caf\u00e9.bin", doc.files.single().path)
+    }
+
+    @Test fun `no-prefix headers without tabs stay linear`() {
+        val diff = buildString { repeat(3_000) { append("diff --git src/old$it.kt src/new$it.kt\n--- src/old$it.kt\n+++ src/new$it.kt\n@@ -1 +1 @@\n-a\n+b\n") } }
+        val started = System.nanoTime()
+        val doc = UnifiedDiffParser.parse(diff)
+        assertEquals(3_000, doc.files.size)
+        assertTrue((System.nanoTime() - started) / 1_000_000 < 2_000)
+    }
+
     @Test fun `quoted and spaced paths`() {
         val diff = """
             diff --git "a/caf\303\251 \"x\".txt" "b/caf\303\251 \"x\".txt"

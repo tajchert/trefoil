@@ -454,13 +454,22 @@ private fun splitGitHeader(text: String, start: Int, end: Int, builder: FileBuil
             return
         }
     }
-    val separator = text.lastIndexOf(" b/", end - 1)
+    // Quoted new path only: `a/X "b/Y"`.
+    if (text[end - 1] == '"') {
+        val quoted = boundedLastIndexOf(text, " \"b/", start, end)
+        if (quoted > start && text.startsWith("a/", start)) {
+            builder.gitOld = text.substring(start + 2, quoted)
+            builder.gitNew = stripPrefix(unquote(text, quoted + 1, end), "b/")
+            return
+        }
+    }
+    val separator = boundedLastIndexOf(text, " b/", start, end)
     if (separator > start && text.startsWith("a/", start)) {
         builder.gitOld = text.substring(start + 2, separator)
         builder.gitNew = text.substring(separator + 3, end)
     } else {
         // `--no-prefix` diffs: split at the middle space when both halves match, else at the first space.
-        val space = if (length % 2 == 1 && text[start + length / 2] == ' ') start + length / 2 else text.indexOf(' ', start).takeIf { it in start until end } ?: return
+        val space = if (length % 2 == 1 && text[start + length / 2] == ' ') start + length / 2 else (start until end).firstOrNull { text[it] == ' ' } ?: return
         builder.gitOld = text.substring(start, space)
         builder.gitNew = text.substring(space + 1, end)
     }
@@ -473,9 +482,14 @@ private fun headerPath(text: String, start: Int, end: Int, stripPrefix: String?)
         if (close > 0) return stripPrefix(unquote(text, start, close), stripPrefix)
     }
     var cut = end
-    val tab = text.indexOf('\t', start)
-    if (tab in start until end) cut = tab
+    for (i in start until end) if (text[i] == '\t') { cut = i; break }
     return stripPrefix(text.substring(start, cut), stripPrefix)
+}
+
+/** Last index of [needle] fully inside [start, end), or -1; never scans outside the line. */
+private fun boundedLastIndexOf(text: String, needle: String, start: Int, end: Int): Int {
+    for (i in end - needle.length downTo start) if (text.regionMatches(i, needle, 0, needle.length)) return i
+    return -1
 }
 
 private fun stripPrefix(path: String, prefix: String?): String =
