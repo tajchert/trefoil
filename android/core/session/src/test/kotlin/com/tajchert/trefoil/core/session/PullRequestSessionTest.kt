@@ -369,6 +369,26 @@ class PullRequestSessionTest {
         assertFalse(reads.current(key)!!.pendingAction!!.blocksActions)
     }
 
+    @Test fun reconcileReadCancelledBySessionLossStaysUnknown() = runTest {
+        val transport = FakeTransport()
+        val (reads, actions) = loaded(transport)
+        transport.handler = { tag, _ -> if (tag == "pullRequests.runAction") throw UncertainOutcomeException("lost") else detailJson() }
+        actions.run(key, PrAction.Merge, PrMergeMethod.Merge)
+        advanceUntilIdle()
+        // The reconciling read hangs; the session drops mid-flight. The cached detail is still the pre-merge "open" one.
+        val hang = CompletableDeferred<JsonElement>()
+        transport.handler = { tag, _ -> if (tag == "pullRequests.detail") hang.await() else JsonNull }
+        val reconciling = launch { actions.reconcile() }
+        runCurrent(); advanceUntilIdle()
+        assertEquals(1, transport.count("pullRequests.detail"))
+        reads.sessionLost()
+        advanceUntilIdle()
+        assertTrue(reconciling.isCompleted)
+        assertEquals(PrState.Open, reads.current(key)?.detail?.state)
+        assertNull(reads.current(key)?.error)
+        assertEquals(PrActionOutcome.Unknown, reads.current(key)?.pendingAction?.outcome)
+    }
+
     @Test fun typedFailIsRejected() = runTest {
         val transport = FakeTransport()
         val (reads, actions) = loaded(transport)

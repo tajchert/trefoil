@@ -16,6 +16,7 @@ import com.tajchert.trefoil.core.model.PrUnavailableReason
 import com.tajchert.trefoil.core.model.PullRequestKey
 import com.tajchert.trefoil.core.model.UnifiedDiffParser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -142,18 +143,21 @@ class PullRequestReads(
         }
     }
 
-    /** Reads [key] now with `allowStale:false` and returns the resulting detail, or null if the read failed. */
+    /**
+     * Reads [key] now with `allowStale:false` and returns the detail that read itself produced, or null when it failed,
+     * was cancelled (session lost, forgotten) or superseded: a cached pre-mutation detail is never mistaken for it.
+     */
     internal suspend fun reconcileRead(key: PullRequestKey): PrDetail? {
         if (!transport.isLive()) return null
+        val result = CompletableDeferred<PrDetail?>()
         val job = synchronized(lock) {
             val entry = entryLocked(key)
             entry.read?.cancel()
             entry.again = false
-            startReadLocked(key, entry, allowStale = false)
+            startReadLocked(key, entry, allowStale = false, result)
         }
-        job.join()
-        val state = current(key) ?: return null
-        return if (state.error == null && state.unavailableReason == null) state.detail else null
+        job.invokeOnCompletion { result.complete(null) }
+        return result.await()
     }
 
     /** Applies [transform] to [key]'s panel, creating it if needed (pending actions). */
@@ -234,16 +238,16 @@ class PullRequestReads(
         }
     }
 
-    private fun startReadLocked(key: PullRequestKey, entry: Entry, allowStale: Boolean): Job {
+    private fun startReadLocked(key: PullRequestKey, entry: Entry, allowStale: Boolean, result: CompletableDeferred<PrDetail?>? = null): Job {
         val epoch = generation
         val token = ++entry.token
         entry.flow.update { it.copy(refreshing = true) }
-        val job = scope.launch { read(key, entry, allowStale, epoch, token) }
+        val job = scope.launch { read(key, entry, allowStale, epoch, token, result) }
         if (entry.token == token && job.isActive) entry.read = job
         return job
     }
 
-    private suspend fun read(key: PullRequestKey, entry: Entry, allowStale: Boolean, epoch: Long, token: Long) {
+    private suspend fun read(key: PullRequestKey, entry: Entry, allowStale: Boolean, epoch: Long, token: Long, result: CompletableDeferred<PrDetail?>?) {
         val ref = buildJsonObject { putRef(key); if (!allowStale) put("allowStale", false) }
         val outcome = try {
             val detail = decodePullRequestDetail(transport.request("pullRequests.detail", ref), entry.flow.value.snapshot)
@@ -262,6 +266,7 @@ class PullRequestReads(
         synchronized(lock) {
             if (epoch != generation || entries[key] !== entry || entry.token != token) return
             entry.flow.update { state -> outcome.applyTo(state).copy(refreshing = false) }
+            result?.complete((outcome as? ReadOutcome.Fresh)?.detail)
             entry.read = null
             if (entry.again && transport.isLive()) {
                 val stale = entry.againAllowStale
