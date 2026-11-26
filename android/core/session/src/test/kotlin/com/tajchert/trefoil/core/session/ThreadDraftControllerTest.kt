@@ -29,6 +29,9 @@ class ThreadDraftControllerTest {
         override suspend fun setRuntimeMode(mode: RuntimeMode) { modes += mode; onMode(mode) }
         val optionChanges = mutableListOf<Pair<String, Any>>()
         override suspend fun setModelOption(id: String, value: Any) { optionChanges += id to value }
+        val links = mutableListOf<Pair<ThreadTarget, ThreadIssueLink>>()
+        var onLink: suspend (ThreadTarget, ThreadIssueLink) -> Unit = { _, _ -> }
+        override suspend fun linkIssue(target: ThreadTarget, link: ThreadIssueLink) { links += target to link; onLink(target, link) }
         override suspend fun pair(pairingUrl: String, name: String, allowInsecureHttp: Boolean) = error("unused")
         override suspend fun connect(environment: SavedEnvironment) = error("unused")
         override suspend fun disconnect() = Unit
@@ -255,5 +258,169 @@ class ThreadDraftControllerTest {
         runCurrent()
         assertEquals(draft, h.controller.draft.value)
         assertTrue(h.client.selected.isEmpty())
+    }
+
+    private val issue = ThreadIssueLink(IssueKey("github", "github.com", "acme/app", "42"), "p", "https://github.com/acme/app/issues/42",
+        displayKey = "#42", title = "Crash")
+    private val issueDraft = draft.copy(issueLink = issue)
+    private val target = ThreadTarget("env-1", issueDraft.threadId)
+    private fun ClientState.withThread(issues: List<ThreadIssueLink> = emptyList()) =
+        copy(threads = threads.filter { it.id != issueDraft.threadId } + ThreadSummary(issueDraft.threadId, "p", "Crash", issues = issues))
+
+    @Test fun issueLinkIsSentOnceAfterASuccessfulLaunch() = runTest {
+        val h = harness()
+        h.controller.start(issueDraft)
+        h.controller.send("#42: Crash"); runCurrent()
+        assertTrue("The link waits for the live shell row", h.client.links.isEmpty())
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        assertEquals(listOf(target to issue), h.client.links)
+        // Later shell updates (the row showing the link, other changes) never send it again.
+        h.client.mutable.update { it.withThread(listOf(issue)) }; runCurrent()
+        h.client.mutable.update { it.copy(threads = it.threads + ThreadSummary("t2", "p", "Other")) }; runCurrent()
+        assertEquals(1, h.client.links.size)
+        assertNull(h.controller.issueLinkNotice.value)
+    }
+
+    @Test fun launchWithTheRowAlreadyListedLinksRightAway() = runTest {
+        val h = harness(connected.withThread())
+        h.client.launch = { throw IllegalStateException("rejected") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        assertEquals(listOf(target to issue), h.client.links)
+    }
+
+    @Test fun draftWithoutAnIssueNeverLinks() = runTest {
+        val h = harness()
+        h.controller.start(draft)
+        h.controller.send("hello"); runCurrent()
+        h.client.mutable.update { it.copy(threads = it.threads + ThreadSummary(draft.threadId, "p", "Hello")) }; runCurrent()
+        assertTrue(h.client.links.isEmpty())
+    }
+
+    @Test fun uncertainLaunchThenReconcileHitSendsOneLink() = runTest {
+        val h = harness()
+        h.client.launch = { throw UncertainOutcomeException("lost") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello")
+        h.client.mutable.update { it.copy(connection = ConnectionStatus.Error, canWrite = false) }; runCurrent()
+        assertTrue(h.client.links.isEmpty())
+        h.client.mutable.value = connected; runCurrent()
+        assertTrue("No row yet: nothing to link", h.client.links.isEmpty())
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        h.client.mutable.update { it.copy(threads = it.threads + ThreadSummary("t2", "p", "Other")) }; runCurrent()
+        assertEquals(listOf(target to issue), h.client.links)
+        assertEquals(1, h.client.launches.size)
+    }
+
+    @Test fun reconcileHitWhoseRowAlreadyShowsTheIssueSendsNothing() = runTest {
+        val h = harness()
+        h.client.launch = { throw UncertainOutcomeException("lost") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        h.client.mutable.update { it.withThread(listOf(issue.copy(source = "agent"))) }; runCurrent()
+        assertNull(h.controller.draft.value)
+        assertTrue(h.client.links.isEmpty())
+        assertNull(h.controller.issueLinkNotice.value)
+    }
+
+    @Test fun definiteLinkRejectionShowsTheNoticeWithoutRetrying() = runTest {
+        val h = harness()
+        h.client.onLink = { _, _ -> throw IllegalStateException("T3 rejected the issue link. Check the thread and try again.") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        val notice = h.controller.issueLinkNotice.value
+        assertEquals(IssueLinkNotice(issueDraft.threadId, "env-1", issue), notice)
+        assertEquals(ISSUE_NOT_LINKED_MESSAGE, notice!!.message)
+        h.client.mutable.update { it.copy(connection = ConnectionStatus.Error) }; runCurrent()
+        h.client.mutable.update { it.copy(connection = ConnectionStatus.Connected, threads = it.threads + ThreadSummary("t2", "p", "Other")) }; runCurrent()
+        assertEquals("Never retried on its own", 1, h.client.links.size)
+        assertEquals(notice, h.controller.issueLinkNotice.value)
+        h.controller.dismissIssueLinkNotice()
+        assertNull(h.controller.issueLinkNotice.value)
+    }
+
+    @Test fun uncertainLinkIsNeverResentAndTheRowDecidesTheNotice() = runTest {
+        val h = harness()
+        h.client.onLink = { _, _ -> throw UncertainOutcomeException("lost") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        h.client.mutable.update { it.copy(connection = ConnectionStatus.Error, canWrite = false, shellLive = false) }; runCurrent()
+        assertNull(h.controller.issueLinkNotice.value)
+        // Reconnected; the live row lacks the key: offer "Link issue", never send it.
+        h.client.mutable.update { it.copy(connection = ConnectionStatus.Connected, canWrite = true, shellLive = true) }; runCurrent()
+        assertEquals(1, h.client.links.size)
+        assertEquals(IssueLinkNotice(issueDraft.threadId, "env-1", issue), h.controller.issueLinkNotice.value)
+    }
+
+    @Test fun uncertainLinkThatLandedShowsNoNotice() = runTest {
+        val h = harness()
+        h.client.onLink = { _, _ -> throw UncertainOutcomeException("lost") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        h.client.mutable.update { it.copy(connection = ConnectionStatus.Error, shellLive = false) }; runCurrent()
+        h.client.mutable.update { it.copy(connection = ConnectionStatus.Connected, shellLive = true).withThread(listOf(issue)) }; runCurrent()
+        assertEquals(1, h.client.links.size)
+        assertNull(h.controller.issueLinkNotice.value)
+    }
+
+    @Test fun environmentSwitchBetweenLaunchAndLinkSendsNoLink() = runTest {
+        val h = harness()
+        val gate = CompletableDeferred<Unit>()
+        h.client.launch = { gate.await(); it.threadId }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        val other = SavedEnvironment("env-2", "Other", "https://other.invalid", "fixture-token")
+        h.client.mutable.value = connected.copy(environment = other).withThread()
+        runCurrent()
+        gate.complete(Unit); runCurrent()
+        h.client.mutable.value = connected.withThread(); runCurrent()
+        assertTrue(h.client.links.isEmpty())
+    }
+
+    @Test fun environmentSwitchWhileWaitingForTheRowDropsTheLink() = runTest {
+        val h = harness()
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        val other = SavedEnvironment("env-2", "Other", "https://other.invalid", "fixture-token")
+        h.client.mutable.value = connected.copy(environment = other).withThread(); runCurrent()
+        h.client.mutable.value = connected.withThread(); runCurrent()
+        assertTrue(h.client.links.isEmpty())
+    }
+
+    @Test fun retryIssueLinkSendsExactlyOneNewCommandPerCall() = runTest {
+        val h = harness()
+        h.client.onLink = { _, _ -> throw IllegalStateException("T3 rejected the issue link.") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        assertEquals(1, h.client.links.size)
+        h.controller.retryIssueLink(); runCurrent()
+        assertEquals(2, h.client.links.size)
+        assertNotNull("Still rejected: the notice stays", h.controller.issueLinkNotice.value)
+        // Repeat taps while one is in flight do nothing.
+        val gate = CompletableDeferred<Unit>()
+        h.client.onLink = { _, _ -> gate.await() }
+        h.controller.retryIssueLink(); h.controller.retryIssueLink(); runCurrent()
+        assertEquals(3, h.client.links.size)
+        gate.complete(Unit); runCurrent()
+        assertNull(h.controller.issueLinkNotice.value)
+        h.controller.retryIssueLink(); runCurrent()
+        assertEquals("No notice, nothing to retry", 3, h.client.links.size)
+        assertTrue(h.client.links.all { it == target to issue })
+    }
+
+    @Test fun rejectionBecauseTheRowAlreadyShowsTheIssueIsNotANotice() = runTest {
+        val h = harness()
+        h.client.onLink = { _, _ -> throw IllegalStateException("T3 rejected the issue link.") }
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        assertNotNull(h.controller.issueLinkNotice.value)
+        // An agent links it meanwhile: the notice no longer applies.
+        h.client.mutable.update { it.withThread(listOf(issue.copy(source = "agent"))) }; runCurrent()
+        assertNull(h.controller.issueLinkNotice.value)
     }
 }
