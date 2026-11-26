@@ -1,5 +1,16 @@
 # Android releases
 
+Release `0.25.0` (`versionCode = 44`) adds turn diffs, pull requests, issue trackers and side chats. The
+thread overflow's Changes entry opens a turn picker, a review-ordered file list and a native diff viewer
+(docked on wide windows). A header chip opens the pull request panel (overview, checks, files) with merge,
+update branch, ready/draft and comment, each sent once and reconciled when the outcome is unknown. When the
+server advertises issues, an Issues destination lists and filters issues; detail shows activity, linked PRs
+and threads, links or unlinks the current thread and starts a thread from the issue. Side chats and subagents
+open read-only in a Thread tab on docked windows, `/side` starts a side chat, and assistant replies can be
+quoted with citations. Revisited threads repaint from memory and the first config comes from the slim
+`subscribeServerConfig` snapshot. Check Changes, the PR panel (including a merge), issues and a side chat
+against a real environment on a device; none of these were exercised on a device against a live T3 server.
+
 Release `0.24.1` (`versionCode = 43`) stops a thread too large for mobile from breaking the connection. A
 thread whose snapshot exceeded the 16 MB frame cap used to fail the whole session with "Invalid server RPC
 response", and reconnecting reselected the same thread, so the app looped. Now only that thread closes, with a
