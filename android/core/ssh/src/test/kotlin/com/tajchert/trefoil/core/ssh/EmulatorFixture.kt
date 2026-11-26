@@ -19,6 +19,8 @@ internal fun emulatorT3Dispatcher(oauthRequests: MutableList<RecordedRequest> = 
             val id = frame["id"]!!.jsonPrimitive.content
             when (frame["tag"]?.jsonPrimitive?.content) {
                 "server.getConfig" -> webSocket.send("""{"_tag":"Exit","requestId":"$id","exit":{"_tag":"Success","value":{"providers":[]}}}""")
+                // The first config comes from this stream's snapshot; server.getConfig is only the older-server fallback.
+                "subscribeServerConfig" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"version":1,"type":"snapshot","config":{"providers":[]}}]}""")
                 "orchestration.subscribeThread" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","projection":{"thread":{"id":"test-thread"},"messages":[],"runs":[],"turnItems":[],"runtimeRequests":[]}},{"kind":"synchronized"}]}""")
                 "orchestration.subscribeShell" -> webSocket.send("""{"_tag":"Chunk","requestId":"$id","values":[{"kind":"snapshot","snapshot":{"projects":[{"id":"test-project","title":"SSH fixture project","workspaceRoot":"/isolated-fixture"}],"threads":[{"id":"test-thread","projectId":"test-project","title":"SSH fixture conversation","status":"idle"}]}},{"kind":"synchronized"}]}""")
             }
