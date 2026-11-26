@@ -57,6 +57,18 @@ class ShellDestinationTest {
         assertNull(back(ShellDestination.Threads, thread = false, parent = false))
     }
 
+    @Test fun aDockedInspectorLeavesBeforeThePanelAndTheParentStep() {
+        fun back(inspector: Boolean, docked: Boolean = true, parent: Boolean = true, destination: ShellDestination = ShellDestination.Threads) =
+            shellBack(destination, true, false, twoPane = true, showThread = true, hasBackParent = parent, panelDocked = docked, inspectorOpen = inspector)
+        assertEquals(ShellBack.CloseInspector, back(inspector = true))
+        assertEquals(ShellBack.CloseInspector, back(inspector = true, parent = false))
+        assertEquals(ShellBack.ClosePanel, back(inspector = false))
+        // A folded window shows no inspector, so Back is the thread's own again.
+        assertEquals(ShellBack.ToParent, back(inspector = true, docked = false))
+        // Usage and the other secondary destinations still go first.
+        assertEquals(ShellBack.ToThreads, back(inspector = true, destination = ShellDestination.Usage))
+    }
+
     @Test fun railEntriesFollowTheMenuAndDisableLiveOnlyEntriesWhileReconnecting() {
         val live = ClientState(environment = environment, connection = ConnectionStatus.Connected)
         val entries = navEntries(live, actions)

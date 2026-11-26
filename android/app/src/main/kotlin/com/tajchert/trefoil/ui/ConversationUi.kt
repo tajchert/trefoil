@@ -137,13 +137,19 @@ internal fun Conversation(
     onCancelQueued: (String) -> Unit = {}, onSteerQueued: (String) -> Unit = {}, onResumeQueue: () -> Unit = {},
     /** Dismissed prompt suggestions and how to dismiss one; the composer decides when the hint shows. */
     promptSuggestions: PromptSuggestionUi = PromptSuggestionUi(),
+    /**
+     * Non-null makes the conversation read-only (the side-panel inspector): the text is the bar that replaces the composer. Nothing in it
+     * can write: no composer, no Stop or steer, no quick replies and no approval buttons (a pending request shows as a notice).
+     */
+    readOnlyNotice: String? = null,
 ) {
     val c = Tf.colors
+    val readOnly = readOnlyNotice != null
     // A draft hides whatever thread was previously selected; its first message creates the real thread.
     val base = if (draft == null) rawState else rawState.copy(messages = emptyList(), activities = emptyList(), requests = emptyList(), activeRunId = null, runs = emptyList(), attempts = emptyList())
-    // A draft launches a new thread, which needs only the shell; an open thread rides out its refresh gaps.
+    // A draft launches a new thread, which needs only the shell; an open thread rides out its refresh gaps. Read-only never writes.
     val steadyWrite = rememberSteadyCanWrite(base)
-    val writable = if (draft != null) base.canLaunchThreads else steadyWrite
+    val writable = if (readOnly) false else if (draft != null) base.canLaunchThreads else steadyWrite
     val state = if (writable == base.canWrite) base else base.copy(canWrite = writable)
     if (state.selectedThreadId == null && draft == null) {
         Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -420,7 +426,7 @@ internal fun Conversation(
                         items(liveTurn.orphanSubagents, key = { "subagent:${it.id}" }) { ProseBlock { SubagentTimelineRow(it, onOpenThread, onOpenAgents) } }
                         liveTurn.thinkingLabel?.let { label -> item(key = "thinking") { ProseBlock { ThinkingRow(label) } } }
                         backgroundWork?.let { work -> item(key = "background-work") { ProseBlock { BackgroundWorkRow(work, onOpenThread, onOpenAgents, live = state.canRead && state.connection == ConnectionStatus.Connected) } } }
-                        items(state.requests, key = { "request:${it.id}" }) { ProseBlock { RequestCard(it, canSend, respond) } }
+                        items(state.requests, key = { "request:${it.id}" }) { ProseBlock { if (readOnly) ReadOnlyRequestNotice(it) else RequestCard(it, canSend, respond) } }
                         item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
                     }
                     if (!nearBottom) Surface(onClick = { following = true; scope.launch { list.animateScrollToItem(list.layoutInfo.totalItemsCount - 1) } },
@@ -432,6 +438,7 @@ internal fun Conversation(
                 }
                 // The composer owns its bottom insets: it rides above the keyboard, or above the navigation bar when closed.
                 Column(Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+                    if (readOnlyNotice != null) { ReadOnlyInspectorBar(readOnlyNotice); return@Column }
                     QuickReplies(state.requests, canSend, respond)
                     if (thread != null && thread.isProviderNativeSubagentThread()) ReadOnlySubagentBar(thread, clock, onOpenParent)
                     else ConversationComposer(state, draft, text, ::editText, submitted != null, stopPending, onSetRuntimeMode, onSetModel, onSetModelOption, onSetModelFavorite,

@@ -39,6 +39,13 @@ class SidePanelShellTest {
     private val selected = mutableListOf<String>()
     private val stopped = mutableListOf<String>()
     private var screensClosed = 0
+    private val opened = mutableListOf<String>()
+    private var inspectorClosed = 0
+    private val childThread = ThreadSummary("child", "p", "Explore child", parentThreadId = "t", relationshipToParent = "subagent")
+    private val chatThread = ThreadSummary("chat", "p", "Side question", parentThreadId = "t", sideChat = true)
+    private val inspected = InspectorThread("child", SideThreadKind.Subagent, ready = true, messages = listOf(ConversationMessage("m1", "assistant", "Found three call sites")))
+    private val inspecting = withAgents.copy(threads = base.threads + childThread, inspector = inspected, shellLive = true)
+    private val preopened = ShellStart(showThread = true, sidePanelTab = "Thread", inspectorThreadId = "child")
 
     private val state = mutableStateOf(base)
     private fun setApp(initial: ClientState = base, start: ShellStart = ShellStart(showThread = true), fold: Fold? = null) {
@@ -50,7 +57,8 @@ class SidePanelShellTest {
     private fun App(start: ShellStart, fold: Fold?) {
         CompositionLocalProvider(LocalFold provides fold) {
             TrefoilApp(state.value, listOf(environment, other), { _, _, _ -> }, {}, { selected += it }, {}, {}, { _, _, _ -> }, null, {}, {}, {}, {}, {}, {}, {},
-                onStopSubagent = { stopped += it }, onCloseScreen = { screensClosed++ }, start = start)
+                onStopSubagent = { stopped += it }, onOpenInspector = { opened += it }, onCloseInspector = { inspectorClosed++ },
+                onCloseScreen = { screensClosed++ }, start = start)
         }
     }
 
@@ -58,7 +66,7 @@ class SidePanelShellTest {
     private fun inList(text: String) = hasText(text) and hasAnyAncestor(pane("Thread list"))
     private fun panel(tab: String) = compose.onNode(pane("$tab side panel"))
     private fun toggle() = compose.onNode(hasContentDescription("Open side panel") and hasClickAction())
-    private fun closeButton() = compose.onNode(hasContentDescription("Close side panel") and hasAnyAncestor(pane("Screens side panel") or pane("Agents side panel") or pane("Preview side panel")))
+    private fun closeButton() = compose.onNode(hasContentDescription("Close side panel") and hasAnyAncestor(pane("Screens side panel") or pane("Agents side panel") or pane("Preview side panel") or pane("Subagent side panel") or pane("Side chat side panel")))
     private fun systemBack() = compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
 
     @Test fun theToggleOpensAndClosesThePanelAndTheListReturns() {
@@ -349,6 +357,193 @@ class SidePanelShellTest {
         compose.onNode(pane("Servers")).assertExists()
         compose.onNode(hasText("Dev servers") and hasAnyAncestor(pane("Servers"))).assertExists()
         compose.onNode(hasContentDescription("Forward a port…") and hasAnyAncestor(pane("Servers"))).assertExists()
+    }
+
+
+    // The Thread tab: a read-only inspector of a subagent or side chat of the selected thread.
+    private fun openFromAgents() {
+        compose.onNode(hasContentDescription(subagentLabel()) and hasClickAction()).performClick()
+        panel("Agents").assertExists()
+        inPanel("Agents", hasTestTag("agent-row-a")).performClick()
+        compose.waitForIdle()
+    }
+    private fun tabPill(label: String) = compose.onNode(hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Tab))
+
+    @Test fun aSubagentRowOpensTheThreadTabAndStreamsItInsteadOfSelectingIt() {
+        setApp(inspecting)
+        openFromAgents()
+        panel("Subagent").assertExists()
+        assertEquals(emptyList<String>(), selected)
+        assertEquals(listOf("child"), opened)
+        // The Agents tab stays beside it, the thread's rows show, and nothing in the pane can write.
+        tabPill("Agents").assertExists()
+        compose.onNode(hasTestTag("inspector-pane")).assertExists()
+        compose.onNode(hasText("Found three call sites") and hasAnyAncestor(pane("Subagent side panel"))).assertExists()
+        compose.onNode(hasTestTag("inspector-readonly-bar")).assertExists()
+        compose.onAllNodes(hasSetTextAction() and hasAnyAncestor(pane("Subagent side panel"))).assertCountEquals(0)
+        assertInTabBar("Subagent", "Maximize thread")
+    }
+
+    @Test fun theThreadTabIsLabelledSideChatForASideChat() {
+        val chat = base.copy(threads = base.threads + chatThread, shellLive = true,
+            inspector = InspectorThread("chat", SideThreadKind.SideChat, ready = true, messages = listOf(ConversationMessage("m1", "assistant", "Short answer"))))
+        setApp(chat, ShellStart(showThread = true, sidePanelTab = "Thread", inspectorThreadId = "chat"))
+        panel("Side chat").assertExists()
+        compose.onNode(hasText("Short answer")).assertExists()
+        assertEquals(listOf("chat"), opened)
+    }
+
+    @Test fun backLeavesTheInspectorForTheTabItCameFromThenClosesNothingElse() {
+        setApp(inspecting)
+        openFromAgents()
+        systemBack()
+        compose.waitForIdle()
+        panel("Subagent").assertDoesNotExist()
+        panel("Agents").assertExists()
+        tabPill("Subagent").assertDoesNotExist()
+        assertTrue(inspectorClosed >= 1)
+        assertEquals(emptyList<String>(), selected)
+    }
+
+    @Test fun backClosesThePanelWhenTheInspectorWasOpenedFromNoTab() {
+        setApp(inspecting, preopened)
+        panel("Subagent").assertExists()
+        systemBack()
+        compose.waitForIdle()
+        panel("Subagent").assertDoesNotExist()
+        compose.onNode(hasAnyAncestor(pane("Agents side panel"))).assertDoesNotExist()
+        assertEquals(emptyList<String>(), selected)
+        toggle().assertExists()
+    }
+
+    @Test fun maximizeSelectsTheChildAndTheThreadTabGoesAway() {
+        setApp(inspecting)
+        openFromAgents()
+        compose.onNodeWithContentDescription("Maximize thread").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("child"), selected)
+        panel("Subagent").assertDoesNotExist()
+        tabPill("Subagent").assertDoesNotExist()
+    }
+
+    @Test fun closingThePanelEndsTheInspectorTarget() {
+        setApp(inspecting, preopened)
+        closeButton().performClick()
+        compose.waitForIdle()
+        panel("Subagent").assertDoesNotExist()
+        toggle().performClick()
+        // Reopening shows an ordinary tab, never the ended inspector.
+        panel("Subagent").assertDoesNotExist()
+        tabPill("Subagent").assertDoesNotExist()
+    }
+
+    @Test fun switchingTabsKeepsTheTargetAndStreamsOnlyWhileTheThreadTabShows() {
+        setApp(inspecting)
+        openFromAgents()
+        assertEquals(listOf("child"), opened)
+        val closedBefore = inspectorClosed
+        tabPill("Agents").performClick()
+        compose.waitForIdle()
+        panel("Agents").assertExists()
+        assertTrue("stream closed behind another tab", inspectorClosed > closedBefore)
+        tabPill("Subagent").performClick()
+        compose.waitForIdle()
+        panel("Subagent").assertExists()
+        assertEquals(listOf("child", "child"), opened)
+    }
+
+    @Test fun theStreamWaitsForAFreshShell() {
+        setApp(inspecting.copy(shellLive = false), preopened)
+        panel("Subagent").assertExists()
+        assertEquals(emptyList<String>(), opened)
+        state.value = inspecting
+        compose.waitForIdle()
+        assertEquals(listOf("child"), opened)
+    }
+
+    // Resizing the window under Robolectric swaps the shell's content branches and trips a duplicate saveable key in the harness, so the fold itself
+    // is covered by sidePanelPresentation (FullScreen neither docks nor sheets the Thread tab) and this test covers its stream half: a stream that must
+    // close (stale connection) keeps the target, and the same target opens again when the shell is fresh.
+    @Test fun aStreamThatMustCloseKeepsTheTargetAndOpensItAgain() {
+        setApp(inspecting, preopened)
+        panel("Subagent").assertExists()
+        assertEquals(listOf("child"), opened)
+        val closedBefore = inspectorClosed
+        state.value = inspecting.copy(connection = ConnectionStatus.Reconnecting, shellLive = false)
+        compose.waitForIdle()
+        assertTrue("stream closed while stale", inspectorClosed > closedBefore)
+        assertEquals(listOf("child"), opened)
+        state.value = inspecting
+        compose.waitForIdle()
+        panel("Subagent").assertExists()
+        assertEquals(listOf("child", "child"), opened)
+    }
+
+    @Test fun anotherSelectedThreadEndsTheTarget() {
+        setApp(inspecting, preopened)
+        panel("Subagent").assertExists()
+        state.value = inspecting.copy(selectedThreadId = "u")
+        compose.waitForIdle()
+        panel("Subagent").assertDoesNotExist()
+        tabPill("Subagent").assertDoesNotExist()
+    }
+
+    @Test fun theInspectorShowsItsLoadingTooLargeRefreshAndGoneStates() {
+        setApp(inspecting.copy(inspector = null), preopened)
+        compose.onNode(hasTestTag("inspector-loading")).assertExists()
+        state.value = inspecting.copy(inspector = InspectorThread("child", SideThreadKind.Subagent, error = InspectorError.TooLarge))
+        compose.waitForIdle()
+        compose.onNode(hasTestTag("inspector-too-large")).assertExists()
+        compose.onNodeWithText("Maximize").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("child"), selected)
+    }
+
+    @Test fun aFailedRefreshOffersRetryAndKeepsRowsWhenItHasThem() {
+        setApp(inspecting.copy(inspector = InspectorThread("child", SideThreadKind.Subagent, error = InspectorError.RefreshFailed)), preopened)
+        compose.onNode(hasTestTag("inspector-refresh-failed")).assertExists()
+        val before = opened.size
+        compose.onNodeWithText("Retry").performClick()
+        assertEquals(before + 1, opened.size)
+        state.value = inspecting.copy(inspector = inspected.copy(error = InspectorError.RefreshFailed))
+        compose.waitForIdle()
+        compose.onNode(hasTestTag("inspector-refresh-banner")).assertExists()
+        compose.onNode(hasText("Found three call sites") and hasAnyAncestor(pane("Subagent side panel"))).assertExists()
+    }
+
+    @Test fun aGoneThreadOffersCloseWhichLeavesTheInspector() {
+        setApp(inspecting.copy(inspector = InspectorThread("child", SideThreadKind.Subagent, error = InspectorError.Gone)), preopened)
+        compose.onNode(hasTestTag("inspector-gone")).assertExists()
+        compose.onNodeWithText("Close").performClick()
+        compose.waitForIdle()
+        panel("Subagent").assertDoesNotExist()
+    }
+
+    @Test fun aPendingRequestShowsAsANoticeWithoutAnswerButtons() {
+        val waiting = inspected.copy(requests = listOf(RuntimeRequest("r1", "Run the tests")))
+        setApp(inspecting.copy(inspector = waiting), preopened)
+        compose.onNode(hasTestTag("inspector-request:r1")).assertExists()
+        compose.onAllNodes(hasText("Allow") and hasAnyAncestor(pane("Subagent side panel"))).assertCountEquals(0)
+        compose.onAllNodes(hasText("Deny") and hasAnyAncestor(pane("Subagent side panel"))).assertCountEquals(0)
+        compose.onAllNodes(hasClickAction() and hasAnyAncestor(hasTestTag("inspector-request:r1"))).assertCountEquals(0)
+    }
+
+    @Test fun aSideChatGoesBackToItsParent() {
+        setApp(base.copy(threads = base.threads + chatThread, selectedThreadId = "chat"))
+        systemBack()
+        compose.waitForIdle()
+        assertEquals(listOf("t"), selected)
+    }
+
+    @Config(qualifiers = "w673dp-h841dp")
+    @Test fun whereNothingDocksARowOpensTheChildAsTheThreadAsBefore() {
+        setApp(inspecting.copy(localServers = withServers.localServers))
+        compose.onNodeWithContentDescription("Thread actions for Fixture thread").performClick()
+        compose.onNodeWithText("Agents (${subagentPillLabel()})").performClick()
+        compose.onNode(hasTestTag("agent-row-a")).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("child"), selected)
+        assertEquals(emptyList<String>(), opened)
     }
 
     private fun subagentPillLabel(): String = com.tajchert.trefoil.ui.subagentPill(com.tajchert.trefoil.ui.subagentRoster(emptyList(), listOf(agent)))!!.label

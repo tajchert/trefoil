@@ -26,17 +26,17 @@ internal fun ShellStart.destination(): ShellDestination = when {
 }
 
 /** What the shell's own Back handler does; null leaves Back to the screen on top (or the system). */
-internal enum class ShellBack { ToThreads, ClosePanel, ToParent, ToList }
+internal enum class ShellBack { ToThreads, CloseInspector, ClosePanel, ToParent, ToList }
 
 /**
  * Shell Back priority below dialogs, menus, the drawer and in-screen steps (spec 2 "Back / Escape Priority Stack"):
  * a secondary destination returns to Threads (the port browser, and Screens and Servers away from the rail, handle their own Back and
- * call back into the shell), then a docked side panel closes (after its content's own Back: page back, viewer to catalog), then a subagent child goes to
+ * call back into the shell), then a docked Thread tab leaves the inspector, then a docked side panel closes (after its content's own Back: page back, viewer to catalog), then a subagent child goes to
  * its parent, then a phone conversation returns to the list.
  */
 internal fun shellBack(
     destination: ShellDestination, connected: Boolean, portBrowserOpen: Boolean, twoPane: Boolean, showThread: Boolean, hasBackParent: Boolean,
-    panelDocked: Boolean = false, besideRail: Boolean = false,
+    panelDocked: Boolean = false, besideRail: Boolean = false, inspectorOpen: Boolean = false,
 ): ShellBack? = when {
     destination == ShellDestination.Usage -> ShellBack.ToThreads
     destination == ShellDestination.Machines -> if (connected) ShellBack.ToThreads else null
@@ -45,6 +45,8 @@ internal fun shellBack(
     // Beside the rail Screens and Dev servers have no leave arrow and claim Back only for their own steps (an open session, an open
     // page), so the shell returns to Threads as it does for Usage.
     destination == ShellDestination.Screens || destination == ShellDestination.Servers -> if (besideRail) ShellBack.ToThreads else null
+    // The docked Thread tab leaves the inspector first (back to the tab it was opened from, or the closed panel), not the whole panel.
+    panelDocked && inspectorOpen -> ShellBack.CloseInspector
     panelDocked -> ShellBack.ClosePanel
     hasBackParent && (twoPane || showThread) -> ShellBack.ToParent
     showThread && !twoPane -> ShellBack.ToList

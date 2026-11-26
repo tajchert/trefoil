@@ -259,5 +259,19 @@ private val bookFoldLandscape = Fold(FoldOrientation.Vertical, 414f, 427f, separ
 @PreviewTest @Preview(showBackground = true, widthDp = 1920, heightDp = 1080)
 @Composable fun Tablet_App_SidePanel_ThreePane_Desktop_Light() = App(ShellFixtures.sidePanel(), ShellStart(showThread = true, sidePanelTab = "Agents"))
 
+private val inspectThread = ShellStart(showThread = true, sidePanelTab = "Thread", inspectorThreadId = ConversationFixtures.subagentThread.id)
+
+@PreviewTest @Preview(showBackground = true, widthDp = 1280, heightDp = 800)
+@Composable fun Tablet_App_SidePanel_Thread_Light() = App(ShellFixtures.inspectorThread(), inspectThread)
+
+@PreviewTest @Preview(showBackground = true, widthDp = 1280, heightDp = 800, uiMode = NIGHT)
+@Composable fun Tablet_App_SidePanel_Thread_Dark() = App(ShellFixtures.inspectorThread(), inspectThread)
+
+@PreviewTest @Preview(showBackground = true, widthDp = 1920, heightDp = 1080)
+@Composable fun Tablet_App_SidePanel_Thread_ThreePane_Desktop_Light() = App(ShellFixtures.inspectorThread(), inspectThread)
+
+@PreviewTest @Preview(showBackground = true, widthDp = 841, heightDp = 673)
+@Composable fun Tablet_App_SidePanel_Thread_BookPosture_Light() = App(ShellFixtures.inspectorThread(), inspectThread, bookFoldLandscape)
+
 @PreviewTest @Preview(showBackground = true, widthDp = 673, heightDp = 841)
 @Composable fun Tablet_App_HeaderBudget_FoldPortrait_Light() = App(ShellFixtures.sidePanel(), ShellStart(showThread = true))

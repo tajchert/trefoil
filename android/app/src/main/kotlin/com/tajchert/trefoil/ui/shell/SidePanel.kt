@@ -1,6 +1,8 @@
 package com.tajchert.trefoil.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +41,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.core.model.ModelOption
 import com.tajchert.trefoil.core.model.ProviderInstance
+import com.tajchert.trefoil.core.model.SideThreadKind
 import com.tajchert.trefoil.ui.SubagentRoster
 import com.tajchert.trefoil.ui.Tf
 import com.tajchert.trefoil.ui.TfIcons
@@ -52,14 +55,24 @@ import kotlinx.coroutines.delay
 import com.tajchert.trefoil.ui.adaptive.handPointer
 import com.tajchert.trefoil.ui.adaptive.focusRing
 
-/** Tabs of the side panel beside the conversation, in header order. Saved by name only. */
-internal enum class SidePanelTab(val label: String) { Preview("Preview"), Screens("Screens"), Agents("Agents") }
+/**
+ * Tabs of the side panel beside the conversation, in header order. Saved by name only. [Thread] is the read-only inspector of a subagent
+ * or side chat; its pill is labelled by the inspected thread's kind ([threadTabLabel]) and the tab exists only while a target is set.
+ */
+internal enum class SidePanelTab(val label: String) { Preview("Preview"), Screens("Screens"), Agents("Agents"), Thread("Thread") }
 
-/** Which tabs exist: Preview with dev servers for this machine, Screens with the rail's Screens entry, Agents with a roster. */
-internal fun sidePanelTabs(preview: Boolean, screens: Boolean, agents: Boolean): List<SidePanelTab> = buildList {
+/** The Thread tab's pill label: "Side chat" for a side chat, "Subagent" for any subagent thread. */
+internal fun threadTabLabel(kind: SideThreadKind?): String = if (kind == SideThreadKind.SideChat) "Side chat" else "Subagent"
+
+/**
+ * Which tabs exist: Preview with dev servers for this machine, Screens with the rail's Screens entry, Agents with a roster, Thread while an
+ * inspector target is set.
+ */
+internal fun sidePanelTabs(preview: Boolean, screens: Boolean, agents: Boolean, thread: Boolean = false): List<SidePanelTab> = buildList {
     if (preview) add(SidePanelTab.Preview)
     if (screens) add(SidePanelTab.Screens)
     if (agents) add(SidePanelTab.Agents)
+    if (thread) add(SidePanelTab.Thread)
 }
 
 /**
@@ -100,25 +113,30 @@ internal fun sidePanelPresentation(destination: ShellDestination, tab: SidePanel
         SidePanelTab.Preview -> SidePanelPresentation(ShellDestination.Servers, agentsSheet = false, docked = false)
         SidePanelTab.Screens -> SidePanelPresentation(ShellDestination.Screens, agentsSheet = false, docked = false)
         SidePanelTab.Agents -> SidePanelPresentation(ShellDestination.Threads, agentsSheet = true, docked = false)
+        // The inspector has no narrow form: nothing docks and no sheet opens. The target survives (it lives in the shell), so docking
+        // again reopens the inspected thread; the child itself is reached through select() from the Agents sheet.
+        SidePanelTab.Thread -> SidePanelPresentation(ShellDestination.Threads, agentsSheet = false, docked = false)
     }
 }
 
 /**
- * Panel chrome: a 64dp header (the conversation header's height) with one pill per tab, the selected tab's single [action] when it has
- * one, and Close, then the selected tab's content filling the rest.
+ * Panel chrome: a 64dp header (the conversation header's height) with one pill per tab, the selected tab's [actions] (at most
+ * [SidePanelHost.MAX_ACTIONS], left to right) and Close, then the selected tab's content filling the rest. [threadLabel] names the Thread tab.
  */
 @Composable
 internal fun SidePanel(
     tabs: List<SidePanelTab>, selected: SidePanelTab, disabled: Set<SidePanelTab>, onSelect: (SidePanelTab) -> Unit, onClose: () -> Unit,
-    tabsFocus: FocusRequester, modifier: Modifier = Modifier, action: PanelAction? = null, content: @Composable (SidePanelTab) -> Unit,
+    tabsFocus: FocusRequester, modifier: Modifier = Modifier, actions: List<PanelAction> = emptyList(), threadLabel: String = SidePanelTab.Thread.label,
+    content: @Composable (SidePanelTab) -> Unit,
 ) {
     val c = Tf.colors
-    Column(modifier.fillMaxSize().background(c.bg).paneGroup("${selected.label} side panel", PaneOrder.SidePanel)) {
+    fun labelOf(tab: SidePanelTab) = if (tab == SidePanelTab.Thread) threadLabel else tab.label
+    Column(modifier.fillMaxSize().background(c.bg).paneGroup("${labelOf(selected)} side panel", PaneOrder.SidePanel)) {
         Row(Modifier.fillMaxWidth().height(64.dp).background(c.s1).padding(start = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).focusRequester(tabsFocus).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                tabs.forEach { tab -> SidePanelTabPill(tab, tab == selected, tab !in disabled) { onSelect(tab) } }
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).focusRequester(tabsFocus).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                tabs.forEach { tab -> SidePanelTabPill(labelOf(tab), tab == selected, tab !in disabled) { onSelect(tab) } }
             }
-            if (action != null) {
+            actions.take(SidePanelHost.MAX_ACTIONS).forEach { action ->
                 TfIconButton(action.icon, action.description, action.onClick, Modifier.size(48.dp), enabled = action.enabled, iconSize = 22.dp, tint = if (action.enabled) c.text else c.muted)
                 Spacer(Modifier.width(4.dp))
             }
@@ -130,11 +148,11 @@ internal fun SidePanel(
 }
 
 @Composable
-private fun SidePanelTabPill(tab: SidePanelTab, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun SidePanelTabPill(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val c = Tf.colors
     Box(Modifier.heightIn(min = 48.dp).focusRing().handPointer(enabled).selectable(selected, enabled = enabled, role = Role.Tab, onClick = onClick), contentAlignment = Alignment.Center) {
         Box(Modifier.clip(RoundedCornerShape(16.dp)).background(if (selected) c.s3 else c.s1).padding(horizontal = 12.dp, vertical = 6.dp)) {
-            Text(tab.label, style = TrefoilType.meta.copy(color = when { !enabled -> c.muted.copy(alpha = .5f); selected -> c.text; else -> c.muted }), maxLines = 1)
+            Text(label, style = TrefoilType.meta.copy(color = when { !enabled -> c.muted.copy(alpha = .5f); selected -> c.text; else -> c.muted }), maxLines = 1)
         }
     }
 }

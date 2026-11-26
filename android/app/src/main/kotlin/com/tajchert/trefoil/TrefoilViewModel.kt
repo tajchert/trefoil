@@ -867,6 +867,9 @@ class TrefoilViewModel internal constructor(
     fun steerQueued(runId: String) = queueOperation("Could not send the queued message now. Check the queue before trying again.") { client.steerQueuedMessage(runId) }
     fun resumeQueue() = queueOperation("Could not resume the queue. Check the thread status before trying again.") { client.resumeQueue() }
     fun loadActivity(id: String) = action("Could not load activity output. Reconnect and try again.") { client.loadActivity(id) }
+    /** Streams a side thread of the selected thread into the inspector pane (read-only; never a mutation, so a failure only shows a notice). */
+    fun openInspector(id: String) = action("Could not open the thread. Check the connection and try again.") { client.openInspector(id) }
+    fun closeInspector() = client.closeInspector()
     fun stopSubagent(id: String) = mutation("Agent stop failed or its outcome is uncertain. Check the agent before trying again.") { client.stopSubagent(id) }
     fun threadAction(target: ThreadTarget, operation: ThreadAction, value: String?) = mutation("Could not update thread. Check its status before trying again.") { client.threadAction(target, operation, value) }
     fun undoSettlement(undo: SettlementUndo) = mutation("Could not undo settlement. Check the thread status.") { client.undoSettlement(undo) }

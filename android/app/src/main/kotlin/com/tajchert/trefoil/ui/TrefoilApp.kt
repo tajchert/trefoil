@@ -54,7 +54,10 @@ import com.tajchert.trefoil.ui.adaptive.HingeAt
 import com.tajchert.trefoil.ui.adaptive.SidePanelMode
 import com.tajchert.trefoil.ui.ports.chipPorts
 import com.tajchert.trefoil.ui.shell.SidePanel
+import com.tajchert.trefoil.ui.shell.PanelAction
+import com.tajchert.trefoil.ui.shell.PanelActionsEffect
 import com.tajchert.trefoil.ui.shell.SidePanelAgents
+import com.tajchert.trefoil.ui.shell.threadTabLabel
 import com.tajchert.trefoil.ui.shell.SidePanelTab
 import com.tajchert.trefoil.ui.shell.SidePanelHost
 import com.tajchert.trefoil.ui.shell.SidePanelToggle
@@ -112,6 +115,10 @@ data class ShellStart(
     val listCollapsed: Boolean = false,
     /** Opens this side panel tab by name ("Preview", "Screens", "Agents"); docked or mapped as the window allows. */
     val sidePanelTab: String? = null,
+    /** Starts with this side thread (a child of the selected thread) as the inspector target; pair it with sidePanelTab = "Thread". */
+    val inspectorThreadId: String? = null,
+    /** The side panel tab (by name) Back returns to from the inspector; null closes the panel. */
+    val inspectorFrom: String? = null,
 )
 
 /** How long a notification tap's selected thread may take to reach this composition before it is shown. */
@@ -154,6 +161,9 @@ fun TrefoilApp(
     onUndoSettlement: (SettlementUndo) -> Unit = {},
     machineProbes: Map<String, MachineProbe> = emptyMap(),
     onStopSubagent: (String) -> Unit = {},
+    /** Streams a side thread of the selected thread into [ClientState.inspector]; the shell closes it again when the Thread tab is not shown. */
+    onOpenInspector: (String) -> Unit = {},
+    onCloseInspector: () -> Unit = {},
     usage: UsageUiState = UsageUiState(),
     onOpenUsage: () -> Unit = {},
     onUsageRange: (UsageRange) -> Unit = {},
@@ -207,18 +217,28 @@ fun TrefoilApp(
         var sidePanelTabName by rememberSaveable { mutableStateOf(start.sidePanelTab) }
         var lastPanelTabName by rememberSaveable { mutableStateOf(start.sidePanelTab) }
         var panelEnvironment by rememberSaveable { mutableStateOf(environmentId) }
-        if (environmentId != null && panelEnvironment != environmentId) { panelEnvironment = environmentId; sidePanelTabName = null }
+        // The inspected side thread behind the Thread tab: its id, the tab it was opened from (Back returns there) and the selected thread it
+        // belongs to. Saved with the panel; the stream itself is opened and closed by the effect below, never saved.
+        var inspectorThreadId by rememberSaveable { mutableStateOf(start.inspectorThreadId) }
+        var inspectorFrom by rememberSaveable { mutableStateOf(start.inspectorFrom) }
+        var inspectorParent by rememberSaveable { mutableStateOf(start.inspectorThreadId?.let { state.selectedThreadId }) }
+        val dropInspector: () -> Unit = { inspectorThreadId = null; inspectorFrom = null; if (sidePanelTabName == SidePanelTab.Thread.name) sidePanelTabName = null }
+        if (environmentId != null && panelEnvironment != environmentId) { panelEnvironment = environmentId; sidePanelTabName = null; dropInspector() }
+        // The target belongs to the thread that was selected when it was set (and never to a draft): another selection or a draft ends it.
+        if (inspectorThreadId != null && (draft != null || (state.selectedThreadId != null && state.selectedThreadId != inspectorParent))) dropInspector()
         val savedPanelTab = SidePanelTab.entries.firstOrNull { it.name == sidePanelTabName }
-        // Closing the panel ends what only the panel showed, whichever tab is in front: a page in Preview and a viewer in Screens.
-        // Nothing live (a tunnel page, a screen stream) stays open behind a closed panel; switching tabs keeps both.
+        // Closing the panel ends what only the panel showed, whichever tab is in front: a page in Preview, a viewer in Screens and the
+        // inspected thread. Nothing live (a tunnel page, a screen stream) stays open behind a closed panel; switching tabs keeps all of it.
         val closePanel: () -> Unit = {
             if (portBrowser != null) onClosePortBrowser()
             screenFullscreen = false; onCloseScreen()
             sidePanelTabName = null
+            inspectorThreadId = null; inspectorFrom = null
         }
         // Every destination change (rail, drawer, menus, Back out of a destination) closes the side panel.
         val navigate: (ShellDestination) -> Unit = { if (sidePanelTabName != null) closePanel(); savedDestination = it; destinationEnvironment = environmentId }
-        val openPanel: (SidePanelTab) -> Unit = { sidePanelTabName = it.name; lastPanelTabName = it.name; panelEnvironment = environmentId }
+        // The Thread tab is never the "last used" tab: it only exists while its target does.
+        val openPanel: (SidePanelTab) -> Unit = { sidePanelTabName = it.name; if (it != SidePanelTab.Thread) lastPanelTabName = it.name; panelEnvironment = environmentId }
         // "Dock beside thread": the open browser leaves the Servers destination for the Preview tab in one state change (same composition).
         val dockBrowserBesideThread: () -> Unit = {
             savedDestination = ShellDestination.Threads; destinationEnvironment = environmentId; openPanel(SidePanelTab.Preview)
@@ -295,8 +315,8 @@ fun TrefoilApp(
         val selectedThread = state.threads.firstOrNull { it.id == state.selectedThreadId }
         val roster = remember(state.runs, state.subagents) { if (state.subagents.isEmpty()) null else subagentRoster(state.runs, state.subagents) }
         val pill = remember(roster) { roster?.let { subagentPill(it) } }
-        // A subagent child goes back to its parent when that parent is loaded, otherwise to the list.
-        val parentThread = if (draft != null || selectedThread?.relationshipToParent != "subagent") null
+        // A subagent child or side chat goes back to its parent when that parent is loaded, otherwise to the list.
+        val parentThread = if (draft != null || selectedThread == null || (selectedThread.relationshipToParent != "subagent" && !selectedThread.sideChat)) null
             else selectedThread.parentThreadId?.let { id -> state.threads.firstOrNull { it.id == id } }
         // Back only targets the parent when it can load; offline, an uncached parent would fail and trap back on the child.
         val backParent = parentThread?.takeIf { state.connection == ConnectionStatus.Connected }
@@ -434,7 +454,7 @@ fun TrefoilApp(
                 val listState = rememberShellListState(policy, environmentId, start.listCollapsed)
                 // Side panel tabs: Preview with dev servers, Screens with the rail's Screens entry (disabled with it), Agents with a roster.
                 val entries = navEntries(state, shell)
-                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null)
+                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null, thread = inspectorThreadId != null)
                 val panelDisabled = if (entries.screensEnabled) emptySet() else setOf(SidePanelTab.Screens)
                 val panelTab = resolveSidePanelTab(savedPanelTab, panelTabs, panelDisabled)
                 // A saved tab that went away (roster gone, servers unsupported) is replaced by what is shown, so the toggle and Back agree with the screen.
@@ -460,10 +480,36 @@ fun TrefoilApp(
                 val machines = !connected || choosingEnvironment
                 val closePanelToToggle: () -> Unit = { closePanel(); focusRequest = toggleFocus }
                 val openPanelTab: (SidePanelTab) -> Unit = { openPanel(it); focusRequest = panelTabsFocus }
-                val back = shellBack(destination, connected, browserHosted, twoPane, showThread, backParent != null, panelDocked = docked, besideRail = besideRail)
+                // The inspector: the Thread tab of a docked panel, with its side thread streamed only while that tab is in front and the shell is
+                // fresh. Folding to a window without a docked panel closes the stream but keeps the target, so docking again reopens it.
+                val inspectorKind = inspectorThreadId?.let { id -> state.threads.firstOrNull { it.id == id }?.sideThreadKind() ?: state.inspector?.takeIf { it.threadId == id }?.kind } ?: SideThreadKind.Subagent
+                val inspectorShown = docked && panelTab == SidePanelTab.Thread && inspectorThreadId != null
+                val inspectorStreamId = inspectorThreadId.takeIf { inspectorShown && shellFresh(state) }
+                LaunchedEffect(inspectorStreamId) { if (inspectorStreamId != null) onOpenInspector(inspectorStreamId) else onCloseInspector() }
+                // Leaves the inspector for the tab it was opened from (when that tab still exists) or closes the panel.
+                val leaveInspector: () -> Unit = {
+                    val from = inspectorFrom?.let { name -> panelTabs.firstOrNull { it.name == name } }?.takeIf { it != SidePanelTab.Thread && it !in panelDisabled }
+                    onCloseInspector()
+                    inspectorThreadId = null; inspectorFrom = null
+                    if (from != null) { openPanel(from); focusRequest = panelTabsFocus } else closePanelToToggle()
+                }
+                // Maximize: the side thread becomes the selected one and the panel closes with it.
+                val maximizeInspector: (String) -> Unit = { id -> onCloseInspector(); closePanel(); focusRequest = toggleFocus; select(id) }
+                // A subagent or side chat of the selected thread opens in the Thread tab of a dockable window; anywhere else it opens as the thread.
+                val openSideThread: (String) -> Unit = { id ->
+                    val child = state.threads.firstOrNull { it.id == id }
+                    if (canDock && connected && hasConversation && draft == null && child?.sideThreadKind() != null && child.parentThreadId == state.selectedThreadId) {
+                        showAgents = false
+                        inspectorFrom = if (docked) panelTab?.takeIf { it != SidePanelTab.Thread }?.name ?: inspectorFrom else null
+                        inspectorThreadId = id; inspectorParent = state.selectedThreadId
+                        openPanel(SidePanelTab.Thread); focusRequest = panelTabsFocus
+                    } else openAgent(id)
+                }
+                val back = shellBack(destination, connected, browserHosted, twoPane, showThread, backParent != null, panelDocked = docked, besideRail = besideRail, inspectorOpen = inspectorShown)
                 BackHandler(back != null) {
                     when (back) {
                         ShellBack.ToThreads -> navigate(ShellDestination.Threads)
+                        ShellBack.CloseInspector -> leaveInspector()
                         ShellBack.ClosePanel -> closePanelToToggle()
                         ShellBack.ToParent -> backParent?.let { select(it.id) }
                         ShellBack.ToList -> { cancelDraft(); showThread = false }
@@ -580,9 +626,12 @@ fun TrefoilApp(
                                     onBack = if (backParent != null) ({ select(backParent.id) }) else if (twoPane) null else ({ cancelDraft(); showThread = false }),
                                     onOpenParent = parentThread?.let { p -> { select(p.id) } },
                                     onOpenAgents = if (roster != null) openAgents else null,
-                                    onOpenThread = openAgent,
+                                    onOpenThread = openSideThread,
                                     otherNeedsYou = otherNeedsYou,
-                                    subtitle = selectedThread?.takeIf { draft == null && it.relationshipToParent == "subagent" }?.let { t -> parentThread?.let { "Subagent of ${it.title}" } ?: "Subagent" },
+                                    subtitle = selectedThread?.takeIf { draft == null && (it.relationshipToParent == "subagent" || it.sideChat) }?.let { t ->
+                                        val label = if (t.sideChat) "Side chat" else "Subagent"
+                                        parentThread?.let { "$label of ${it.title}" } ?: label
+                                    },
                                     actions = {
                                         if (selectedThreadActionsVisible(twoPane, showThread, draft, state.selectedThreadId)) {
                                             if (pill != null && budget.agentsChip) AgentsChip(pill, openAgents)
@@ -651,12 +700,17 @@ fun TrefoilApp(
                             list = { list(Modifier.fillMaxSize()) }, detail = { detail(Modifier.fillMaxSize()) }, transient = transient,
                             sidePanel = if (docked && panelTab != null) ({
                                 SidePanel(panelTabs, panelTab, panelDisabled, openPanelTab, closePanelToToggle, panelTabsFocus,
-                                    Modifier.statusBarsPadding().windowInsetsPadding(BottomBarsAndIme), action = panelHost.action) { tab ->
+                                    Modifier.statusBarsPadding().windowInsetsPadding(BottomBarsAndIme), actions = panelHost.shown, threadLabel = threadTabLabel(inspectorKind)) { tab ->
                                     when (tab) {
                                         SidePanelTab.Preview -> devServersSurface(Modifier.fillMaxSize())
                                         SidePanelTab.Screens -> screensSurface(Modifier.fillMaxSize())
                                         // Opening a child keeps the roster beside it; the tab follows the new thread's roster.
-                                        SidePanelTab.Agents -> roster?.let { SidePanelAgents(it, state.providers, state.models, steadyWrite, select, onStopSubagent, Modifier.fillMaxSize()) }
+                                        SidePanelTab.Agents -> roster?.let { SidePanelAgents(it, state.providers, state.models, steadyWrite, openSideThread, onStopSubagent, Modifier.fillMaxSize()) }
+                                        // The read-only inspector of a subagent or side chat; its header actions are offered to the tab bar while it shows.
+                                        SidePanelTab.Thread -> inspectorThreadId?.let { id ->
+                                            PanelActionsEffect(panelHost, true, listOf(PanelAction(InspectorIcons.Maximize, "Maximize thread", live) { maximizeInspector(id) }))
+                                            InspectorThreadPane(state, id, inspectorKind, onRetry = { onOpenInspector(id) }, onMaximize = { maximizeInspector(id) }, onClose = leaveInspector, modifier = Modifier.fillMaxSize())
+                                        }
                                     }
                                 }
                             }) else null)

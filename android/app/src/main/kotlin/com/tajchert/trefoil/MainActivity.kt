@@ -241,6 +241,8 @@ class MainActivity : ComponentActivity() {
                 onSteerQueued = model::steerQueued,
                 onResumeQueue = model::resumeQueue,
                 onStopSubagent = model::stopSubagent,
+                onOpenInspector = model::openInspector,
+                onCloseInspector = model::closeInspector,
                 onThreadAction = model::threadAction,
                 isRefreshing = refreshing,
                 onRefresh = model::refresh,

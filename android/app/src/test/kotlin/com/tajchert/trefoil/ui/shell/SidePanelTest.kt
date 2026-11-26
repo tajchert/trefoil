@@ -1,11 +1,23 @@
 package com.tajchert.trefoil.ui.shell
 
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+import com.tajchert.trefoil.core.model.InspectorError
+import com.tajchert.trefoil.core.model.InspectorThread
+import com.tajchert.trefoil.core.model.ClientState
+import com.tajchert.trefoil.core.model.ConversationMessage
+import com.tajchert.trefoil.core.model.SideThreadKind
+import com.tajchert.trefoil.ui.InspectorPaneMode
+import com.tajchert.trefoil.ui.inspectorConversationState
+import com.tajchert.trefoil.ui.inspectorNotice
+import com.tajchert.trefoil.ui.inspectorPaneMode
 import com.tajchert.trefoil.ui.adaptive.SidePanelMode
 import com.tajchert.trefoil.ui.adaptive.WindowSpec
 import com.tajchert.trefoil.ui.adaptive.shellPolicy
 import com.tajchert.trefoil.ui.shell.SidePanelTab.Agents
 import com.tajchert.trefoil.ui.shell.SidePanelTab.Preview
 import com.tajchert.trefoil.ui.shell.SidePanelTab.Screens
+import com.tajchert.trefoil.ui.shell.SidePanelTab.Thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -118,5 +130,88 @@ class SidePanelTest {
         assertEquals("Dev servers (:5173)", serversMenuLabel(listOf(5173)))
         assertEquals("Dev servers (3)", serversMenuLabel(listOf(3000, 5173, 8080)))
         assertFalse(serversMenuLabel(listOf(1)).isEmpty())
+    }
+
+    @Test fun theThreadTabExistsOnlyWhileATargetIsSetAndComesLast() {
+        assertEquals(listOf(Preview, Screens, Agents, Thread), sidePanelTabs(preview = true, screens = true, agents = true, thread = true))
+        assertEquals(listOf(Thread), sidePanelTabs(preview = false, screens = false, agents = false, thread = true))
+        assertEquals(listOf(Preview, Screens, Agents), sidePanelTabs(preview = true, screens = true, agents = true))
+        assertEquals("Side chat", threadTabLabel(SideThreadKind.SideChat))
+        assertEquals("Subagent", threadTabLabel(SideThreadKind.Subagent))
+        assertEquals("Subagent", threadTabLabel(SideThreadKind.ProviderSubagent))
+        assertEquals("Subagent", threadTabLabel(null))
+        // Without its target the saved Thread tab falls back like any tab that went away; disabled tabs are no fallback.
+        assertEquals(Preview, resolveSidePanelTab(Thread, listOf(Preview, Screens)))
+        assertNull(resolveSidePanelTab(Thread, listOf(Screens), disabled = setOf(Screens)))
+        assertEquals(Thread, resolveSidePanelTab(Thread, listOf(Agents, Thread)))
+        // The toggle never opens a Thread tab by itself.
+        assertEquals(Agents, sidePanelOpenTarget(null, listOf(Agents, Thread)))
+    }
+
+    @Test fun aNarrowWindowNeitherDocksNorOpensASheetForTheThreadTab() {
+        val t = ShellDestination.Threads
+        // The target survives in the shell; the presentation just shows the thread itself.
+        assertEquals(SidePanelPresentation(t, false, false), sidePanelPresentation(t, Thread, SidePanelMode.FullScreen))
+        assertEquals(SidePanelPresentation(t, false, true), sidePanelPresentation(t, Thread, SidePanelMode.ReplacesList))
+        assertEquals(SidePanelPresentation(ShellDestination.Usage, false, false), sidePanelPresentation(ShellDestination.Usage, Thread, SidePanelMode.ThirdPane))
+    }
+
+    @Test fun backLeavesTheInspectorBeforeClosingThePanel() {
+        assertEquals(ShellBack.CloseInspector, shellBack(ShellDestination.Threads, true, false, true, false, hasBackParent = true, panelDocked = true, inspectorOpen = true))
+        // Not docked (folded), the inspector is not on screen: Back is the thread's own.
+        assertEquals(ShellBack.ToParent, shellBack(ShellDestination.Threads, true, false, true, false, hasBackParent = true, panelDocked = false, inspectorOpen = true))
+        assertEquals(ShellBack.ClosePanel, shellBack(ShellDestination.Threads, true, false, true, false, hasBackParent = true, panelDocked = true, inspectorOpen = false))
+        // The page or viewer inside and the secondary destinations keep their priority.
+        assertNull(shellBack(ShellDestination.Threads, true, portBrowserOpen = true, twoPane = true, showThread = false, hasBackParent = false, panelDocked = true, inspectorOpen = true))
+        assertEquals(ShellBack.ToThreads, shellBack(ShellDestination.Usage, true, false, true, false, hasBackParent = false, panelDocked = true, inspectorOpen = true))
+    }
+
+    private val icon = ImageVector.Builder("x", 1.dp, 1.dp, 1f, 1f).build()
+
+    @Test fun theHeaderShowsTheListFormOrTheSingleActionAndAtMostTwo() {
+        val host = SidePanelHost()
+        assertEquals(emptyList<PanelAction>(), host.shown)
+        val single = PanelAction(icon, "Refresh", true) {}
+        host.action = single
+        assertEquals(listOf(single), host.shown)
+        val a = PanelAction(icon, "Maximize", true) {}
+        val b = PanelAction(icon, "Add to chat", true) {}
+        val c = PanelAction(icon, "Third", true) {}
+        host.actionList = listOf(a, b, c)
+        assertEquals(listOf(a, b), host.shown)
+        host.actionList = emptyList()
+        assertEquals(listOf(single), host.shown)
+    }
+
+    @Test fun theInspectorPaneStateFollowsTheSnapshotAndItsError() {
+        val row = ConversationMessage("m", "assistant", "text")
+        fun inspector(ready: Boolean = true, error: InspectorError? = null, rows: Boolean = true, id: String = "child") =
+            InspectorThread(id, SideThreadKind.Subagent, ready = ready, error = error, messages = if (rows) listOf(row) else emptyList())
+        assertEquals(InspectorPaneMode.Loading, inspectorPaneMode(null, "child"))
+        // A snapshot of another thread is no snapshot of this one (the stream was just retargeted).
+        assertEquals(InspectorPaneMode.Loading, inspectorPaneMode(inspector(id = "other"), "child"))
+        assertEquals(InspectorPaneMode.Loading, inspectorPaneMode(inspector(ready = false, rows = false), "child"))
+        assertEquals(InspectorPaneMode.Rows, inspectorPaneMode(inspector(), "child"))
+        // Cached rows repaint while the stream catches up.
+        assertEquals(InspectorPaneMode.Rows, inspectorPaneMode(inspector(ready = false), "child"))
+        assertEquals(InspectorPaneMode.Rows, inspectorPaneMode(inspector(rows = false), "child"))
+        assertEquals(InspectorPaneMode.TooLarge, inspectorPaneMode(inspector(error = InspectorError.TooLarge), "child"))
+        assertEquals(InspectorPaneMode.Gone, inspectorPaneMode(inspector(error = InspectorError.Gone), "child"))
+        assertEquals(InspectorPaneMode.RefreshFailed, inspectorPaneMode(inspector(error = InspectorError.RefreshFailed, rows = false), "child"))
+        assertEquals(InspectorPaneMode.Rows, inspectorPaneMode(inspector(error = InspectorError.RefreshFailed), "child"))
+    }
+
+    @Test fun theInspectedConversationNeverWritesAndLeavesTheSelectedThreadsOwnStateBehind() {
+        val own = InspectorThread("child", SideThreadKind.SideChat, ready = true, messages = listOf(ConversationMessage("m", "assistant", "inspected")), activeRunId = "run")
+        val selected = ClientState(selectedThreadId = "parent", canWrite = true, canWriteThreads = true, busy = true, canStop = true, canSteer = true, queueHeld = true,
+            messages = listOf(ConversationMessage("p", "user", "parent row")), inspector = own)
+        val derived = inspectorConversationState(selected, own, "child")
+        assertEquals("child", derived.selectedThreadId)
+        assertEquals(listOf("m"), derived.messages.map { it.id })
+        assertEquals("run", derived.activeRunId)
+        assertTrue(!derived.canWrite && !derived.canWriteThreads && !derived.busy && !derived.canStop && !derived.canSteer && !derived.queueHeld)
+        // A snapshot of another thread contributes no rows.
+        assertEquals(emptyList<ConversationMessage>(), inspectorConversationState(selected, own, "other").messages)
+        assertEquals("Read-only here · maximize to reply", inspectorNotice(SideThreadKind.SideChat))
     }
 }

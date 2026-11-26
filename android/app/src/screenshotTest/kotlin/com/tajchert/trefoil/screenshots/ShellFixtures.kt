@@ -2,9 +2,12 @@ package com.tajchert.trefoil.screenshots
 
 import com.tajchert.trefoil.core.model.ClientState
 import com.tajchert.trefoil.core.model.ConnectionStatus
+import com.tajchert.trefoil.core.model.ConversationMessage
+import com.tajchert.trefoil.core.model.InspectorThread
 import com.tajchert.trefoil.core.model.LocalServerCatalog
 import com.tajchert.trefoil.core.model.MachineProbe
 import com.tajchert.trefoil.core.model.SavedEnvironment
+import com.tajchert.trefoil.core.model.SideThreadKind
 import com.tajchert.trefoil.core.model.SshHostKey
 import com.tajchert.trefoil.core.model.SshProfile
 import com.tajchert.trefoil.ui.ShellActions
@@ -56,6 +59,24 @@ internal object ShellFixtures {
         ),
         screens = FormFactorFixtures.screensState().screens,
     )
+    /**
+     * The Thread tab: the sidePanel conversation with the running subagent "Audit SSH host key handling" open read-only beside it. The child is a
+     * thread of the selected one, and its streamed rows arrive as [ClientState.inspector].
+     */
+    fun inspectorThread(): ClientState = sidePanel().let { state ->
+        val child = ConversationFixtures.subagentThread.copy(parentThreadId = ConversationFixtures.thread.id, relationshipToParent = "subagent")
+        state.copy(
+            threads = state.threads + child, shellLive = true,
+            inspector = InspectorThread(
+                child.id, SideThreadKind.Subagent, ready = true,
+                messages = listOf(
+                    ConversationMessage(id = "i1", role = "user", text = "Audit how host keys are pinned and what happens when one changes.", ordinal = 1),
+                    ConversationMessage(id = "i2", role = "assistant", text = "Host keys are pinned on first use. A changed key fails closed before authentication, and the mismatch is reported to the caller.", ordinal = 4),
+                ),
+                activities = listOf(ConversationFixtures.readActivity.copy(ordinal = 2), ConversationFixtures.readActivity2.copy(ordinal = 3)),
+            ),
+        )
+    }
     /** Nothing connected: the Machines first-run state. */
     fun nothingConnected(): ClientState = ClientState()
 }

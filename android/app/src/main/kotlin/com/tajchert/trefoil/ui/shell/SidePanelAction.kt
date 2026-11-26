@@ -19,6 +19,14 @@ class PanelAction(val icon: ImageVector, val description: String, val enabled: B
 @Stable
 class SidePanelHost {
     var action by mutableStateOf<PanelAction?>(null)
+
+    /** The list form, for a tab with more than one action (the Thread tab: Maximize, Add to chat). Wins over [action] while non-empty. */
+    var actionList by mutableStateOf<List<PanelAction>>(emptyList())
+
+    /** What the tab bar draws left of Close: the list form while a tab offers it, otherwise the single action. At most [MAX_ACTIONS]. */
+    val shown: List<PanelAction> get() = actionList.ifEmpty { listOfNotNull(action) }.take(MAX_ACTIONS)
+
+    companion object { const val MAX_ACTIONS = 2 }
 }
 
 /**
@@ -33,5 +41,21 @@ fun PanelActionEffect(host: SidePanelHost?, active: Boolean, icon: ImageVector, 
         val mine = PanelAction(icon, description, enabled) { latest() }
         host.action = mine
         onDispose { if (host.action === mine) host.action = null }
+    }
+}
+
+/**
+ * The list form of [PanelActionEffect]: offers up to [SidePanelHost.MAX_ACTIONS] actions in order while [active]. Click handlers are the
+ * latest ones; the offer is replaced when an icon, name or enabled flag changes and is removed only if it is still this one's.
+ */
+@Composable
+fun PanelActionsEffect(host: SidePanelHost?, active: Boolean, actions: List<PanelAction>) {
+    if (host == null || !active) return
+    val latest by rememberUpdatedState(actions)
+    val key = actions.take(SidePanelHost.MAX_ACTIONS).map { Triple(it.icon, it.description, it.enabled) }
+    DisposableEffect(host, key) {
+        val mine = key.mapIndexed { i, (icon, description, enabled) -> PanelAction(icon, description, enabled) { latest.getOrNull(i)?.onClick?.invoke() } }
+        host.actionList = mine
+        onDispose { if (host.actionList === mine) host.actionList = emptyList() }
     }
 }
