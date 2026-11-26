@@ -76,6 +76,8 @@ class T3Client(
      * pool. A shared pool is never evicted by [close]; null gives this client a private pool that [close] evicts.
      */
     http: OkHttpClient? = null,
+    /** How long [startSideChat] waits for the shell to list the forked side chat before giving up; tests lower it. */
+    private val sideChatShellWaitMillis: Long = 10_000,
 ) : TrefoilClient {
     private val authorizer = tokens.authorizer
     private var renewJob: Job? = null
@@ -1742,13 +1744,98 @@ class T3Client(
     }
     /** T3 requires creation provenance on every `message.dispatch`; the server stamps `createdBy` itself. */
     private fun JsonObjectBuilder.provenance() { put("createdBy", "user"); put("creationSource", CREATION_SOURCE) }
+    /**
+     * T3 `message.dispatch` `context`: one record per thread reference marker in [text] that names a thread of this
+     * environment, so the server can tell the agent how to read it. Nothing when [text] has no resolvable marker.
+     * Caller holds [lifecycleLock].
+     */
+    private fun JsonObjectBuilder.threadContext(text: String) {
+        val environmentId = state.value.environment?.id ?: return
+        val records = threadContextRecords(text, state.value.threads, environmentId) ?: return
+        put("context", buildJsonObject { put("version", 1); put("records", records) })
+    }
     override suspend fun sendMessage(text: String) {
         require(text.isNotBlank()) { "Message is empty" }
         dispatch("message.dispatch", "message") { buildJsonObject {
             provenance()
             put("messageId", UUID.randomUUID().toString()); put("text", text); put("attachments", JsonArray(emptyList()))
+            threadContext(text)
             put("dispatchMode", buildJsonObject { put("type", messageDispatchMode(state.value)) })
         } }
+    }
+    /* Side chat start adapted from T3 Code mobile `useStartSideChat` (MIT).
+     * Copyright (c) 2026 T3 Tools Inc. See licenses/T3-Code-MIT.txt.
+     */
+    /**
+     * Forks the selected thread at its latest stable point into a side chat (`thread.fork` with a client-chosen target id and
+     * `sideChat: true`), waits for the shell to list it, then sends [question] there (`message.dispatch`). The selected thread
+     * stays selected. Each command is sent once through [mutation]: an uncertain fork or message fails the session and is
+     * never replayed. When the side chat never reaches the shell, or its message is definitely rejected, one
+     * `thread.delete {onlyIfUnused: true}` drops the empty side chat (a no-op once it has a message). The message carries the
+     * same fields as [sendMessage] (no model or runtime mode), so the side chat runs with the settings it forked.
+     */
+    override suspend fun startSideChat(question: String): String = mutating {
+        require(question.isNotBlank()) { "Message is empty" }
+        awaitFreshThread()
+        val target = UUID.randomUUID().toString()
+        val (session, fork) = synchronized(lifecycleLock) {
+            requireWrite()
+            val current = state.value
+            check(current.sideChatsSupported) { "This server does not support side chats" }
+            val parentId = current.selectedThreadId ?: error("Select a thread")
+            val parent = current.threads.firstOrNull { it.id == parentId } ?: error("Select a thread")
+            check(parent.sideThreadKind() == null) { "Side chats start from a main conversation" }
+            check(parent.latestUserMessageAt != null || current.messages.any { it.role == "user" }) { "Send a first message before starting a side chat" }
+            threadSession() to buildJsonObject {
+                put("type", "thread.fork"); put("commandId", UUID.randomUUID().toString())
+                provenance()
+                put("sourceThreadId", parentId); put("targetThreadId", target)
+                put("sourcePoint", buildJsonObject { put("type", "latest_stable") })
+                put("title", SIDE_CHAT_TITLE); put("sideChat", true)
+            }
+        }
+        sendInSession(session, "side chat", fork)
+        val epoch = session.epoch
+        val listed = withTimeoutOrNull(sideChatShellWaitMillis) {
+            state.first { s -> s.connection != ConnectionStatus.Connected || s.threads.any { it.id == target } }
+        }
+        val present = listed != null && synchronized(lifecycleLock) { epoch == generation && threadWritable() && state.value.threads.any { it.id == target } }
+        if (!present) {
+            discardSideChat(epoch, target)
+            error("The side chat was created, but it is not here yet. Check the thread list.")
+        }
+        val message = synchronized(lifecycleLock) {
+            if (epoch != generation || !threadWritable()) throw CommandNotSent()
+            threadCommand("message.dispatch", target, buildJsonObject {
+                provenance()
+                put("messageId", UUID.randomUUID().toString()); put("text", question); put("attachments", JsonArray(emptyList()))
+                threadContext(question)
+                put("dispatchMode", buildJsonObject { put("type", "start_immediately") })
+            })
+        }
+        try {
+            mutation(epoch, "side chat message") { requireReceipt(rpc("orchestration.dispatchCommand", message, epoch, guard = ::threadWritable)) }
+        } catch (error: Exception) {
+            // An uncertain message may have landed (and the session already failed): never delete then.
+            if (error is CancellationException || error is UncertainOutcomeException) throw error
+            discardSideChat(epoch, target)
+            throw error
+        }
+        target
+    }
+    /** Shell-level writes (no selected thread needed) on the live connection. Caller holds [lifecycleLock] or reads a snapshot. */
+    private fun threadWritable() = authorized && shellReady && state.value.connection == ConnectionStatus.Connected
+    /**
+     * Best effort, after a definite failure only: deletes the side chat [threadId] if it is still unused. Sent once through
+     * [mutation] (an uncertain delete fails the session like any other); its own failure is not reported over the original.
+     */
+    private suspend fun discardSideChat(epoch: Long, threadId: String) {
+        val payload = synchronized(lifecycleLock) {
+            if (epoch != generation || !threadWritable()) return
+            threadCommand("thread.delete", threadId, buildJsonObject { put("onlyIfUnused", true) })
+        }
+        try { mutation(epoch, "side chat cleanup") { requireReceipt(rpc("orchestration.dispatchCommand", payload, epoch, guard = ::threadWritable)) } }
+        catch (error: Exception) { if (error is CancellationException) throw error }
     }
     /**
      * T3 `dispatchThreadMessage`: while the thread works, [FollowUpMode.Queue] is `queue_after_active` and
@@ -1765,6 +1852,7 @@ class T3Client(
             command("message.dispatch", buildJsonObject {
                 provenance()
                 put("messageId", UUID.randomUUID().toString()); put("text", text); put("attachments", JsonArray(emptyList()))
+                threadContext(text)
                 if (steer) put("deliveryIntent", "steer")
                 put("dispatchMode", buildJsonObject { put("type", if (busy && !steer) "queue_after_active" else "start_immediately") })
             })
@@ -2252,6 +2340,8 @@ class T3Client(
 }
 
 private const val CREATION_SOURCE = "mobile"
+/** T3 mobile's fork title for a new side chat (`useStartSideChat`). */
+private const val SIDE_CHAT_TITLE = "Side chat"
 /** Shown when the selected thread's data is larger than this app loads (no bounded snapshots yet). */
 internal const val THREAD_TOO_LARGE = "This thread is too large to open on mobile yet. Open it in T3 Code on your computer."
 

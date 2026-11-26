@@ -226,7 +226,47 @@ try {
   await waitFor(event => event._tag === 'Exit' && event.requestId === 'thread-selected');
   const sideChatsCapability = config.environment.capabilities?.sideChats;
   assert.ok(sideChatsCapability === undefined || typeof sideChatsCapability === 'boolean', 'capabilities.sideChats is optional boolean');
-  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; two concurrent subscribeThread streams on one socket (inspector interrupt leaves the selected stream live); capabilities.sideChats=${sideChatsCapability}; config bytes ${JSON.stringify(configBytes)}.`);
+  // Side chat start (T3Client.startSideChat): the exact thread.fork, the shell row, and the onlyIfUnused cleanup delete.
+  let sideChatSummary = 'side chats not offered';
+  if (sideChatsCapability === true) {
+    socket.send(JSON.stringify({ _tag: 'Request', id: 'shell-side', tag: 'orchestration.subscribeShell', payload: { requestCompletionMarker: true }, headers: [] }));
+    await waitFor(event => event._tag === 'Chunk' && event.requestId === 'shell-side' && event.values.some(value => value.kind === 'synchronized'));
+    const shellValues = () => events.filter(event => event._tag === 'Chunk' && event.requestId === 'shell-side').flatMap(event => event.values);
+    const fork = await rpc('orchestration.dispatchCommand', { type: 'thread.fork', commandId: 'wire-fork', createdBy: 'user', creationSource: 'mobile',
+      sourceThreadId: 'wire-thread', targetThreadId: 'wire-side', sourcePoint: { type: 'latest_stable' }, title: 'Side chat', sideChat: true });
+    assert.equal(fork._tag, 'Success', `thread.fork with sideChat: ${JSON.stringify(fork.cause ?? null)}`);
+    assert.ok(Number.isInteger(fork.value?.sequence) && fork.value.sequence >= 0, 'thread.fork returns a dispatch receipt');
+    await waitFor(() => shellValues().some(value => value.kind === 'thread.updated' && value.thread?.id === 'wire-side'));
+    const row = shellValues().filter(value => value.kind === 'thread.updated' && value.thread?.id === 'wire-side').at(-1).thread;
+    assert.equal(row.lineage?.sideChat, true, 'the fork is listed as a side chat');
+    assert.equal(row.lineage?.parentThreadId, 'wire-thread', 'the side chat names its parent');
+    const removed = await rpc('orchestration.dispatchCommand', { type: 'thread.delete', commandId: 'wire-side-delete', threadId: 'wire-side', onlyIfUnused: true });
+    assert.equal(removed._tag, 'Success', `thread.delete onlyIfUnused: ${JSON.stringify(removed.cause ?? null)}`);
+    await waitFor(() => shellValues().some(value => (value.kind === 'thread.removed' && value.threadId === 'wire-side') ||
+      (value.kind === 'thread.updated' && value.thread?.id === 'wire-side' && value.thread.deletedAt)));
+    // message.dispatch with a thread context record, sent to a thread that does not exist so no provider run can start:
+    // a well-formed payload gets past decoding to a typed command rejection; a malformed context (control) fails decoding.
+    const record = { version: 1, kind: 'thread', contextId: 'thread_wire-thread', label: 'Wire check', environmentId: config.environment.environmentId, threadId: 'wire-thread', title: 'Wire check' };
+    const message = context => ({ type: 'message.dispatch', commandId: `wire-context-${rpcCount}`, threadId: 'wire-missing', createdBy: 'user', creationSource: 'mobile',
+      messageId: `wire-context-message-${rpcCount}`, text: 'See [Wire check](t3-context://v1/thread/thread_wire-thread)', attachments: [], context, dispatchMode: { type: 'start_immediately' } });
+    const describe = exit => JSON.stringify(exit.cause ?? exit);
+    const withContext = await rpc('orchestration.dispatchCommand', message({ version: 1, records: [record] }));
+    const malformed = await rpc('orchestration.dispatchCommand', message({ version: 99, records: 'nope' }));
+    assert.equal(malformed._tag, 'Failure', 'malformed context is refused');
+    assert.notEqual(withContext._tag, 'Success', 'a message to a missing thread is not accepted');
+    assert.ok(Array.isArray(withContext.cause) && withContext.cause.every(reason => reason._tag === 'Fail'), `context dispatch is a typed rejection: ${describe(withContext)}`);
+    assert.notEqual(describe(withContext), describe(malformed), 'the context payload decodes (its rejection differs from the malformed control)');
+    // The dispatcher's own error (naming the decoded command type) is only reachable once the whole command decoded.
+    const dispatchError = withContext.cause[0]?.error;
+    assert.equal(dispatchError?._tag, 'OrchestrationV2DispatchCommandError', `context dispatch reached the dispatcher: ${describe(withContext)}`);
+    assert.equal(dispatchError?.commandType, 'message.dispatch', 'the dispatcher decoded the message.dispatch with its context');
+    assert.notEqual(malformed.cause?.[0]?.error?.commandType, 'message.dispatch', `the malformed control fails before dispatch: ${describe(malformed)}`);
+    console.log(`side chat: context rejection ${describe(withContext).slice(0, 300)}; malformed control ${describe(malformed).slice(0, 300)}`);
+    socket.send(JSON.stringify({ _tag: 'Interrupt', requestId: 'shell-side' }));
+    await waitFor(event => event._tag === 'Exit' && event.requestId === 'shell-side');
+    sideChatSummary = 'thread.fork sideChat listed, onlyIfUnused delete removes it, message.dispatch context decodes';
+  }
+  console.log(`PASS: isolated actual T3 server; native pairing OAuth Bearer/session/ticket; /ws protocol 2; Ping/Pong; config (${config.providers.length} providers, ${modelCount} models, defaultRuntimeMode); empty shell + synchronized marker; Ack/Interrupt/Exit; launch with client ids, commandId replay, typed rejection; two concurrent subscribeThread streams on one socket (inspector interrupt leaves the selected stream live); capabilities.sideChats=${sideChatsCapability} (${sideChatSummary}); config bytes ${JSON.stringify(configBytes)}.`);
 } finally {
   socket?.close();
   child.kill('SIGTERM');
