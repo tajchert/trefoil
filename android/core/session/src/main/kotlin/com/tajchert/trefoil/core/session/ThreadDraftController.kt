@@ -200,6 +200,8 @@ class ThreadDraftController(
             catch (_: UncertainOutcomeException) { uncertain = true }
             catch (_: Exception) { rejected = true }
             finally { linking = false }
+            // The user moved to another environment meanwhile: the outcome belongs to a thread not shown there.
+            if (client.state.value.environment?.id != pending.environmentId) { sendAwaitingLink(client.state.value); return@launch }
             when {
                 // Never resent: the live shell row decides after reconnect.
                 uncertain -> { _issueLinkNotice.value = null; uncertainLink = pending }
@@ -207,6 +209,8 @@ class ThreadDraftController(
                 rejected -> { uncertainLink = null; _issueLinkNotice.value = if (shownInShell(pending)) null else pending }
                 else -> { uncertainLink = null; _issueLinkNotice.value = null }
             }
+            // A draft's row may have arrived while this command was in flight.
+            sendAwaitingLink(client.state.value)
         }
     }
 

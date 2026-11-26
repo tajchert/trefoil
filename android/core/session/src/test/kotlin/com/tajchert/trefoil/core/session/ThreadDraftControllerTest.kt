@@ -423,4 +423,47 @@ class ThreadDraftControllerTest {
         h.client.mutable.update { it.withThread(listOf(issue.copy(source = "agent"))) }; runCurrent()
         assertNull(h.controller.issueLinkNotice.value)
     }
+
+    @Test fun environmentSwitchWhileTheLinkIsInFlightShowsNoStaleNotice() = runTest {
+        val other = SavedEnvironment("env-2", "Other", "https://other.invalid", "fixture-token")
+        for (failure in listOf<Throwable>(IllegalStateException("T3 rejected the issue link."), UncertainOutcomeException("lost"))) {
+            val h = harness()
+            val gate = CompletableDeferred<Unit>()
+            h.client.onLink = { _, _ -> gate.await(); throw failure }
+            h.controller.start(issueDraft)
+            h.controller.send("hello"); runCurrent()
+            h.client.mutable.update { it.withThread() }; runCurrent()
+            assertEquals(1, h.client.links.size)
+            h.client.mutable.value = connected.copy(environment = other); runCurrent()
+            gate.complete(Unit); runCurrent()
+            assertNull(h.controller.issueLinkNotice.value)
+            // Back in env-1 with the row lacking the key: an uncertain outcome was dropped, so no notice either.
+            h.client.mutable.value = connected.withThread(); runCurrent()
+            assertNull(h.controller.issueLinkNotice.value)
+            assertEquals(1, h.client.links.size)
+        }
+    }
+
+    @Test fun rowArrivingWhileAnotherLinkIsInFlightStillLinksOnce() = runTest {
+        val h = harness()
+        // An earlier draft's link is rejected and the user retries it; meanwhile a second draft starts.
+        val first = ThreadDraft("p", ModelOption("codex", "gpt-5"), issueLink = issue.copy(key = issue.key.copy(key = "7")))
+        h.client.onLink = { _, _ -> throw IllegalStateException("rejected") }
+        h.controller.start(first)
+        h.controller.send("first"); runCurrent()
+        h.client.mutable.update { it.copy(threads = it.threads + ThreadSummary(first.threadId, "p", "First")) }; runCurrent()
+        assertNotNull(h.controller.issueLinkNotice.value)
+        h.controller.start(issueDraft)
+        h.controller.send("hello"); runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        h.client.onLink = { _, _ -> gate.await() }
+        h.controller.retryIssueLink(); runCurrent()
+        assertEquals(2, h.client.links.size)
+        h.client.mutable.update { it.withThread() }; runCurrent()
+        assertEquals("Waits while the retry is in flight", 2, h.client.links.size)
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf(target to issue), h.client.links.drop(2))
+        h.client.mutable.update { it.copy(threads = it.threads + ThreadSummary("t2", "p", "Other")) }; runCurrent()
+        assertEquals(3, h.client.links.size)
+    }
 }
