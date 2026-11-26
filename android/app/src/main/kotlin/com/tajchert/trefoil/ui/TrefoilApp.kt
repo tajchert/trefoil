@@ -48,6 +48,7 @@ import com.tajchert.trefoil.ui.adaptive.LocalFold
 import com.tajchert.trefoil.ui.adaptive.TfIconButton
 import com.tajchert.trefoil.ui.adaptive.ThreadListChrome
 import com.tajchert.trefoil.ui.adaptive.WindowSpec
+import com.tajchert.trefoil.ui.adaptive.rememberTwoPaneState
 import com.tajchert.trefoil.ui.adaptive.resolvePanes
 import com.tajchert.trefoil.ui.adaptive.shellPolicy
 import androidx.compose.ui.focus.FocusRequester
@@ -64,6 +65,11 @@ import com.tajchert.trefoil.ui.shell.SidePanelHost
 import com.tajchert.trefoil.ui.shell.SidePanelToggle
 import com.tajchert.trefoil.ui.shell.headerBudget
 import com.tajchert.trefoil.ui.shell.issuesMenuLabel
+import com.tajchert.trefoil.ui.issues.IssueDetailActions
+import com.tajchert.trefoil.ui.issues.IssueDetailContent
+import com.tajchert.trefoil.ui.issues.IssueListActions
+import com.tajchert.trefoil.ui.issues.IssuesScreen
+import com.tajchert.trefoil.ui.issues.IssuesUi
 import com.tajchert.trefoil.ui.issues.ThreadIssueChip
 import com.tajchert.trefoil.ui.issues.ThreadIssueLinksSheet
 import com.tajchert.trefoil.ui.issues.isOpenableIssueUrl
@@ -133,6 +139,8 @@ data class ShellStart(
     val inspectorThreadId: String? = null,
     /** The side panel tab (by name) Back returns to from the inspector; null closes the panel. */
     val inspectorFrom: String? = null,
+    /** Opens the Issues destination (needs a connected state with issuesSupported to stay there). */
+    val showIssues: Boolean = false,
 )
 
 /** How long a notification tap's selected thread may take to reach this composition before it is shown. */
@@ -204,6 +212,8 @@ fun TrefoilApp(
     start: ShellStart = ShellStart(),
     // Opens a linked issue from the thread header's issue sheet; null opens the link's URL in the browser (http and https only).
     onOpenIssue: ((ThreadIssueLink) -> Unit)? = null,
+    // The issue list and detail; the defaults leave the Issues destination without data (previews, tests).
+    issues: IssuesUi = IssuesUi(),
 ) {
     TrefoilTheme {
         val conversationState = rememberSaveableStateHolder()
@@ -252,7 +262,12 @@ fun TrefoilApp(
         val savedPanelTab = SidePanelTab.entries.firstOrNull { it.name == sidePanelTabName }
         // Closing the panel ends what only the panel showed, whichever tab is in front: a page in Preview, a viewer in Screens and the
         // inspected thread. Nothing live (a tunnel page, a screen stream) stays open behind a closed panel; switching tabs keeps all of it.
+        // An issue opened from a thread chip is held for the panel's Issue tab until the panel closes.
+        var panelIssueOpen by rememberSaveable { mutableStateOf(false) }
+        // On a phone the opened detail replaces the list; two panes keep it beside the list. Saved, with the controller holding the issue.
+        var issueDetailOpen by rememberSaveable { mutableStateOf(false) }
         val closePanel: () -> Unit = {
+            panelIssueOpen = false
             if (portBrowser != null) onClosePortBrowser()
             screenFullscreen = false; onCloseScreen()
             sidePanelTabName = null
@@ -274,6 +289,13 @@ fun TrefoilApp(
         val showUsage = destination == ShellDestination.Usage
         val showScreens = destination == ShellDestination.Screens
         val showPorts = destination == ShellDestination.Servers
+        // The Issues entry follows the server's capability; while reconnecting it keeps the last known answer so the rail does not blink.
+        var issuesLastKnown by rememberSaveable(environmentId) { mutableStateOf(state.issuesSupported) }
+        LaunchedEffect(state.connection, state.issuesSupported) { if (state.connection == ConnectionStatus.Connected) issuesLastKnown = state.issuesSupported }
+        val issuesAvailable = state.environment != null && (if (state.connection == ConnectionStatus.Connected) state.issuesSupported else issuesLastKnown)
+        // The capability going away (or the machine) returns to Threads, as Dev servers do.
+        LaunchedEffect(issuesAvailable) { if (!issuesAvailable && savedDestination == ShellDestination.Issues) { savedDestination = ShellDestination.Threads; issueDetailOpen = false } }
+        LaunchedEffect(environmentId) { issueDetailOpen = false; panelIssueOpen = false }
         val drawerState = rememberDrawerState(if (start.navigationOpen) DrawerValue.Open else DrawerValue.Closed)
         // A t3code: link opens the pair dialog pre-filled and never submits. Plain remember: the link is not persisted.
         var pairLink by remember { mutableStateOf<Pair<Long, String>?>(null) }
@@ -340,7 +362,24 @@ fun TrefoilApp(
         val selectedThread = state.threads.firstOrNull { it.id == state.selectedThreadId }
         val issueLinks = if (draft == null) selectedThread?.issues.orEmpty() else emptyList()
         val uriHandler = LocalUriHandler.current
-        val openIssue: (ThreadIssueLink) -> Unit = onOpenIssue ?: { link -> if (isOpenableIssueUrl(link.url)) runCatching { uriHandler.openUri(link.url) } }
+        val openIssueUrl: (ThreadIssueLink) -> Unit = onOpenIssue ?: { link -> if (isOpenableIssueUrl(link.url)) runCatching { uriHandler.openUri(link.url) } }
+        // An issue the server can show opens as the detail (the side panel's Issue tab where it docks, a pushed screen otherwise); anything
+        // else opens its page in the browser. The link's identity is its project plus tracker, host, scope and key.
+        val openIssueDetail: (ThreadIssueLink, Boolean) -> Unit = { link, canDock ->
+            if (!issuesAvailable || environmentId == null) openIssueUrl(link) else {
+                issues.onOpenIssue(environmentId, IssueRef(link.projectId, link.key.tracker, link.key.host, link.key.scope, link.key.key), link.key)
+                if (canDock) { panelIssueOpen = true; openPanel(SidePanelTab.Issue) } else { issueDetailOpen = true; navigate(ShellDestination.Issues) }
+            }
+        }
+        // A thread linked from an issue opens inside the issue's own machine; an archived one says so instead of failing.
+        val openLinkedThread: (IssueLinkedThread) -> Unit = { thread ->
+            val owner = issues.detail.environmentId
+            if (thread.archived) uiScope.launch { snackbar.showSnackbar("That thread is archived") }
+            else if (owner != null && owner == environmentId) uiScope.launch {
+                if (issues.onOpenThread(owner, thread.id)) { navigate(ShellDestination.Threads); onClosePortBrowser(); showThread = true }
+                else snackbar.showSnackbar("Could not open that thread")
+            }
+        }
         val roster = remember(state.runs, state.subagents) { if (state.subagents.isEmpty()) null else subagentRoster(state.runs, state.subagents) }
         val pill = remember(roster) { roster?.let { subagentPill(it) } }
         // A subagent child or side chat goes back to its parent when that parent is loaded, otherwise to the list.
@@ -363,6 +402,7 @@ fun TrefoilApp(
             onScreens = if (connected) ({ navigate(ShellDestination.Screens) }) else null,
             onDevServers = if (portsAvailable) ({ navigate(ShellDestination.Servers) }) else null,
             // Offline the screen shows cached limits; only a connection that can read usage fetches (the effect above covers a later connect).
+            onIssues = if (issuesAvailable) ({ issueDetailOpen = false; navigate(ShellDestination.Issues) }) else null,
             onUsage = if (connected) ({ usageTab = 0; navigate(ShellDestination.Usage); if (state.canReadUsage) onOpenUsage() }) else null,
             onDisconnect = if (connected) ({ onDisconnect(); navigate(ShellDestination.Machines); showThread = false }) else null,
             keepConnected = keepConnected,
@@ -480,9 +520,12 @@ fun TrefoilApp(
                 val twoPane = policy.twoPane
                 SideEffect { wideLayout = twoPane }
                 val listState = rememberShellListState(policy, environmentId, start.listCollapsed)
+                // The Issues destination's own list width, never collapsed (the thread list's collapsed flag belongs to Threads).
+                val issuesPaneState = rememberTwoPaneState(policy.defaultListWidth.dp, false)
                 // Side panel tabs: Preview with dev servers, Screens with the rail's Screens entry (disabled with it), Agents with a roster.
                 val entries = navEntries(state, shell)
-                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null, changes = state.checkpoints.isNotEmpty(), pullRequest = state.threadPullRequests.isNotEmpty(), thread = inspectorThreadId != null)
+                val panelTabs = sidePanelTabs(portsAvailable, entries.screens, roster != null, changes = state.checkpoints.isNotEmpty(), pullRequest = state.threadPullRequests.isNotEmpty(), thread = inspectorThreadId != null,
+                    issue = panelIssueOpen && issuesAvailable && issues.detail.ref != null)
                 val panelDisabled = if (entries.screensEnabled) emptySet() else setOf(SidePanelTab.Screens)
                 val panelTab = resolveSidePanelTab(savedPanelTab, panelTabs, panelDisabled)
                 // A saved tab that went away (roster gone, servers unsupported) is replaced by what is shown, so the toggle and Back agree with the screen.
@@ -497,6 +540,7 @@ fun TrefoilApp(
                 @Suppress("NAME_SHADOWING") val destination = presentation.destination
                 @Suppress("NAME_SHADOWING") val showScreens = destination == ShellDestination.Screens
                 @Suppress("NAME_SHADOWING") val showPorts = destination == ShellDestination.Servers
+                val showIssues = destination == ShellDestination.Issues && issuesAvailable
                 // A docked panel hosts the browser itself (Preview); otherwise an open page takes the window as it does today.
                 val browserHosted = portBrowser != null && !docked
                 SideEffect { conversationCovered = destination != ShellDestination.Threads || browserHosted || presentation.changesRoute }
@@ -537,7 +581,11 @@ fun TrefoilApp(
                         openPanel(SidePanelTab.Thread); focusRequest = panelTabsFocus
                     } else openAgent(id)
                 }
-                val back = shellBack(destination, connected, browserHosted, twoPane, showThread, backParent != null, panelDocked = docked, besideRail = besideRail, inspectorOpen = inspectorShown)
+                // An opened issue: pushed on a phone, always shown beside the list in two panes (where the controller's issue is the selection).
+                val issuesTwoPane = showIssues && twoPane && !split
+                val issueOpen = (issueDetailOpen || issuesTwoPane) && issues.detail.ref != null && issues.detail.environmentId == environmentId
+                val back = shellBack(destination, connected, browserHosted, twoPane, showThread, backParent != null, panelDocked = docked, besideRail = besideRail, inspectorOpen = inspectorShown,
+                    issueDetailOpen = showIssues && issueOpen)
                 BackHandler(back != null) {
                     when (back) {
                         ShellBack.ToThreads -> navigate(ShellDestination.Threads)
@@ -545,6 +593,7 @@ fun TrefoilApp(
                         ShellBack.ClosePanel -> closePanelToToggle()
                         ShellBack.ToParent -> backParent?.let { select(it.id) }
                         ShellBack.ToList -> { cancelDraft(); showThread = false }
+                        ShellBack.ToIssueList -> issueDetailOpen = false
                         null -> Unit
                     }
                 }
@@ -594,7 +643,7 @@ fun TrefoilApp(
                 }
                 val detailTitle = if (draft != null) "New thread" else selectedThread?.title
                 // Destinations that are not the thread list and conversation; the full-window screen viewer stays full-window even beside a hinge.
-                val secondaryHosted = showUsage || machines || browserHosted || (showPorts && portsAvailable) || showScreens
+                val secondaryHosted = showUsage || machines || browserHosted || (showPorts && portsAvailable) || showScreens || showIssues
                 val fullscreenViewer = showScreens && screenFullscreen && !showUsage && !machines && !browserHosted && !(showPorts && portsAvailable)
                 // Keyboard shortcuts (ui/shell/Shortcuts.kt): each calls the function its button calls, under the button's enabled rule; a shortcut whose
                 // target is absent or disabled has no binding and does nothing. Allow and Deny of an approval are deliberately not reachable from here.
@@ -632,6 +681,7 @@ fun TrefoilApp(
                     when {
                         machines || browserHosted || (showPorts && portsAvailable) -> Unit
                         showUsage -> if (usageOfflineNotice(state.connection, state.canReadUsage) == null) bindings[ShortcutId.Refresh] = { onRefreshUsage(); true }
+                        showIssues -> if (live && !issues.list.refreshing && !issues.list.loading) bindings[ShortcutId.Refresh] = { issues.onRefreshList(); true }
                         showScreens -> if (!screenFullscreen && live && (state.canRead || state.canWrite) && !state.screens.loading) bindings[ShortcutId.Refresh] = { onRefreshScreens(); true }
                         live && !isRefreshing && (twoPane || !showThread) -> bindings[ShortcutId.Refresh] = { onRefresh(); true }
                     }
@@ -720,6 +770,21 @@ fun TrefoilApp(
                         }
                     }
                 }
+                // Issues: the detail's actions are the same on a pushed screen, in the detail pane and in the side panel's Issue tab.
+                val issueDetailActions = { onBack: () -> Unit -> IssueDetailActions(onBack, { url -> if (isSafeLink(url)) runCatching { uriHandler.openUri(url) } },
+                    issues.onRefreshDetail, issues.onRetryDetail, issues.onLoadOlder, openLinkedThread) }
+                val issueListActions = IssueListActions(issues.onQuery,
+                    onOpen = { row -> environmentId?.let { issues.onOpenIssue(it, row.ref, row.issueKey) }; issueDetailOpen = true },
+                    onRefresh = issues.onRefreshList, onLoadMore = issues.onLoadMore, onRetry = issues.onRetryList,
+                    onBack = if (besideRail) null else ({ navigate(ShellDestination.Threads) }))
+                LaunchedEffect(showIssues, environmentId, live) { if (showIssues) issues.onOpenList() }
+                val issueList: @Composable (Modifier) -> Unit = { m ->
+                    IssuesScreen(issues.list, state.projects, issues.detail.ref?.takeIf { issueOpen && issues.detail.environmentId == environmentId }, issueListActions, m)
+                }
+                val issueDetail: @Composable (Modifier) -> Unit = { m ->
+                    if (issueOpen) IssueDetailContent(issues.detail, issueDetailActions { if (issuesTwoPane) navigate(ShellDestination.Threads) else issueDetailOpen = false }, m)
+                    else Box(m, contentAlignment = Alignment.Center) { Text("Select an issue", style = TrefoilType.preview, color = Tf.colors.muted) }
+                }
                 // Every destination but the thread list and the conversation; each fills the modifier it is given.
                 val secondary: @Composable (Modifier) -> Unit = { m ->
                     when {
@@ -740,6 +805,11 @@ fun TrefoilApp(
                             ConnectionBanner(state, onReconnect)
                             devServersSurface(Modifier.weight(1f))
                         }
+                        // One pane: the list, or on a phone the opened detail in its place.
+                        showIssues -> Column(m.windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Vertical))) {
+                            ConnectionBanner(state, onReconnect)
+                            if (issueOpen) issueDetail(Modifier.weight(1f)) else issueList(Modifier.weight(1f))
+                        }
                         showScreens -> Column(m.then(if (screenFullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Vertical)))) {
                             if (!screenFullscreen) ConnectionBanner(state, onReconnect)
                             screensSurface(Modifier.weight(1f))
@@ -752,6 +822,10 @@ fun TrefoilApp(
                 val content: @Composable (Modifier) -> Unit = { modifier -> Box(modifier) { shellContentState.SaveableStateProvider("shell-content") {
                     when {
                         // A separating hinge splits every destination: Threads' start region on the left (a brand panel without a machine), the destination on the right.
+                        // Issues beside the rail or drawer: the list and the opened issue side by side, with a width of their own (not the thread list's).
+                        issuesTwoPane -> ShellPanes(policy.copy(listCollapsible = false), panes, issuesPaneState, banner = { ConnectionBanner(state, onReconnect) },
+                            list = { issueList(Modifier.fillMaxSize().statusBarsPadding().paneGroup("Issues", PaneOrder.List)) },
+                            detail = { issueDetail(Modifier.fillMaxSize().statusBarsPadding().windowInsetsPadding(BottomBarsAndIme).paneGroup(detailPaneTitle(destination, null), PaneOrder.Detail)) })
                         secondaryHosted && split && !fullscreenViewer -> ShellPanes(policy, panes, listState, banner = {},
                             list = { if (connected) list(Modifier.fillMaxSize()) else BrandPanel(Modifier.fillMaxSize()) }, detail = { secondary(secondaryModifier) })
                         secondaryHosted -> secondary(secondaryModifier)
@@ -779,6 +853,7 @@ fun TrefoilApp(
                                         }
                                         SidePanelTab.Changes -> changesSurface(Modifier.fillMaxSize(), null)
                                         SidePanelTab.PullRequest -> PullRequestPanel(state, pullRequests, null, Modifier.fillMaxSize())
+                                        SidePanelTab.Issue -> IssueDetailContent(issues.detail, issueDetailActions(closePanelToToggle), Modifier.fillMaxSize())
                                     }
                                 }
                             }) else null)
@@ -816,7 +891,7 @@ fun TrefoilApp(
                 if (presentation.prSheet && panelTab == SidePanelTab.PullRequest && hasPullRequests && connected) PullRequestSheet(state, pullRequests, closePanel)
                 if ((showAgents || presentation.agentsSheet) && roster != null) ThreadAgentsSheet(roster, state.providers, state.models, steadyWrite,
                     { showAgents = false; if (presentation.agentsSheet) closePanel() }, { id -> showAgents = false; if (presentation.agentsSheet) closePanel(); select(id) }, onStopSubagent)
-                if (showIssueLinks && issueLinks.isNotEmpty()) ThreadIssueLinksSheet(issueLinks, onOpen = { showIssueLinks = false; openIssue(it) }, onDismiss = { showIssueLinks = false })
+                if (showIssueLinks && issueLinks.isNotEmpty()) ThreadIssueLinksSheet(issueLinks, onOpen = { showIssueLinks = false; openIssueDetail(it, canDock) }, onDismiss = { showIssueLinks = false })
             }
         }
         }

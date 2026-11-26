@@ -86,6 +86,27 @@ class TrefoilViewModel internal constructor(
             client.state.map { it.environment?.id }.distinctUntilChanged().collect { usageController.reset() }
         }
     }
+    /** Issue list and detail (memory only). Both reset with the environment; `syncLive` follows the connection and the capabilities. */
+    val issuesController = IssuesController(viewModelScope, { client }, { client.state.value })
+    val issueDetailController = IssueDetailController(viewModelScope, { client }, { client.state.value })
+    val issues = issuesController.state
+    val issueDetail = issueDetailController.state
+    init {
+        viewModelScope.launch {
+            client.state.map { it.environment?.id }.distinctUntilChanged().collect { issuesController.reset(); issueDetailController.reset() }
+        }
+        viewModelScope.launch {
+            client.state.map { Triple(it.connection, it.issuesSupported, it.issueLinkedThreadsSupported) }.distinctUntilChanged().collect {
+                issuesController.syncLive(); issueDetailController.syncLive()
+            }
+        }
+    }
+    /** Selects a thread linked from an issue, only inside its own environment; false when it is gone or cannot be opened. */
+    suspend fun openIssueThread(environmentId: String, threadId: String): Boolean {
+        dropPendingOpen()
+        clearDraft()
+        return try { client.selectThreadIn(environmentId, threadId) } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
+    }
     val screenSessions = com.tajchert.trefoil.ui.screens.ScreenSessionCoordinator(viewModelScope, client)
     val fileDownloads = com.tajchert.trefoil.downloads.FileDownloadCoordinator(viewModelScope, client,
         com.tajchert.trefoil.downloads.MediaStoreDownloadStore(application))

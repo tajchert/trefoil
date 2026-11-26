@@ -71,4 +71,5 @@ internal fun detailPaneTitle(destination: ShellDestination, conversationTitle: S
         ShellDestination.Servers -> "Servers"
         ShellDestination.Usage -> "Usage"
         ShellDestination.Machines -> "Machines"
+        ShellDestination.Issues -> "Issues"
     }

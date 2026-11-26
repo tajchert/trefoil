@@ -11,22 +11,23 @@ import com.tajchert.trefoil.ui.canLaunchThreads
  * [Screens] and [Servers] belong to one environment and fall back to [Threads] when the environment changes.
  * [Machines] is only a destination while connected; without an environment Machines owns the window anyway.
  */
-internal enum class ShellDestination { Threads, Screens, Servers, Usage, Machines;
+internal enum class ShellDestination { Threads, Screens, Servers, Usage, Machines, Issues;
     /** Destinations scoped to the environment they were opened for. */
-    val environmentScoped: Boolean get() = this == Screens || this == Servers
+    val environmentScoped: Boolean get() = this == Screens || this == Servers || this == Issues
 }
 
-/** The destination [ShellStart] opens; usage wins over machines, machines over dev servers, dev servers over screens (as the old flags did). */
+/** The destination [ShellStart] opens; usage wins over machines, machines over dev servers, dev servers over screens, screens over issues (as the old flags did). */
 internal fun ShellStart.destination(): ShellDestination = when {
     showUsage -> ShellDestination.Usage
     choosingEnvironment -> ShellDestination.Machines
     showPorts -> ShellDestination.Servers
     showScreens -> ShellDestination.Screens
+    showIssues -> ShellDestination.Issues
     else -> ShellDestination.Threads
 }
 
 /** What the shell's own Back handler does; null leaves Back to the screen on top (or the system). */
-internal enum class ShellBack { ToThreads, CloseInspector, ClosePanel, ToParent, ToList }
+internal enum class ShellBack { ToThreads, CloseInspector, ClosePanel, ToParent, ToList, ToIssueList }
 
 /**
  * Shell Back priority below dialogs, menus, the drawer and in-screen steps (spec 2 "Back / Escape Priority Stack"):
@@ -36,10 +37,13 @@ internal enum class ShellBack { ToThreads, CloseInspector, ClosePanel, ToParent,
  */
 internal fun shellBack(
     destination: ShellDestination, connected: Boolean, portBrowserOpen: Boolean, twoPane: Boolean, showThread: Boolean, hasBackParent: Boolean,
-    panelDocked: Boolean = false, besideRail: Boolean = false, inspectorOpen: Boolean = false,
+    panelDocked: Boolean = false, besideRail: Boolean = false, inspectorOpen: Boolean = false, issueDetailOpen: Boolean = false,
 ): ShellBack? = when {
     destination == ShellDestination.Usage -> ShellBack.ToThreads
     destination == ShellDestination.Machines -> if (connected) ShellBack.ToThreads else null
+    // Issues: on a phone an open detail returns to the list first, then the list returns to Threads. Two panes keep the detail beside the
+    // list, so Back leaves the destination. Disconnected, the cached list can still be left.
+    destination == ShellDestination.Issues -> if (issueDetailOpen && !twoPane) ShellBack.ToIssueList else ShellBack.ToThreads
     !connected -> null
     portBrowserOpen -> null
     // Beside the rail Screens and Dev servers have no leave arrow and claim Back only for their own steps (an open session, an open
@@ -62,6 +66,7 @@ internal data class NavEntries(
     val screens: Boolean, val screensEnabled: Boolean,
     val servers: Boolean, val serversEnabled: Boolean,
     val usage: Boolean, val newThreadEnabled: Boolean, val connectEnabled: Boolean,
+    val issues: Boolean = false, val issuesEnabled: Boolean = false,
 )
 
 internal fun navEntries(state: ClientState, actions: ShellActions): NavEntries {
@@ -70,6 +75,7 @@ internal fun navEntries(state: ClientState, actions: ShellActions): NavEntries {
         screens = actions.onScreens != null, screensEnabled = actions.onScreens != null && live,
         servers = actions.onDevServers != null, serversEnabled = actions.onDevServers != null && live,
         usage = actions.onUsage != null,
+        issues = actions.onIssues != null, issuesEnabled = actions.onIssues != null && live,
         newThreadEnabled = live && canCreateThread(state),
         connectEnabled = !state.busy,
     )

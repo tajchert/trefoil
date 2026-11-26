@@ -116,4 +116,36 @@ class ShellDestinationTest {
         assertEquals(2, forwardCount(ClientState(environment = environment, portForwards = forwards)))
         assertEquals(0, forwardCount(ClientState(portForwards = forwards)))
     }
+    @Test fun issuesIsEnvironmentScopedAndStartsFromTheFlag() {
+        assertEquals(ShellDestination.Issues, ShellStart(showIssues = true).destination())
+        assertEquals(ShellDestination.Screens, ShellStart(showIssues = true, showScreens = true).destination())
+        assertTrue(ShellDestination.Issues.environmentScoped)
+    }
+
+    @Test fun issuesBackClosesTheDetailOnAPhoneThenLeavesAndNeverTrapsOffline() {
+        fun back(connected: Boolean = true, twoPane: Boolean = false, detail: Boolean = false) =
+            shellBack(ShellDestination.Issues, connected, portBrowserOpen = false, twoPane = twoPane, showThread = false, hasBackParent = false, issueDetailOpen = detail)
+        assertEquals(ShellBack.ToIssueList, back(detail = true))
+        assertEquals(ShellBack.ToThreads, back(detail = false))
+        // Two panes keep the detail beside the list: Back leaves the destination.
+        assertEquals(ShellBack.ToThreads, back(twoPane = true, detail = true))
+        // The cached list can be left while offline.
+        assertEquals(ShellBack.ToThreads, back(connected = false))
+        // The flag changes nothing for the other destinations.
+        assertNull(shellBack(ShellDestination.Threads, true, false, false, false, false, issueDetailOpen = true))
+    }
+
+    @Test fun issuesEntryFollowsItsActionAndNeedsALiveConnection() {
+        val live = ClientState(environment = environment, connection = ConnectionStatus.Connected)
+        val withIssues = actions.copy(onIssues = {})
+        assertTrue(navEntries(live, withIssues).let { it.issues && it.issuesEnabled })
+        assertFalse(navEntries(live, actions).issues)
+        val offline = navEntries(live.copy(connection = ConnectionStatus.Reconnecting), withIssues)
+        assertTrue(offline.issues); assertFalse(offline.issuesEnabled)
+        assertFalse(navEntries(live.copy(busy = true), withIssues).issuesEnabled)
+    }
+
+    @Test fun paneTitleNamesTheIssuesDestination() {
+        assertEquals("Issues", detailPaneTitle(ShellDestination.Issues, null))
+    }
 }

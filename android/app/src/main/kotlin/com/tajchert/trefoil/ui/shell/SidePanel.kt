@@ -58,23 +58,27 @@ import com.tajchert.trefoil.ui.adaptive.focusRing
 /**
  * Tabs of the side panel beside the conversation, in header order. Saved by name only. [Thread] is the read-only inspector of a subagent
  * or side chat; its pill is labelled by the inspected thread's kind ([threadTabLabel]) and the tab exists only while a target is set.
+ * [Issue] exists while an issue opened from a thread's chip is held for the panel.
  */
-internal enum class SidePanelTab(val label: String) { Preview("Preview"), Screens("Screens"), Agents("Agents"), Changes("Changes"), PullRequest("PR"), Thread("Thread") }
+internal enum class SidePanelTab(val label: String) { Preview("Preview"), Screens("Screens"), Agents("Agents"), Changes("Changes"), PullRequest("PR"), Thread("Thread"), Issue("Issue") }
 
 /** The Thread tab's pill label: "Side chat" for a side chat, "Subagent" for any subagent thread. */
 internal fun threadTabLabel(kind: SideThreadKind?): String = if (kind == SideThreadKind.SideChat) "Side chat" else "Subagent"
 
 /**
  * Which tabs exist: Preview with dev servers for this machine, Screens with the rail's Screens entry, Agents with a roster, Changes with checkpoints,
- * PR with a linked pull request, Thread while an inspector target is set.
+ * PR with a linked pull request, Thread while an inspector target is set, and Issue while an issue opened from a thread's chip is held for the panel.
  */
-internal fun sidePanelTabs(preview: Boolean, screens: Boolean, agents: Boolean, changes: Boolean = false, pullRequest: Boolean = false, thread: Boolean = false): List<SidePanelTab> = buildList {
+internal fun sidePanelTabs(
+    preview: Boolean, screens: Boolean, agents: Boolean, changes: Boolean = false, pullRequest: Boolean = false, thread: Boolean = false, issue: Boolean = false,
+): List<SidePanelTab> = buildList {
     if (preview) add(SidePanelTab.Preview)
     if (screens) add(SidePanelTab.Screens)
     if (agents) add(SidePanelTab.Agents)
     if (changes) add(SidePanelTab.Changes)
     if (pullRequest) add(SidePanelTab.PullRequest)
     if (thread) add(SidePanelTab.Thread)
+    if (issue) add(SidePanelTab.Issue)
 }
 
 /**
@@ -125,6 +129,7 @@ internal fun sidePanelPresentation(destination: ShellDestination, tab: SidePanel
         // The inspector has no narrow form: nothing docks and no sheet opens. The target survives (it lives in the shell), so docking
         // again reopens the inspected thread; the child itself is reached through select() from the Agents sheet.
         SidePanelTab.Thread -> SidePanelPresentation(ShellDestination.Threads, agentsSheet = false, docked = false)
+        SidePanelTab.Issue -> SidePanelPresentation(ShellDestination.Issues, agentsSheet = false, docked = false)
     }
 }
 

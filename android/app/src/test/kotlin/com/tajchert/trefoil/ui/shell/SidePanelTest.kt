@@ -32,6 +32,8 @@ class SidePanelTest {
         assertEquals(listOf(Screens), sidePanelTabs(preview = false, screens = true, agents = false))
         assertEquals(listOf(Preview, Agents), sidePanelTabs(preview = true, screens = false, agents = true))
         assertEquals(emptyList<SidePanelTab>(), sidePanelTabs(preview = false, screens = false, agents = false))
+        assertEquals(listOf(Agents, SidePanelTab.Issue), sidePanelTabs(preview = false, screens = false, agents = true, issue = true))
+        assertEquals(listOf(SidePanelTab.Issue), sidePanelTabs(preview = false, screens = false, agents = false, issue = true))
     }
 
     @Test fun changesIsTheLastTabAndOnlyExistsWithCheckpoints() {

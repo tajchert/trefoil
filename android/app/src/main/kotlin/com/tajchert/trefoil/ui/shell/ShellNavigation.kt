@@ -72,7 +72,7 @@ internal class ShellNavModel(
     val limitPercent = tightestLimitPercent(state.providers)
     fun selected(d: ShellDestination) = when (d) {
         ShellDestination.Threads -> destination == d && !portBrowserOpen
-        ShellDestination.Servers -> destination == d || (portBrowserOpen && destination != ShellDestination.Usage && destination != ShellDestination.Machines)
+        ShellDestination.Servers -> destination == d || (portBrowserOpen && destination != ShellDestination.Usage && destination != ShellDestination.Machines && destination != ShellDestination.Issues)
         else -> destination == d
     }
 }
@@ -126,6 +126,8 @@ internal fun ShellNavigationRail(model: ShellNavModel, modifier: Modifier = Modi
                     colors = colors, icon = { CountBadge(model.forwards, c.accent) { Icon(TfIcons.Globe, null, Modifier.size(22.dp)) } },
                     label = { RailLabel("Servers") },
                     modifier = Modifier.semantics { if (model.forwards > 0) stateDescription = "${model.forwards} forwarded" })
+                if (entries.issues) NavigationRailItem(model.selected(ShellDestination.Issues), { model.actions.onIssues?.invoke() }, enabled = entries.issuesEnabled,
+                    colors = colors, icon = { Icon(TfIcons.Issues, null, Modifier.size(22.dp)) }, label = { RailLabel("Issues") })
                 if (entries.usage) NavigationRailItem(model.selected(ShellDestination.Usage), { model.actions.onUsage?.invoke() }, colors = colors,
                     icon = { UsageIcon(model.limitPercent, model.selected(ShellDestination.Usage)) }, label = { RailLabel("Usage") },
                     modifier = Modifier.semantics { stateDescription = limitChipDescription(model.limitPercent) })
@@ -301,6 +303,7 @@ internal fun ShellDrawerSheet(model: ShellNavModel, drawerState: DrawerState, cl
             if (entries.screens) DrawerItem("Screens", TfIcons.Screens, model.selected(ShellDestination.Screens), entries.screensEnabled, colors, go(model.actions.onScreens))
             if (entries.servers) DrawerItem("Servers", TfIcons.Globe, model.selected(ShellDestination.Servers), entries.serversEnabled, colors, go(model.actions.onDevServers),
                 badge = model.forwards.takeIf { it > 0 }?.let { n -> { DrawerCount(n, c.accent) } }, state = model.forwards.takeIf { it > 0 }?.let { "$it forwarded" })
+            if (entries.issues) DrawerItem("Issues", TfIcons.Issues, model.selected(ShellDestination.Issues), entries.issuesEnabled, colors, go(model.actions.onIssues))
             if (entries.usage) DrawerItem("Usage", TfIcons.Gauge, model.selected(ShellDestination.Usage), true, colors, go(model.actions.onUsage),
                 badge = model.limitPercent?.let { p -> { Text("$p%", style = TrefoilType.meta, color = limitSeverity(p).color(c)) } }, state = limitChipDescription(model.limitPercent))
             HorizontalDivider(Modifier.padding(vertical = 8.dp), color = c.line)

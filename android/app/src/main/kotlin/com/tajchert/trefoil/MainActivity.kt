@@ -39,6 +39,7 @@ import com.tajchert.trefoil.ui.ComposerDraftUi
 import com.tajchert.trefoil.ui.PromptSuggestionUi
 import com.tajchert.trefoil.ui.SideChatUi
 import com.tajchert.trefoil.ui.TrefoilApp
+import com.tajchert.trefoil.ui.issues.IssuesUi
 import com.tajchert.trefoil.notifications.AgentAlertNotifier
 import com.tajchert.trefoil.notifications.OpenThreadRequest
 import com.tajchert.trefoil.ui.FileDownloadUi
@@ -200,6 +201,14 @@ class MainActivity : ComponentActivity() {
             val connectionAttempt by model.connectionAttempt.collectAsStateWithLifecycle()
             val machineProbes by model.machineProbes.collectAsStateWithLifecycle()
             val usage by model.usage.collectAsStateWithLifecycle()
+            val issueList by model.issues.collectAsStateWithLifecycle()
+            val issueDetail by model.issueDetail.collectAsStateWithLifecycle()
+            val issuesUi = remember(issueList, issueDetail) {
+                IssuesUi(issueList, issueDetail, model.issuesController::open, model.issuesController::setQuery, model.issuesController::refresh,
+                    model.issuesController::loadMore, model.issuesController::retry, model.issueDetailController::open,
+                    model.issueDetailController::refresh, model.issueDetailController::retry, model.issueDetailController::loadOlderComments,
+                    model::openIssueThread)
+            }
             val keepConnected by model.keepConnected.collectAsStateWithLifecycle()
             val hideTestFiles by model.hideTestFiles.collectAsStateWithLifecycle()
             val changesUi = remember(hideTestFiles) { ChangesUi(model::loadTurnDiff, hideTestFiles, model::setHideTestFiles) }
@@ -233,6 +242,7 @@ class MainActivity : ComponentActivity() {
                 openedThread = openedThread,
                 onOpenedThreadShown = model::consumeOpenedThread,
                 usage = usage,
+                issues = issuesUi,
                 onOpenUsage = model.usageController::open,
                 onUsageRange = model.usageController::selectRange,
                 onRefreshUsage = model.usageController::refresh,
