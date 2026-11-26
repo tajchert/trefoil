@@ -26,6 +26,7 @@ import com.tajchert.trefoil.core.session.ComposerDraft
 import com.tajchert.trefoil.core.session.ComposerDraftDiscard
 import com.tajchert.trefoil.core.session.ComposerDraftKey
 import com.tajchert.trefoil.core.session.ComposerDraftStore
+import com.tajchert.trefoil.core.session.IssueLinkNotice
 import com.tajchert.trefoil.core.session.ThreadDraftController
 import com.tajchert.trefoil.core.session.UNCERTAIN_MESSAGE
 import com.tajchert.trefoil.core.ssh.SshHostKeyException
@@ -95,11 +96,19 @@ class TrefoilViewModel internal constructor(
     private val issueLinkController = IssueLinkController(viewModelScope, { client }, { _notice.value = it },
         { issueDetailController.refreshLinkedThreads() }, track = { block -> mutationsInFlight.tracked { block() } })
     val issueLinkPending = issueLinkController.pending
+    /** Start thread from an issue: prefills the project's new-thread draft and carries the link into the draft (see [IssueStartController]). */
+    private val issueStartController = IssueStartController(viewModelScope, { client.state.value },
+        { key -> composerDraftStore.get(key)?.text }, { key, text -> composerDraftStore.updateText(key, text) }, { composerDraftStore.awaitLoaded() })
+    val issueStart = issueStartController.request
+    fun startThreadFromIssue(environmentId: String?, summary: IssueSummary?) = issueStartController.start(environmentId, summary)
+    fun replaceIssueStartDraft() = issueStartController.replace()
+    fun keepIssueStartDraft() = issueStartController.keep()
+    fun cancelIssueStart() = issueStartController.cancel()
     fun linkIssue(link: ThreadIssueLink) = issueLinkController.link(link)
     fun unlinkIssue(key: IssueKey) = issueLinkController.unlink(key)
     init {
         viewModelScope.launch {
-            client.state.map { it.environment?.id }.distinctUntilChanged().collect { issuesController.reset(); issueDetailController.reset() }
+            client.state.map { it.environment?.id }.distinctUntilChanged().collect { issuesController.reset(); issueDetailController.reset(); issueStartController.cancel() }
         }
         viewModelScope.launch {
             client.state.map { Triple(it.connection, it.issuesSupported, it.issueLinkedThreadsSupported) }.distinctUntilChanged().collect { (connection, issues, _) ->
@@ -191,6 +200,10 @@ class TrefoilViewModel internal constructor(
     internal val queueOperationPending: StateFlow<Set<String>> = queueGuard.pending
     /** Unsent new conversation; while non-null the UI shows the draft instead of the selected thread. */
     val draft: StateFlow<ThreadDraft?> = drafts.draft
+    /** "Thread started; the issue was not linked": its action sends one new explicit link, never an automatic resend. */
+    val issueLinkNotice: StateFlow<IssueLinkNotice?> = drafts.issueLinkNotice
+    fun retryIssueLink() = drafts.retryIssueLink()
+    fun dismissIssueLinkNotice() = drafts.dismissIssueLinkNotice()
     /** Emits once for every send (draft or thread) that did not deliver; the composer must leave its pending state. */
     val sendFailed: SharedFlow<Unit> = drafts.sendFailed
     init {
@@ -938,7 +951,9 @@ class TrefoilViewModel internal constructor(
         dropPendingOpen()
         // A draft whose earlier launch is still uncertain relaunches with the same ids, so the server resumes instead of duplicating.
         val launch = state.value.environment?.id?.let { composerDraftStore.get(ComposerDraftKey.NewThread(it, draft.projectId))?.pendingLaunch }
-        drafts.start(if (launch == null) draft else draft.copy(threadId = launch.threadId, commandId = launch.commandId))
+        val ids = if (launch == null) draft else draft.copy(threadId = launch.threadId, commandId = launch.commandId)
+        // A thread started from an issue links it once after the launch; a request of another machine is dropped.
+        drafts.start(issueStartController.take(state.value.environment?.id)?.let { ids.copy(issueLink = it) } ?: ids)
     }
     /** The composer draft for [key], including a NewThread draft that holds only sheet settings. */
     fun composerDraft(key: ComposerDraftKey): ComposerDraft? = composerDraftStore.get(key)

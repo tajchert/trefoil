@@ -204,11 +204,15 @@ class MainActivity : ComponentActivity() {
             val issueList by model.issues.collectAsStateWithLifecycle()
             val issueDetail by model.issueDetail.collectAsStateWithLifecycle()
             val issueLinkPending by model.issueLinkPending.collectAsStateWithLifecycle()
-            val issuesUi = remember(issueList, issueDetail, issueLinkPending) {
+            val issueStart by model.issueStart.collectAsStateWithLifecycle()
+            val issueLinkNotice by model.issueLinkNotice.collectAsStateWithLifecycle()
+            val issuesUi = remember(issueList, issueDetail, issueLinkPending, issueStart, issueLinkNotice) {
                 IssuesUi(issueList, issueDetail, model.issuesController::open, model.issuesController::setQuery, model.issuesController::refresh,
                     model.issuesController::loadMore, model.issuesController::retry, model.issueDetailController::open,
                     model.issueDetailController::refresh, model.issueDetailController::retry, model.issueDetailController::loadOlderComments,
-                    model::openIssueThread, model.issuesController::resolveLink, model::linkIssue, model::unlinkIssue, issueLinkPending)
+                    model::openIssueThread, model.issuesController::resolveLink, model::linkIssue, model::unlinkIssue, issueLinkPending,
+                    issueStart, model::startThreadFromIssue, model::replaceIssueStartDraft, model::keepIssueStartDraft, model::cancelIssueStart,
+                    issueLinkNotice, model::retryIssueLink, model::dismissIssueLinkNotice)
             }
             val keepConnected by model.keepConnected.collectAsStateWithLifecycle()
             val hideTestFiles by model.hideTestFiles.collectAsStateWithLifecycle()

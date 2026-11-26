@@ -146,6 +146,19 @@ fun RowScope.IssueLinkToolbarButton(action: IssueLinkAction, pending: Boolean, o
     }
 }
 
+/**
+ * Toolbar entry that starts a thread from the open issue: the New thread sheet opens on the issue's project with the first message
+ * prefilled. Meant for [IssueDetailContent]'s `toolbarExtras`; [enabled] follows connection, thread writes and the issue's environment.
+ */
+@Composable
+fun RowScope.IssueStartThreadButton(enabled: Boolean, onStart: () -> Unit) {
+    TextButton(
+        onClick = onStart, enabled = enabled,
+        modifier = Modifier.handPointer(enabled).testTag("issue-start-thread").semantics { contentDescription = "Start thread from this issue" },
+        contentPadding = PaddingValues(horizontal = 10.dp),
+    ) { Text("Start thread", style = TrefoilType.meta, color = if (enabled) Tf.colors.text else Tf.colors.muted, maxLines = 1) }
+}
+
 @Composable
 private fun DetailPlaceholder(state: IssueDetailUiState, actions: IssueDetailActions) {
     val c = Tf.colors

@@ -66,12 +66,15 @@ import com.tajchert.trefoil.ui.shell.SidePanelToggle
 import com.tajchert.trefoil.ui.shell.headerBudget
 import com.tajchert.trefoil.ui.shell.issuesMenuLabel
 import com.tajchert.trefoil.issueLinkAction
+import com.tajchert.trefoil.canStartThreadFromIssue
 import com.tajchert.trefoil.issueLinkFor
 import com.tajchert.trefoil.ui.issues.IssueDetailActions
 import com.tajchert.trefoil.ui.issues.IssueDetailContent
 import com.tajchert.trefoil.ui.issues.IssueLinkToolbarButton
 import com.tajchert.trefoil.ui.issues.IssueListActions
 import com.tajchert.trefoil.ui.issues.IssuesScreen
+import com.tajchert.trefoil.ui.issues.IssueStartThreadButton
+import com.tajchert.trefoil.ui.issues.showIssueLinkNotice
 import com.tajchert.trefoil.ui.issues.IssuesUi
 import com.tajchert.trefoil.ui.issues.ThreadIssueChip
 import com.tajchert.trefoil.ui.issues.ThreadIssueLinksSheet
@@ -794,7 +797,9 @@ fun TrefoilApp(
                     issues.onRefreshDetail, issues.onRetryDetail, issues.onLoadOlder, openLinkedThread) }
                 // Link or Unlink for the open thread; the buttons derive from the shell row, so a thread that shows the key flips them.
                 val linkAction = issueLinkAction(issues.detail.environmentId, issues.detail.detail?.summary, state, draft != null)
+                val startThreadEnabled = canStartThreadFromIssue(issues.detail.environmentId, issues.detail.detail?.summary, state)
                 val issueLinkExtras: @Composable RowScope.() -> Unit = {
+                    IssueStartThreadButton(startThreadEnabled, onStart = { issues.onStartThread(issues.detail.environmentId, issues.detail.detail?.summary) })
                     IssueLinkToolbarButton(linkAction, issues.linkPending != null,
                         onLink = { issues.detail.detail?.summary?.let(::issueLinkFor)?.let(issues.onLinkIssue) },
                         onUnlink = { issues.detail.detail?.summary?.issueKey?.let(issues.onUnlinkIssue) })
@@ -942,9 +947,25 @@ fun TrefoilApp(
             PairDialog(state.busy, { pairing = false; submittedPair = false; onCancelSsh() }, connectionAttempt.takeIf { it.kind == ConnectionKind.Pairing } ?: ConnectionAttempt(), pairLink?.second.orEmpty()) { url, name, insecure -> submittedPair = true; onPair(url, name, insecure) }
         }
         if (shortcutsOpen) KeyboardShortcutsDialog { shortcutsOpen = false }
-        if (creating) NewThreadSheet(state, { creating = false }, { newDraft, prompt ->
+        // Start thread from an issue: once the replace question is settled the sheet opens on the issue's project (the user may change it).
+        val issueStart = issues.startRequest
+        LaunchedEffect(issueStart) { if (issueStart != null && !issueStart.askReplace) { creatingProject = issueStart.projectId; creating = true } }
+        if (issueStart?.askReplace == true) AlertDialog(
+            onDismissRequest = issues.onCancelStart, title = { Text("Replace your draft?") },
+            text = { Text("This project already has an unsent new-thread draft. Replace it with the issue's key, title and link, or keep it.") },
+            confirmButton = { TextButton(issues.onReplaceStartDraft) { Text("Replace") } },
+            dismissButton = { TextButton(issues.onKeepStartDraft) { Text("Keep current") } },
+        )
+        // A rejected link after the launch: one explicit retry, never an automatic resend.
+        val linkNotice = issues.linkNotice
+        LaunchedEffect(linkNotice) {
+            if (linkNotice != null) showIssueLinkNotice(snackbar, linkNotice, issues.onRetryIssueLink, issues.onDismissIssueLinkNotice)
+        }
+        if (creating) NewThreadSheet(state, { creating = false; issues.onCancelStart() }, { newDraft, prompt ->
             seedPrompt = prompt.trim().takeIf { it.isNotEmpty() }
             onStartDraft(newDraft); creating = false; showThread = true
+            // Started from an issue: leave the Issues destination for the new conversation.
+            if (issueStart != null) navigate(ShellDestination.Threads)
         }, composerDrafts, creatingProject, onSetModelFavorite)
     }
 }

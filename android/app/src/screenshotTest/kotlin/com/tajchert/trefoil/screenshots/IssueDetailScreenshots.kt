@@ -12,6 +12,7 @@ import com.tajchert.trefoil.ui.TrefoilTheme
 import com.tajchert.trefoil.ui.issues.IssueDetailActions
 import com.tajchert.trefoil.ui.issues.IssueDetailContent
 import com.tajchert.trefoil.ui.issues.IssueLinkToolbarButton
+import com.tajchert.trefoil.ui.issues.IssueStartThreadButton
 import com.tajchert.trefoil.ui.issues.LocalIssueTimeZone
 import java.time.ZoneOffset
 
@@ -78,3 +79,18 @@ fun IssueDetail_UnlinkButton_Dark() { IssueDetailShot(IssueDetailFixtures.header
 @Preview(showBackground = true, widthDp = 400, heightDp = 400)
 @Composable
 fun IssueDetail_LinkPending_Light() { IssueDetailShot(IssueDetailFixtures.header) { IssueLinkToolbarButton(IssueLinkAction.Link, pending = true, onLink = {}, onUnlink = {}) } }
+
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400, heightDp = 400)
+@Composable
+fun IssueDetail_StartThread_Light() {
+    IssueDetailShot(IssueDetailFixtures.header) {
+        IssueStartThreadButton(enabled = true, onStart = {})
+        IssueLinkToolbarButton(IssueLinkAction.Link, pending = false, onLink = {}, onUnlink = {})
+    }
+}
+
+@PreviewTest
+@Preview(showBackground = true, widthDp = 400, heightDp = 400, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun IssueDetail_StartThreadDisabled_Dark() { IssueDetailShot(IssueDetailFixtures.header, dark = true) { IssueStartThreadButton(enabled = false, onStart = {}) } }

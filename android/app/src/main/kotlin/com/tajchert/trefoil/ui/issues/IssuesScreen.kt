@@ -33,8 +33,10 @@ import androidx.compose.ui.unit.sp
 import com.tajchert.trefoil.IssueDetailUiState
 import com.tajchert.trefoil.IssueLinkPending
 import com.tajchert.trefoil.IssueListUiState
+import com.tajchert.trefoil.IssueStartRequest
 import com.tajchert.trefoil.IssuesController
 import com.tajchert.trefoil.core.model.*
+import com.tajchert.trefoil.core.session.IssueLinkNotice
 import com.tajchert.trefoil.core.session.IssueLinkTarget
 import com.tajchert.trefoil.ui.Tf
 import com.tajchert.trefoil.ui.TfIcons
@@ -368,4 +370,9 @@ class IssuesUi(
     /** Resolves a tapped chat URL to a known issue (see [IssuesController.resolveLink]); null when it is none. */
     val onResolveLink: (environmentId: String, url: String, threadLinks: List<ThreadIssueLink>) -> IssueLinkTarget? = { _, _, _ -> null },
     val onLinkIssue: (ThreadIssueLink) -> Unit = {}, val onUnlinkIssue: (IssueKey) -> Unit = {}, val linkPending: IssueLinkPending? = null,
+    /** Start thread: [onStartThread] begins it for the open detail; [startRequest] holds the sheet's project and the replace question. */
+    val startRequest: IssueStartRequest? = null, val onStartThread: (environmentId: String?, IssueSummary?) -> Unit = { _, _ -> },
+    val onReplaceStartDraft: () -> Unit = {}, val onKeepStartDraft: () -> Unit = {}, val onCancelStart: () -> Unit = {},
+    /** "Thread started; the issue was not linked": [onRetryIssueLink] sends one new explicit link. */
+    val linkNotice: IssueLinkNotice? = null, val onRetryIssueLink: () -> Unit = {}, val onDismissIssueLinkNotice: () -> Unit = {},
 )
