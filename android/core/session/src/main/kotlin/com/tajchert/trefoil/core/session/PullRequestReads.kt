@@ -97,6 +97,8 @@ class PullRequestReads(
     private val maxEntries: Int = 24,
 ) {
     private class Entry(val flow: MutableStateFlow<PrPanelState>) {
+        /** One read-only view per entry, so repeated [panel] calls hand back the same instance. */
+        val view: StateFlow<PrPanelState> = flow.asStateFlow()
         var read: Job? = null
         var token = 0L
         var again = false
@@ -111,16 +113,17 @@ class PullRequestReads(
 
     /**
      * The panel for [key]: [snapshot] (when given) over any cached detail, then a fresh `detail` read when live.
-     * The returned flow keeps updating on refresh ticks while collected.
+     * The returned flow keeps updating on refresh ticks while collected. Asked again while it is collected (a
+     * recomposition), it returns the same flow without another read.
      */
     fun panel(key: PullRequestKey, snapshot: PrSnapshot? = null): StateFlow<PrPanelState> {
-        val entry = synchronized(lock) {
+        val (entry, watched) = synchronized(lock) {
             val entry = entryLocked(key)
-            if (snapshot != null) entry.flow.update { it.copy(snapshot = snapshot) }
-            entry
+            if (snapshot != null && entry.flow.value.snapshot != snapshot) entry.flow.update { it.copy(snapshot = snapshot) }
+            entry to (entry.flow.subscriptionCount.value > 0)
         }
-        refresh(key)
-        return entry.flow.asStateFlow()
+        if (!watched) refresh(key)
+        return entry.view
     }
 
     /** Current panel of [key], if cached. */

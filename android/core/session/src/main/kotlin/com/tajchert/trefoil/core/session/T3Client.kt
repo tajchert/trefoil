@@ -9,9 +9,11 @@ import com.tajchert.trefoil.core.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -80,6 +82,10 @@ class T3Client(
     private val sideChatShellWaitMillis: Long = 10_000,
     /** Parses turn diffs off the main thread; see [loadTurnDiff]. */
     private val diffParser: DiffParser = UnifiedDiffParserAdapter,
+    /** How long a PR mutation (`runAction`, `comment`) waits before its outcome counts as unknown. */
+    private val pullRequestMutationTimeoutMillis: Long = 60_000,
+    /** Client timeout of one `POST /api/pull-requests/diff` page (T3 `pullRequestDiffHttp`). */
+    private val pullRequestDiffTimeoutMillis: Long = 60_000,
 ) : TrefoilClient {
     private val authorizer = tokens.authorizer
     private var renewJob: Job? = null
@@ -279,7 +285,7 @@ class T3Client(
         return withContext(Dispatchers.IO) { response.use(::parseFetched) }
     }
     private fun parseFetched(response: Response): JsonObject {
-        if (!response.isSuccessful) throw HttpFailure(response.code, authorizer.shouldRetry(response))
+        if (!response.isSuccessful) throw HttpFailure(response.code, authorizer.shouldRetry(response), if (response.code == 503) errorBody(response) else null)
         return EffectRpc.json.parseToJsonElement(response.body?.string() ?: error("Empty server response")).jsonObject
     }
     private suspend fun execute(call: Call): JsonObject = withContext(Dispatchers.IO) {
@@ -294,12 +300,12 @@ class T3Client(
      * renewed at [url]'s host first. A DPoP `replay` or clock-skew answer gets exactly one retry with a fresh proof; any
      * other DPoP 401 renews once and retries; anything else propagates (401/403: pair again).
      */
-    private suspend fun authorizedFetch(environment: SavedEnvironment, method: String, url: HttpUrl, timeoutMillis: Long? = null): JsonObject {
+    private suspend fun authorizedFetch(environment: SavedEnvironment, method: String, url: HttpUrl, timeoutMillis: Long? = null, body: JsonObject? = null): JsonObject {
         val base = url.newBuilder().encodedPath("/").query(null).fragment(null).build()
         var current = usableToken(environment, base)
         // Off the caller's thread: a DPoP proof is a keystore signature.
         suspend fun request() = withContext(Dispatchers.IO) {
-            authorizer.authorize(Request.Builder().url(url), current, method, url).apply { if (method == "POST") post(ByteArray(0).toRequestBody()) }.build()
+            authorizer.authorize(Request.Builder().url(url), current, method, url).apply { if (method == "POST") post(body?.toString()?.toRequestBody(JSON_MEDIA_TYPE) ?: ByteArray(0).toRequestBody()) }.build()
         }
         return try { fetch(request(), timeoutMillis) } catch (error: HttpFailure) {
             when {
@@ -355,9 +361,13 @@ class T3Client(
         }
     }
     /** [dpopRetry]: a DPoP rejection one fresh proof can fix (see [EnvironmentAuthorizer.shouldRetry]). */
-    private class HttpFailure(val status: Int, val dpopRetry: Boolean = false) : IllegalStateException(if (status == 401 || status == 403) "Authorization expired or denied; pair again" else "Server HTTP error $status")
+    /** A small JSON error body (T3 HttpApi errors), or null; it may hold host text, so it is never logged. */
+    private fun errorBody(response: Response): JsonObject? =
+        runCatching { EffectRpc.json.parseToJsonElement(response.peekBody(65_536).string()) as? JsonObject }.getOrNull()
+    /** [body]: the parsed error object of a 503 (PR endpoints answer their typed errors with it). */
+    private class HttpFailure(val status: Int, val dpopRetry: Boolean = false, val body: JsonObject? = null) : IllegalStateException(if (status == 401 || status == 403) "Authorization expired or denied; pair again" else "Server HTTP error $status")
     /** The server answered with a failure Exit: a definite answer, not a lost reply. */
-    private class ServerRejected : IllegalStateException("Server rejected request; refresh before trying again")
+    private class ServerRejected(val error: JsonObject? = null) : IllegalStateException("Server rejected request; refresh before trying again")
     /** A local check stopped the command before anything was transmitted: nothing changed, so the session stays usable. */
     private class CommandNotSent : IllegalStateException("The thread changed or went stale; the command was not sent")
     /** A success Exit whose value is not a dispatch receipt (`{sequence: non-negative integer}`): the outcome is uncertain. */
@@ -531,6 +541,7 @@ class T3Client(
         val epoch = generation
         synchronized(lifecycleLock) {
             if (state.value.environment?.id != environment.id) usageCache.clear()
+            forgetPullRequests { it != environment.id }
             turnDiffs.retainOnly(environment.id)
             val retained = environmentStates[environment.id] ?: ClientState()
             projection = JsonObject(emptyMap())
@@ -847,7 +858,8 @@ class T3Client(
      * runtime mode and model changes, model favourites, thread launch, subagent stop, thread actions and settlement undo. Reads
      * (configuration, projections, usage, screens, downloads) do not count; a switch only re-reads them.
      */
-    override fun isIdleForRouteSwitch(): Boolean = mutationsInFlight.get() == 0
+    override fun isIdleForRouteSwitch(): Boolean =
+        mutationsInFlight.get() == 0 && pullRequestEnvironments.values.none { it.actions.hasSendingMutation() }
 
     /** Any pong after this ping proves the socket; silence, a failed send or a drop meanwhile fails this connection only. */
     override suspend fun verifyLink(timeoutMillis: Long): Boolean {
@@ -871,7 +883,8 @@ class T3Client(
         try { return block() } finally { mutationsInFlight.decrementAndGet() }
     }
     private fun send(frame: JsonObject) { check(socket?.send(frame.toString()) == true) { "Connection is unavailable" } }
-    private suspend fun rpc(tag: String, payload: JsonObject, epoch: Long = generation, guard: () -> Boolean = { true }, timeoutMillis: Long = requestTimeoutMillis): JsonElement {
+    /** [onSent] runs (under [lifecycleLock]) once the request frame is on the socket: failures before it were never sent. */
+    private suspend fun rpc(tag: String, payload: JsonObject, epoch: Long = generation, guard: () -> Boolean = { true }, timeoutMillis: Long = requestTimeoutMillis, onSent: () -> Unit = {}): JsonElement {
         check(pending.size < 64) { "Too many outstanding requests" }
         val id = serial.incrementAndGet().toString()
         val result = CompletableDeferred<JsonElement>(); pending[id] = result
@@ -880,7 +893,7 @@ class T3Client(
         try { synchronized(lifecycleLock) {
             context.ensureActive()
             if (epoch != generation || !guard()) throw CommandNotSent()
-            send(EffectRpc.request(id, tag, payload)); sent = true
+            send(EffectRpc.request(id, tag, payload)); sent = true; onSent()
         }; return withTimeoutOrNull(timeoutMillis) { result.await() } ?: throw RequestTimedOut() }
         finally { if (pending.remove(id) != null && sent) runCatching { send(EffectRpc.signal("Interrupt", id)) } }
     }
@@ -894,16 +907,21 @@ class T3Client(
         when (frame.string("_tag")) {
             "Pong" -> { pongAt = System.currentTimeMillis(); pongs.update { it + 1 } }
             "Chunk" -> {
+                val pullRequestStream = pullRequestStreams[id]
+                // PR refresh ticks are bare numbers.
+                if (pullRequestStream != null) (frame["values"] as? JsonArray)?.forEach(pullRequestStream.onValue)
                 // The suggestion stream's items may be `null` (no suggestion); it gets them as an empty object.
-                if (id == suggestionSubscription) (frame["values"] as? JsonArray)?.forEach { streams[id]?.invoke(it as? JsonObject ?: JsonObject(emptyMap())) }
+                else if (id == suggestionSubscription) (frame["values"] as? JsonArray)?.forEach { streams[id]?.invoke(it as? JsonObject ?: JsonObject(emptyMap())) }
                 else frame.objects("values").forEach { streams[id]?.invoke(it) }
                 send(EffectRpc.signal("Ack", id))
             }
             "Exit" -> {
                 val exit = frame.obj("exit")
+                // An optional PR refresh stream ends on its own; it never fails the session.
+                pullRequestStreams.remove(id)?.onEnd?.invoke(exit)
                 val result = pending.remove(id)
                 if (exit.string("_tag") == "Success") result?.complete(exit["value"] ?: JsonNull)
-                else result?.completeExceptionally(if (exitInterruptedOnly(exit)) RequestInterrupted() else ServerRejected())
+                else result?.completeExceptionally(if (exitInterruptedOnly(exit)) RequestInterrupted() else ServerRejected(exitFailError(exit)))
                 if (streams.remove(id) != null) {
                     // The config stream is optional: rejected before its snapshot, the connect asks `server.getConfig`; its
                     // later end leaves the session alone.
@@ -958,6 +976,7 @@ class T3Client(
         update { it.copy(connection =ConnectionStatus.Error, canWrite = false, canWriteThreads = false, canWriteSettings = false, canWriteSourceControl = false, pullRequestsSupported = false, pullRequestChecksSupported = false, modelPreferences = ModelPreferences(), canRead = false, shellLive = false, canReadUsage = false, queuedMessages = emptyList(), queueHeld = false, canSteer = false, canStop = false, busy = false, error = message, threadActionsConfigured = false, settlementUndo = null, activeRoute = null, sideChatsSupported = false) }
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }; pending.clear()
         streams.clear(); heartbeat?.cancel(); socket?.cancel(); socket = null
+        pullRequestSessionLost()
     }
     private fun resetRoute() { endDiscovery(); tunnelConfig = PreviewTunnelConfig(); activeBase = null; liveShellOrigin = null; pendingRouteHints = null; directEndpoints = null; initialHintSent = false; endpointsProvisional = false; configSubscription = null
         firstConfig?.completeExceptionally(IllegalStateException("Connection was cancelled")); firstConfig = null; configPublished = false; earlyConfigEvents.clear(); configProviders = emptyList(); linkStateJob?.cancel(); linkStateJob = null; renewJob?.cancel(); renewJob = null
@@ -973,7 +992,7 @@ class T3Client(
         inspector.suspend()
         socket?.close(1000, null); socket = null
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Disconnected; pending command outcome may be uncertain")) }
-        pending.clear(); streams.clear(); threadSubscription = null; shellReady = false; shellSynced = false; deferredThread = null; threadReady = false; authorized = false; previewAuthorized = false; settingsAuthorized = false
+        pending.clear(); streams.clear(); pullRequestSessionLost(); threadSubscription = null; shellReady = false; shellSynced = false; deferredThread = null; threadReady = false; authorized = false; previewAuthorized = false; settingsAuthorized = false
         endShellStream("Disconnected before the thread list refreshed")
         resetRoute()
         resetScreens()
@@ -1276,6 +1295,7 @@ class T3Client(
     private fun shellLive() {
         if (!shellReady || state.value.connection != ConnectionStatus.Connected) return
         startDiscovery()
+        pullRequestSessionLive()
         pendingRouteHints?.let { pendingRouteHints = null; it() }
     }
     /** Every shell stream starts unsynchronized: its rows become a checkpoint only from its own marker on. */
@@ -2331,6 +2351,7 @@ class T3Client(
         environmentId?.let(shellResume::forget)
         threadProjections.forgetEnvironment(environmentId)
         turnDiffs.forgetEnvironment(environmentId)
+        forgetPullRequests { it == environmentId }
         environmentId?.let(tokens::forget)
     }
     /**
@@ -2387,8 +2408,157 @@ class T3Client(
         CachedShell(environmentId, checkpoint.projects, checkpoint.threads, checkpoint.cursor, nowMillis)
     }
 
+    // --- Pull requests (SPEC "Diffs and pull requests") ---
+
+    /** One environment's PR caches and pending actions; memory only, dropped by [forgetEnvironment] or a switch. */
+    private class PullRequestEnvironment(val transport: PullRequestTransport, val reads: PullRequestReads, val actions: PullRequestActions)
+    /** An open `pullRequests.subscribeRefreshes`: [onValue] per tick, [onEnd] with its Exit (null: the session ended). */
+    private class PullRequestStream(val onValue: (JsonElement) -> Unit, val onEnd: (JsonObject?) -> Unit)
+    private val pullRequestEnvironments = ConcurrentHashMap<String, PullRequestEnvironment>()
+    private val pullRequestStreams = ConcurrentHashMap<String, PullRequestStream>()
+    private val emptyPanel: StateFlow<PrPanelState> = MutableStateFlow(PrPanelState()).asStateFlow()
+
+    /**
+     * [PullRequestTransport] bound to [environmentId]. PR failures are scoped to the request: a typed `Fail` is a
+     * [PrRpcFailure], a request that never left is [PrRequestNotSent], and a sent request without a definite answer
+     * (timeout, disconnect, oversized or interrupted reply) is an [UncertainOutcomeException]. None of them fails the
+     * session (unlike thread commands): PR mutations act on the code host, not on orchestration state.
+     */
+    private inner class PullRequestSocketTransport(private val environmentId: String) : PullRequestTransport {
+        // Lock-free: [PullRequestReads] asks while holding its own lock.
+        override fun isLive(): Boolean {
+            val current = state.value
+            return socket != null && current.environment?.id == environmentId && current.connection == ConnectionStatus.Connected &&
+                current.shellLive && current.pullRequestsSupported
+        }
+
+        override suspend fun request(tag: String, payload: JsonObject): JsonElement {
+            val epoch = synchronized(lifecycleLock) { if (!isLive()) throw PrRequestNotSent(); generation }
+            var sent = false
+            val timeout = if (tag == "pullRequests.runAction" || tag == "pullRequests.comment") pullRequestMutationTimeoutMillis else requestTimeoutMillis
+            return try {
+                rpc(tag, payload, epoch, guard = ::isLive, timeoutMillis = timeout, onSent = { sent = true })
+            } catch (error: CancellationException) { throw error }
+            catch (rejected: ServerRejected) { throw PrRpcFailure(tag, rejected.error ?: JsonObject(emptyMap())) }
+            catch (_: Exception) {
+                if (!sent) throw PrRequestNotSent()
+                throw UncertainOutcomeException("The server did not confirm this pull request request; the outcome is unknown")
+            }
+        }
+
+        override fun refreshes(): Flow<Long> = callbackFlow<Long> {
+            val id = synchronized(lifecycleLock) {
+                if (!isLive()) throw PrRequestNotSent()
+                val id = serial.incrementAndGet().toString()
+                pullRequestStreams[id] = PullRequestStream(
+                    onValue = { value -> (value as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.let { trySend(it) } },
+                    // A Success or Interrupt-only Exit (and the session's end) closes normally; anything else is an error
+                    // the reads layer ignores, since the stream is optional.
+                    onEnd = { exit ->
+                        if (exit == null || exit.string("_tag") == "Success" || exitInterruptedOnly(exit)) close()
+                        else close(IllegalStateException("Pull request refreshes ended"))
+                    },
+                )
+                try { this@T3Client.send(EffectRpc.request(id, "pullRequests.subscribeRefreshes", JsonObject(emptyMap()))) }
+                catch (error: Exception) { pullRequestStreams.remove(id); throw error }
+                id
+            }
+            awaitClose {
+                synchronized(lifecycleLock) { if (pullRequestStreams.remove(id) != null) runCatching { this@T3Client.send(EffectRpc.signal("Interrupt", id)) } }
+            }
+        }.buffer(Channel.CONFLATED)
+
+        override suspend fun postDiff(body: JsonObject): JsonObject {
+            val (epoch, environment, base) = synchronized(lifecycleLock) {
+                if (!isLive()) throw PrRequestNotSent("Reconnect to load the pull request diff")
+                // The live route passed the shared URL policy (and any private-LAN consent) and the identity check.
+                Triple(generation, state.value.environment ?: throw PrRequestNotSent(), activeBase ?: throw PrRequestNotSent())
+            }
+            val reply = try {
+                authorizedFetch(environment, "POST", base.resolve(PULL_REQUEST_DIFF_PATH)!!, pullRequestDiffTimeoutMillis, body)
+            } catch (error: CancellationException) { throw error }
+            catch (failure: HttpFailure) {
+                failure.body?.takeIf { failure.status == 503 }?.let { throw PrRpcFailure("pullRequests.diff", it) }
+                throw PullRequestReadException(if (failure.status == 401 || failure.status == 403) failure.message ?: PR_DIFF_FAILED else PR_DIFF_FAILED)
+            } catch (_: Exception) { throw PullRequestReadException(PR_DIFF_FAILED) }
+            synchronized(lifecycleLock) { if (epoch != generation) throw PullRequestReadException("The connection changed; load the diff again") }
+            return reply
+        }
+    }
+
+    private fun pullRequestEnvironment(): PullRequestEnvironment? {
+        val environmentId = state.value.environment?.id ?: return null
+        return pullRequestEnvironments.getOrPut(environmentId) {
+            val transport = PullRequestSocketTransport(environmentId)
+            val reads = PullRequestReads(transport, scope, checksSupported = {
+                state.value.let { it.environment?.id == environmentId && it.pullRequestChecksSupported }
+            })
+            PullRequestEnvironment(transport, reads, PullRequestActions(transport, reads))
+        }
+    }
+
+    /** Caller holds [lifecycleLock]. Reopens watched panels' refreshes and reconciles unknown actions, off the lock. */
+    private fun pullRequestSessionLive() {
+        val environment = state.value.environment?.id?.let(pullRequestEnvironments::get) ?: return
+        scope.launch {
+            environment.reads.sessionLive()
+            environment.actions.reconcile()
+        }
+    }
+
+    /** Caller holds [lifecycleLock]. Ends refresh streams and in-flight reads; cached panels stay for the stale view. */
+    private fun pullRequestSessionLost() {
+        pullRequestStreams.values.toList().also { pullRequestStreams.clear() }.forEach { it.onEnd(null) }
+        pullRequestEnvironments.values.forEach { it.reads.sessionLost() }
+    }
+
+    private fun forgetPullRequests(which: (String) -> Boolean) {
+        pullRequestEnvironments.keys.filter(which).forEach { id ->
+            pullRequestEnvironments.remove(id)?.let { it.reads.forget(); it.actions.forget() }
+        }
+    }
+
+    /**
+     * The connected environment's panel for [key], painted from the thread link's snapshot. The same flow comes back
+     * while it is collected, so recomposition never restarts its reads. Network reads need `pullRequests` support.
+     */
+    override fun prPanel(key: PullRequestKey): StateFlow<PrPanelState> {
+        val environment = pullRequestEnvironment() ?: return emptyPanel
+        val snapshot = state.value.threadPullRequests.firstOrNull { it.key == key }?.snapshot
+        return environment.reads.panel(key, snapshot)
+    }
+
+    override suspend fun refreshPullRequest(key: PullRequestKey) {
+        pullRequestEnvironment()?.reads?.refresh(key)
+    }
+
+    override suspend fun loadPullRequestDiff(key: PullRequestKey, cursor: String?): PrDiffPage {
+        check(state.value.pullRequestsSupported) { "This server does not offer pull requests" }
+        val environment = pullRequestEnvironment() ?: throw PrRequestNotSent("Connect to load the pull request diff")
+        return environment.reads.loadDiff(key, cursor)
+    }
+
+    override suspend fun runPullRequestAction(key: PullRequestKey, action: PrAction, mergeMethod: PrMergeMethod?) {
+        pullRequestWriter().actions.run(key, action, mergeMethod)
+    }
+
+    override suspend fun commentOnPullRequest(key: PullRequestKey, body: String) {
+        pullRequestWriter().actions.comment(key, body)
+    }
+
+    private fun pullRequestWriter(): PullRequestEnvironment {
+        val current = state.value
+        check(current.pullRequestsSupported) { "This server does not offer pull requests" }
+        check(current.canWriteSourceControl) { "This connection cannot change pull requests" }
+        if (!current.canWrite) throw PrRequestNotSent("Wait for a fresh connection before changing this pull request")
+        return pullRequestEnvironment() ?: throw PrRequestNotSent()
+    }
+
+    /** Test hook: whether the connected environment's refresh stream is open. */
+    internal val pullRequestStreamOpen: Boolean get() = state.value.environment?.id?.let(pullRequestEnvironments::get)?.reads?.streamOpen == true
+
     override fun close() {
-        disconnectNow(); environmentStates.clear(); shellCheckpoints.clear(); shellResume.forget(null); threadProjections.clear()
+        disconnectNow(); forgetPullRequests { true }; environmentStates.clear(); shellCheckpoints.clear(); shellResume.forget(null); threadProjections.clear()
         // Only this client's own calls and socket end above; a pool shared with the probe, the renewer and sibling clients keeps its warm connections.
         if (ownsPool) http.connectionPool.evictAll()
     }
@@ -2397,6 +2567,19 @@ class T3Client(
 private const val CREATION_SOURCE = "mobile"
 /** T3 mobile's fork title for a new side chat (`useStartSideChat`). */
 private const val SIDE_CHAT_TITLE = "Side chat"
+private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+private const val PULL_REQUEST_DIFF_PATH = "/api/pull-requests/diff"
+private const val PR_DIFF_FAILED = "Couldn't load the pull request diff"
+
+/** The typed error of a failure Exit (`Fail` reason), or null for defects and interruptions. */
+internal fun exitFailError(exit: JsonObject): JsonObject? {
+    val reasons = when (val cause = exit["cause"]) {
+        is JsonArray -> cause.mapNotNull { it as? JsonObject }
+        is JsonObject -> listOf(cause)
+        else -> emptyList()
+    }
+    return reasons.firstOrNull { it.string("_tag") == "Fail" }?.get("error") as? JsonObject
+}
 /** Shown when the selected thread's data is larger than this app loads (no bounded snapshots yet). */
 internal const val THREAD_TOO_LARGE = "This thread is too large to open on mobile yet. Open it in T3 Code on your computer."
 
