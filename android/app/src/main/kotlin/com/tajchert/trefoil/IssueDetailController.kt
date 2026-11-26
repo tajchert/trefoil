@@ -40,6 +40,8 @@ class IssueDetailController(
     private var loadJob: Job? = null
     private var olderJob: Job? = null
     private var linkedJob: Job? = null
+    /** Orders every linked-threads read, whichever job runs it: only the newest started read may write its reply. */
+    private var linkedGeneration = 0
 
     /** Opens [ref]. A cached detail younger than 30 s is shown as is; an older one is shown while a refresh runs. */
     fun open(environmentId: String, ref: IssueRef, key: IssueKey) {
@@ -118,8 +120,9 @@ class IssueDetailController(
         syncLive()
         if (!linkedSupported() || !live()) return
         val gen = generation
+        val token = ++linkedGeneration
         linkedJob?.cancel()
-        linkedJob = scope.launch { fetchLinked(gen, environmentId, ref, key) }
+        linkedJob = scope.launch { fetchLinked(gen, token, environmentId, ref, key) }
     }
 
     /** Re-reads the connection flag and the linked-threads capability; call when the client state changes. */
@@ -161,7 +164,7 @@ class IssueDetailController(
                 mutable.update {
                     it.copy(detail = detail, loading = false, refreshing = false, failure = null, failureMessage = null, commentsCapped = capped)
                 }
-                if (supported) fetchLinked(gen, environmentId, ref, key)
+                if (supported) fetchLinked(gen, ++linkedGeneration, environmentId, ref, key)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (gen != generation) return@launch
@@ -172,11 +175,11 @@ class IssueDetailController(
         }
     }
 
-    private suspend fun fetchLinked(gen: Int, environmentId: String, ref: IssueRef, key: IssueKey) {
+    private suspend fun fetchLinked(gen: Int, token: Int, environmentId: String, ref: IssueRef, key: IssueKey) {
         try {
             val threads = client().issueLinkedThreads(key)
             currentCoroutineContext().ensureActive()
-            if (gen != generation) return
+            if (gen != generation || token != linkedGeneration) return
             cache[CacheKey(environmentId, ref)]?.linkedThreads = threads
             mutable.update { it.copy(linkedThreads = threads) }
         } catch (e: CancellationException) { throw e }

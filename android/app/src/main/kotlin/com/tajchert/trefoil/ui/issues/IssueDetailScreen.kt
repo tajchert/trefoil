@@ -18,11 +18,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tajchert.trefoil.IssueDetailUiState
+import com.tajchert.trefoil.IssueLinkAction
 import com.tajchert.trefoil.core.model.*
 import com.tajchert.trefoil.ui.MarkdownContent
 import com.tajchert.trefoil.ui.Tf
@@ -120,6 +123,26 @@ fun IssueDetailContent(
             if (detail == null) DetailPlaceholder(state, actions)
             else DetailBody(state, detail, actions, openUrl)
         }
+    }
+}
+
+/**
+ * Toolbar entry for the thread that is open: "Link" or "Unlink". While a command is [pending] it shows progress and ignores taps.
+ * Draws nothing for [IssueLinkAction.None]. Meant for [IssueDetailContent]'s `toolbarExtras`.
+ */
+@Composable
+fun RowScope.IssueLinkToolbarButton(action: IssueLinkAction, pending: Boolean, onLink: () -> Unit, onUnlink: () -> Unit) {
+    if (action == IssueLinkAction.None) return
+    val c = Tf.colors
+    val linking = action == IssueLinkAction.Link
+    val description = if (linking) "Link to current thread" else "Unlink from current thread"
+    TextButton(
+        onClick = { if (!pending) { if (linking) onLink() else onUnlink() } }, enabled = !pending,
+        modifier = Modifier.handPointer(!pending).testTag(if (linking) "issue-link" else "issue-unlink").semantics { contentDescription = description },
+        contentPadding = PaddingValues(horizontal = 10.dp),
+    ) {
+        if (pending) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = c.muted)
+        else Text(if (linking) "Link" else "Unlink", style = TrefoilType.meta, color = if (linking) c.text else c.red)
     }
 }
 

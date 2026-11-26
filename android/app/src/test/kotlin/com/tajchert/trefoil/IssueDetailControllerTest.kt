@@ -159,6 +159,23 @@ class IssueDetailControllerTest {
         assertNull(controller.state.value.failure)
     }
 
+    @Test fun anOlderLinkedReadNeverOverwritesANewerRefresh() = runBlocking {
+        val fake = Fake()
+        val gate = CompletableDeferred<Unit>()
+        val old = listOf(IssueLinkedThread("old", "p1", "Old", archived = false, settled = false))
+        val fresh = listOf(IssueLinkedThread("new", "p1", "New", archived = false, settled = false))
+        var calls = 0
+        fake.linkedAnswer = { if (++calls == 1) { gate.await(); old } else fresh }
+        val controller = controller(fake)
+        controller.open("e1", ref(), key()); yield()
+        // The load's own read is still waiting when a link command settles and asks again.
+        controller.refreshLinkedThreads(); yield()
+        assertEquals(listOf("new"), controller.state.value.linkedThreads.map { it.id })
+        gate.complete(Unit); yield(); yield()
+        assertEquals(listOf("new"), controller.state.value.linkedThreads.map { it.id })
+        assertEquals(2, fake.linked.size)
+    }
+
     @Test fun failuresMapToTypedMessagesAndNeverRetry() = runBlocking {
         val fake = Fake(); var clock = 1_000L
         val controller = controller(fake) { clock }

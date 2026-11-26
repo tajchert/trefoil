@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tajchert.trefoil.IssueDetailUiState
+import com.tajchert.trefoil.IssueLinkPending
 import com.tajchert.trefoil.IssueListUiState
 import com.tajchert.trefoil.IssuesController
 import com.tajchert.trefoil.core.model.*
@@ -354,7 +355,8 @@ private fun IssueRow(issue: IssueSummary, selected: Boolean, onClick: () -> Unit
 /**
  * Everything the shell needs from the issue controllers: the list and detail state and what the screens call. [onOpenIssue] starts the
  * detail controller for an issue of an environment; [onOpenThread] selects a linked thread of that environment (false when it cannot be
- * opened). The defaults make previews and tests that do not touch issues compile unchanged.
+ * opened). [onLinkIssue] and [onUnlinkIssue] act on the selected thread; [linkPending] is the command in flight. The defaults make
+ * previews and tests that do not touch issues compile unchanged.
  */
 class IssuesUi(
     val list: IssueListUiState = IssueListUiState(), val detail: IssueDetailUiState = IssueDetailUiState(),
@@ -365,4 +367,5 @@ class IssuesUi(
     val onOpenThread: suspend (environmentId: String, threadId: String) -> Boolean = { _, _ -> false },
     /** Resolves a tapped chat URL to a known issue (see [IssuesController.resolveLink]); null when it is none. */
     val onResolveLink: (environmentId: String, url: String, threadLinks: List<ThreadIssueLink>) -> IssueLinkTarget? = { _, _, _ -> null },
+    val onLinkIssue: (ThreadIssueLink) -> Unit = {}, val onUnlinkIssue: (IssueKey) -> Unit = {}, val linkPending: IssueLinkPending? = null,
 )

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +20,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -77,32 +82,48 @@ fun ThreadIssueChip(links: List<ThreadIssueLink>, onClick: () -> Unit, modifier:
 
 /**
  * Every issue linked to the thread: key, title and a small "agent" / "manual" badge. A row calls [onOpen]. With [onUnlink] each row
- * also gets an Unlink action; null leaves it out.
+ * also gets an Unlink action, behind a confirmation dialog; null leaves it out. While [unlinkEnabled] is false (a command is in
+ * flight) the action does nothing.
  */
 @Composable
 fun ThreadIssueLinksSheet(
     links: List<ThreadIssueLink>, onOpen: (ThreadIssueLink) -> Unit, onDismiss: () -> Unit, onUnlink: ((ThreadIssueLink) -> Unit)? = null,
+    unlinkEnabled: Boolean = true,
 ) {
-    TfAdaptiveSheet(onDismiss = onDismiss, dialogMaxWidth = IssueSheetDialogWidth) { ThreadIssueLinksContent(links, onOpen, onUnlink) }
+    var confirming by remember { mutableStateOf<ThreadIssueLink?>(null) }
+    TfAdaptiveSheet(onDismiss = onDismiss, dialogMaxWidth = IssueSheetDialogWidth) {
+        ThreadIssueLinksContent(links, onOpen, if (onUnlink == null) null else ({ link -> confirming = link }), unlinkEnabled)
+    }
+    val link = confirming
+    // A link the shell row dropped meanwhile closes the dialog with it.
+    if (link != null && onUnlink != null && links.any { it.key.identity == link.key.identity }) AlertDialog(
+        onDismissRequest = { confirming = null }, title = { Text("Unlink ${link.displayKey}?") },
+        text = { Text("The thread stops listing this issue. The issue itself is not changed.") },
+        confirmButton = { TextButton(enabled = unlinkEnabled, onClick = { confirming = null; onUnlink(link) }, modifier = Modifier.testTag("issue-unlink-confirm")) { Text("Unlink") } },
+        dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
+    )
 }
 
 private val IssueSheetDialogWidth = 480.dp
 
 /** Sheet body, separate from the sheet chrome so it renders standalone. */
 @Composable
-internal fun ThreadIssueLinksContent(links: List<ThreadIssueLink>, onOpen: (ThreadIssueLink) -> Unit, onUnlink: ((ThreadIssueLink) -> Unit)? = null, modifier: Modifier = Modifier) {
+internal fun ThreadIssueLinksContent(
+    links: List<ThreadIssueLink>, onOpen: (ThreadIssueLink) -> Unit, onUnlink: ((ThreadIssueLink) -> Unit)? = null, unlinkEnabled: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
     val c = Tf.colors
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 20.dp).testTag("thread-issue-links")) {
         Text("Issues", Modifier.padding(start = 4.dp, bottom = 8.dp), style = MaterialTheme.typography.headlineSmall, color = c.text)
         links.forEachIndexed { index, link ->
-            IssueLinkRow(link, onOpen, onUnlink)
+            IssueLinkRow(link, onOpen, onUnlink, unlinkEnabled)
             if (index != links.lastIndex) HorizontalDivider(color = c.line)
         }
     }
 }
 
 @Composable
-private fun IssueLinkRow(link: ThreadIssueLink, onOpen: (ThreadIssueLink) -> Unit, onUnlink: ((ThreadIssueLink) -> Unit)?) {
+private fun IssueLinkRow(link: ThreadIssueLink, onOpen: (ThreadIssueLink) -> Unit, onUnlink: ((ThreadIssueLink) -> Unit)?, unlinkEnabled: Boolean) {
     val c = Tf.colors
     Row(Modifier.fillMaxWidth().testTag("issue-link-${link.displayKey}"), verticalAlignment = Alignment.CenterVertically) {
         Row(
@@ -119,7 +140,7 @@ private fun IssueLinkRow(link: ThreadIssueLink, onOpen: (ThreadIssueLink) -> Uni
             }
             Icon(TfIcons.ChevronRight, null, Modifier.padding(top = 2.dp).size(20.dp), tint = c.muted)
         }
-        if (onUnlink != null) TextButton(onClick = { onUnlink(link) }, Modifier.testTag("issue-unlink-${link.displayKey}")) { Text("Unlink", color = c.red) }
+        if (onUnlink != null) TextButton(onClick = { onUnlink(link) }, enabled = unlinkEnabled, modifier = Modifier.testTag("issue-unlink-${link.displayKey}")) { Text("Unlink", color = c.red) }
     }
 }
 

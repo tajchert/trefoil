@@ -65,8 +65,11 @@ import com.tajchert.trefoil.ui.shell.SidePanelHost
 import com.tajchert.trefoil.ui.shell.SidePanelToggle
 import com.tajchert.trefoil.ui.shell.headerBudget
 import com.tajchert.trefoil.ui.shell.issuesMenuLabel
+import com.tajchert.trefoil.issueLinkAction
+import com.tajchert.trefoil.issueLinkFor
 import com.tajchert.trefoil.ui.issues.IssueDetailActions
 import com.tajchert.trefoil.ui.issues.IssueDetailContent
+import com.tajchert.trefoil.ui.issues.IssueLinkToolbarButton
 import com.tajchert.trefoil.ui.issues.IssueListActions
 import com.tajchert.trefoil.ui.issues.IssuesScreen
 import com.tajchert.trefoil.ui.issues.IssuesUi
@@ -789,6 +792,13 @@ fun TrefoilApp(
                 // Issues: the detail's actions are the same on a pushed screen, in the detail pane and in the side panel's Issue tab.
                 val issueDetailActions = { onBack: () -> Unit -> IssueDetailActions(onBack, { url -> if (isSafeLink(url)) runCatching { uriHandler.openUri(url) } },
                     issues.onRefreshDetail, issues.onRetryDetail, issues.onLoadOlder, openLinkedThread) }
+                // Link or Unlink for the open thread; the buttons derive from the shell row, so a thread that shows the key flips them.
+                val linkAction = issueLinkAction(issues.detail.environmentId, issues.detail.detail?.summary, state, draft != null)
+                val issueLinkExtras: @Composable RowScope.() -> Unit = {
+                    IssueLinkToolbarButton(linkAction, issues.linkPending != null,
+                        onLink = { issues.detail.detail?.summary?.let(::issueLinkFor)?.let(issues.onLinkIssue) },
+                        onUnlink = { issues.detail.detail?.summary?.issueKey?.let(issues.onUnlinkIssue) })
+                }
                 val issueListActions = IssueListActions(issues.onQuery,
                     onOpen = { row -> environmentId?.let { issues.onOpenIssue(it, row.ref, row.issueKey) }; issueDetailOpen = true },
                     onRefresh = issues.onRefreshList, onLoadMore = issues.onLoadMore, onRetry = issues.onRetryList,
@@ -798,7 +808,7 @@ fun TrefoilApp(
                     IssuesScreen(issues.list, state.projects, issues.detail.ref?.takeIf { issueOpen && issues.detail.environmentId == environmentId }, issueListActions, m)
                 }
                 val issueDetail: @Composable (Modifier) -> Unit = { m ->
-                    if (issueOpen) IssueDetailContent(issues.detail, issueDetailActions { if (issuesTwoPane) navigate(ShellDestination.Threads) else issueDetailOpen = false }, m)
+                    if (issueOpen) IssueDetailContent(issues.detail, issueDetailActions { if (issuesTwoPane) navigate(ShellDestination.Threads) else issueDetailOpen = false }, m, issueLinkExtras)
                     else Box(m, contentAlignment = Alignment.Center) { Text("Select an issue", style = TrefoilType.preview, color = Tf.colors.muted) }
                 }
                 // Every destination but the thread list and the conversation; each fills the modifier it is given.
@@ -869,7 +879,7 @@ fun TrefoilApp(
                                         }
                                         SidePanelTab.Changes -> changesSurface(Modifier.fillMaxSize(), null)
                                         SidePanelTab.PullRequest -> PullRequestPanel(state, pullRequests, null, Modifier.fillMaxSize())
-                                        SidePanelTab.Issue -> IssueDetailContent(issues.detail, issueDetailActions(closePanelToToggle), Modifier.fillMaxSize())
+                                        SidePanelTab.Issue -> IssueDetailContent(issues.detail, issueDetailActions(closePanelToToggle), Modifier.fillMaxSize(), issueLinkExtras)
                                     }
                                 }
                             }) else null)
@@ -907,7 +917,9 @@ fun TrefoilApp(
                 if (presentation.prSheet && panelTab == SidePanelTab.PullRequest && hasPullRequests && connected) PullRequestSheet(state, pullRequests, closePanel)
                 if ((showAgents || presentation.agentsSheet) && roster != null) ThreadAgentsSheet(roster, state.providers, state.models, steadyWrite,
                     { showAgents = false; if (presentation.agentsSheet) closePanel() }, { id -> showAgents = false; if (presentation.agentsSheet) closePanel(); select(id) }, onStopSubagent)
-                if (showIssueLinks && issueLinks.isNotEmpty()) ThreadIssueLinksSheet(issueLinks, onOpen = { showIssueLinks = false; openIssueDetail(it, canDock) }, onDismiss = { showIssueLinks = false })
+                if (showIssueLinks && issueLinks.isNotEmpty()) ThreadIssueLinksSheet(issueLinks, onOpen = { showIssueLinks = false; openIssueDetail(it, canDock) }, onDismiss = { showIssueLinks = false },
+                    onUnlink = if (state.connection == ConnectionStatus.Connected && state.canWriteThreads && state.issuesSupported) ({ link -> issues.onUnlinkIssue(link.key) }) else null,
+                    unlinkEnabled = issues.linkPending == null)
             }
         }
         }

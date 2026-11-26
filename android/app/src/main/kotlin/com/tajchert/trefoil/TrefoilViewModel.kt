@@ -91,6 +91,12 @@ class TrefoilViewModel internal constructor(
     val issueDetailController = IssueDetailController(viewModelScope, { client }, { client.state.value })
     val issues = issuesController.state
     val issueDetail = issueDetailController.state
+    /** Link and unlink of the selected thread, sent once each (never replayed); the notice carries a rejection or an uncertain outcome. */
+    private val issueLinkController = IssueLinkController(viewModelScope, { client }, { _notice.value = it },
+        { issueDetailController.refreshLinkedThreads() }, track = { block -> mutationsInFlight.tracked { block() } })
+    val issueLinkPending = issueLinkController.pending
+    fun linkIssue(link: ThreadIssueLink) = issueLinkController.link(link)
+    fun unlinkIssue(key: IssueKey) = issueLinkController.unlink(key)
     init {
         viewModelScope.launch {
             client.state.map { it.environment?.id }.distinctUntilChanged().collect { issuesController.reset(); issueDetailController.reset() }
