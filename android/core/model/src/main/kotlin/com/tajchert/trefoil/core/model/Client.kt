@@ -63,6 +63,8 @@ data class ThreadSummary(
     val workflowStep: Boolean = false,
     /** T3 `monitorHoldsWakeCompletion`: a background-wake run whose non-pull-request-watch monitor is still pending. */
     val monitorHoldsWakeCompletion: Boolean = false,
+    /** T3 shell `issues[]`: the issues this thread links. Defaults keep old shell caches decodable. */
+    val issues: List<ThreadIssueLink> = emptyList(),
     /** Derived from child shells for presentation; never supplied by a shell row, so never cached. */
     @Transient val pendingChildRequestKind: String? = null,
 )
@@ -260,6 +262,10 @@ data class ClientState(
     val backgroundWork: List<PendingBackgroundTask> = emptyList(),
     /** Server `environment.capabilities.threadStop`; false when not reported. */
     val threadStopSupported: Boolean = false,
+    /** Server `environment.capabilities.issues`; false when not reported. */
+    val issuesSupported: Boolean = false,
+    /** Server `environment.capabilities.issueLinkedThreads`; false when not reported. */
+    val issueLinkedThreadsSupported: Boolean = false,
     /** Selected thread's user messages queued behind the active run (T3 `getUserQueuedThreadRuns`), in queue order. */
     val queuedMessages: List<QueuedMessage> = emptyList(),
     /** A stop (or restart) held the selected thread's queue; it starts again only on [Client.resumeQueue]. */
@@ -480,6 +486,28 @@ interface TrefoilClient {
     suspend fun runPullRequestAction(key: PullRequestKey, action: PrAction, mergeMethod: PrMergeMethod? = null) { error("Pull request actions are unavailable") }
     /** Sends `pullRequests.comment` once; never retried or replayed. */
     suspend fun commentOnPullRequest(key: PullRequestKey, body: String) { error("Pull request comments are unavailable") }
+    /**
+     * One `issues.list` page across the environment's projects; [cursors] continues the scopes they name.
+     * Read-only: failures throw [IssueException] and never change the connection state.
+     */
+    suspend fun issuesList(query: IssueQuery, cursors: Map<String, String>? = null, limit: Int = 50, refresh: Boolean = false): IssueListPage =
+        throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
+    /** `issues.detail` for one issue. Read-only; failures throw [IssueException]. */
+    suspend fun issueDetail(ref: IssueRef): IssueDetail = throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
+    /** Older comments from [cursor]: the page and the next cursor (null when none). Read-only; failures throw [IssueException]. */
+    suspend fun issueComments(ref: IssueRef, cursor: String): Pair<List<IssueComment>, String?> =
+        throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
+    /** Threads linking [key] (`issues.linkedThreads`, when [ClientState.issueLinkedThreadsSupported]). Read-only. */
+    suspend fun issueLinkedThreads(key: IssueKey): List<IssueLinkedThread> =
+        throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
+    /** Dispatches `thread.issue.link` once; never replayed. The shell row's [ThreadSummary.issues] reflects the outcome. */
+    suspend fun linkIssue(target: ThreadTarget, link: ThreadIssueLink) {
+        throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
+    }
+    /** Dispatches `thread.issue.unlink` once; never replayed. */
+    suspend fun unlinkIssue(target: ThreadTarget, key: IssueKey) {
+        throw IssueException(IssueFailure.NotSupported, "Issues are unavailable")
+    }
     suspend fun reconnect()
     fun close()
 }
